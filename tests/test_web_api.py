@@ -45,7 +45,7 @@ def test_health_ok():
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["version"] == "0.7.1"
+    assert body["version"] == "0.7.2"
     assert body["connected"] is False
 
 
@@ -429,16 +429,22 @@ def test_circleci_config_skips_when_present(monkeypatch):
                 "      - checkout\n"
                 "workflows:\n"
                 "  uat-deploy-on-tag:\n"
-                "    triggers:\n"
-                "      - tags:\n"
-                "          only:\n"
-                "            - /^uat-[0-9]+$/\n"
                 "    jobs:\n"
                 "      - approve:\n"
                 "          type: approval\n"
+                "          filters:\n"
+                "            tags:\n"
+                "              only: /^uat-[0-9]+$/\n"
+                "            branches:\n"
+                "              ignore: /.*/\n"
                 "      - deploy-uat:\n"
                 "          requires:\n"
                 "            - approve\n"
+                "          filters:\n"
+                "            tags:\n"
+                "              only: /^uat-[0-9]+$/\n"
+                "            branches:\n"
+                "              ignore: /.*/\n"
             )
         def upsert_file(self, *a, **k):
             raise AssertionError("no debería escribir cuando ya existe")
@@ -448,6 +454,54 @@ def test_circleci_config_skips_when_present(monkeypatch):
 
     body = client.post("/api/circleci-config", params={"origin": "release/x", "prefixes": "uat"}).json()
     assert body["items"][0]["skipped"] is True
+
+
+def test_circleci_config_remigra_forma_triggers_invalida(monkeypatch):
+    calls = []
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch):
+            return "head1"
+        def raw_file(self, slug, ref, path):
+            return (
+                "version: 2.1\n"
+                "workflows:\n"
+                "  uat-deploy-on-tag:\n"
+                "    triggers:\n"
+                "      - tags:\n"
+                "          only:\n"
+                "            - /^uat-[0-9]+$/\n"
+                "    jobs:\n"
+                "      - approve:\n"
+                "          type: approval\n"
+            )
+        def upsert_file(self, slug, branch, path, content, message):
+            calls.append((branch, path, content, message))
+            return {"hash": "h2", "subject": "x"}
+
+    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.post("/api/circleci-config", params={"origin": "release/x", "prefixes": "uat"}).json()
+    item = body["items"][0]
+    assert item["created"] is False and item["updated"] is True
+    assert item["envs"] == ["uat"]
+    assert len(calls) == 1
+    branch, path, content, _ = calls[0]
+    assert branch == "release/x" and path == ".circleci/config.yml"
+    assert "filters:" in content and "triggers:" not in content
 
 
 def test_diff_skips_raw_without_ssm(monkeypatch):

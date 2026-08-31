@@ -11,6 +11,8 @@ def test_genera_config_desde_cero():
     assert "deploy-uat:" in yml and "deploy-stgp:" in yml
     assert "uat-deploy-on-tag:" in yml and "stgp-deploy-on-tag:" in yml
     assert yml.count("type: approval") >= 2
+    assert yml.count("filters:") >= 2
+    assert "triggers:" not in yml
     assert "requires:" in yml
     assert "/^uat-[0-9]+$/" in yml and "/^stgp-[0-9]+$/" in yml
 
@@ -53,6 +55,37 @@ def test_idempotente_cuando_ya_existe():
 def test_invalido_lanza_error():
     with pytest.raises(ValueError):
         ensure_tag_workflows("version: 2.1\nkey: [1, 2", ["uat"])
+
+
+def test_remigra_forma_con_triggers_invalida():
+    broken = """\
+version: 2.1
+jobs:
+  deploy-uat:
+    docker:
+      - image: cimg/base:2024.05
+    steps:
+      - checkout
+workflows:
+  uat-deploy-on-tag:
+    triggers:
+      - tags:
+          only:
+            - /^uat-[0-9]+$/
+    jobs:
+      - approve:
+          type: approval
+      - deploy-uat:
+          requires:
+            - approve
+"""
+    yml, changed, added = ensure_tag_workflows(broken, ["uat"])
+    assert changed is True
+    assert added == ["uat"]
+    assert "triggers:" not in yml
+    assert yml.count("filters:") == 2
+    assert "only: /^uat-[0-9]+$/" in yml
+    assert "ignore: /.*/" in yml
 
 
 def test_sin_ambientes_error():
