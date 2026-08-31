@@ -87,11 +87,19 @@ actualizar el assert de health en `tests/test_web_api.py`.
 
 - [x] 1. hash del PR (reusar `source.commit.hash`)
 - [x] 2. filtro de raw_files por indicio SSM
-- [ ] 3. cache de `list_repos` (opcional — no implementado)
+- [x] 3. cache de `list_repos` (no implementado — descartado)
 - [x] 4. ThreadPoolExecutor en fases 2 y 3
 - [x] medición real (requests + tiempo)
 
-Estado: implementado (1, 2, 4) en v0.5.0. Item 3 queda pendiente (opcional).
+Estado: implementado (1, 2, 4) en v0.5.0.
+
+Item 3 **descartado** (no se implementa): el cache solo cachearía la lista de
+repos (slug/nombre). Crear PRs no cambia esa lista, así que la revisión
+post-creación seguiría viendo los PRs al instante (`find_pr` con `q=` se
+consulta siempre en vivo, igual que ramas, commits y params). El ahorro es
+marginal (~0.3–1s en una llamada list) y agrega el riesgo de ocultar un repo
+recién creado hasta que expire el TTL. Datos frescos siempre ganan en una
+herramienta de release.
 
 Medición real (0.5.0, workspace real, 3 repos): `/api/scan` 3.43s, `/api/diff` 5.09s
 con paridad de payload (mismos 3 params SSM; commits desde el PR, sin

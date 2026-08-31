@@ -45,7 +45,7 @@ def test_health_ok():
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["version"] == "0.5.1"
+    assert body["version"] == "0.5.2"
     assert body["connected"] is False
 
 
