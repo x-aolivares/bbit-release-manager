@@ -294,9 +294,11 @@ export class Home {
       .subscribe({
         next: (r) => {
           if (r.ok) {
+            const failed = r.failed?.length ? ` | fallaron: ${r.failed.map((f: any) => f.repo).join(', ')}` : '';
+            const noChanges = r.no_changes?.length ? ` | sin cambios: ${r.no_changes.join(', ')}` : '';
             const msg = target === 'create'
-              ? `PRs creados: ${r.created?.join(', ') || 'ninguno'}` + (r.failed?.length ? ` | fallaron: ${r.failed.map((f: any) => f.repo).join(', ')}` : '')
-              : `PRs actualizados: ${r.updated?.join(', ') || 'ninguno'}` + (r.failed?.length ? ` | fallaron: ${r.failed.map((f: any) => f.repo).join(', ')}` : '');
+              ? `PRs creados: ${r.created?.join(', ') || 'ninguno'}` + noChanges + failed
+              : `PRs actualizados: ${r.updated?.join(', ') || 'ninguno'}` + (r.failed?.length ? failed : '');
             this.error.set(msg);
             if (target === 'update' || r.created?.length) {
               this.resolve();

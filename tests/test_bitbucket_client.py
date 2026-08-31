@@ -283,6 +283,38 @@ def test_find_pr_none_when_only_merged():
     assert pr is None
 
 
+def test_has_commits_ahead_true():
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/commits/release"): lambda r: httpx.Response(
+            200, json={"values": [{"hash": "abc"}]}
+        ),
+    }))
+    try:
+        assert client.has_commits_ahead("r1", "release", "master") is True
+    finally:
+        client.close()
+
+
+def test_has_commits_ahead_false():
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/commits/release"): lambda r: httpx.Response(200, json={"values": []}),
+    }))
+    try:
+        assert client.has_commits_ahead("r1", "release", "master") is False
+    finally:
+        client.close()
+
+
+def test_has_commits_ahead_ignores_api_error():
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/commits/release"): lambda r: httpx.Response(500, json={}),
+    }))
+    try:
+        assert client.has_commits_ahead("r1", "release", "master") is True
+    finally:
+        client.close()
+
+
 def test_create_pr():
     def post(request):
         assert "/pullrequests" in request.url.path

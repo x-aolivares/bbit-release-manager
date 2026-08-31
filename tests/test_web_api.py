@@ -572,6 +572,8 @@ def test_create_pr_endpoint(monkeypatch):
             )
         def close(self):
             pass
+        def has_commits_ahead(self, repo, origin, dest):
+            return True
         def create_pr(self, repo, origin, destination, title=None):
             seen["repo"], seen["title"] = repo, title
             return {"url": "http://pr/1", "title": title or "T", "state": "OPEN", "id": 1}
@@ -602,6 +604,8 @@ def test_create_missing_prs(monkeypatch):
             return [SimpleNamespace(slug=f"r{i}", name=f"R{i}", workspace="ws", default_branch="master") for i in range(2)]
         def find_pr(self, repo, origin, dest):
             return None
+        def has_commits_ahead(self, repo, origin, dest):
+            return True
         def create_pr(self, repo, origin, dest, title=None):
             return {"url": "u", "title": title, "state": "OPEN", "id": 1}
 
@@ -612,6 +616,71 @@ def test_create_missing_prs(monkeypatch):
     assert body["ok"] is True
     assert body["title"] == "Titulo comun"
     assert body["created"] == ["r0", "r1"]
+
+
+def test_create_pr_none_when_no_changes(monkeypatch):
+    calls = []
+
+    class PClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [],
+            )
+        def close(self):
+            pass
+        def has_commits_ahead(self, repo, origin, dest):
+            return False
+        def create_pr(self, repo, origin, dest, title=None):
+            calls.append(repo)
+            return {"url": "u", "title": title, "state": "OPEN", "id": 1}
+
+    monkeypatch.setattr("src.web.session.BitbucketClient", PClient)
+    client.post("/api/session", json={"workspace": "ws4", "token": "tok"})
+    resp = client.post("/api/pr", params={"repo": "r1", "origin": "release/x", "destination": "master", "title": "T"})
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["no_changes"] is True
+    assert "no hay cambios" in body["error"]
+    assert calls == []
+
+
+def test_create_missing_skips_no_changes(monkeypatch):
+    calls = []
+
+    class PClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [],
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin):
+            return [SimpleNamespace(slug="r0", name="R0", workspace="ws", default_branch="master")]
+        def find_pr(self, repo, origin, dest):
+            return None
+        def has_commits_ahead(self, repo, origin, dest):
+            return False
+        def create_pr(self, repo, origin, dest, title=None):
+            calls.append(repo)
+            return {"url": "u", "title": title, "state": "OPEN", "id": 1}
+
+    monkeypatch.setattr("src.web.session.BitbucketClient", PClient)
+    client.post("/api/session", json={"workspace": "ws5", "token": "tok"})
+    resp = client.post("/api/prs/create-missing", params={"origin": "release/x", "destination": "master", "title": "T"})
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["created"] == []
+    assert body["no_changes"] == ["r0"]
+    assert calls == []
 
 
 def test_update_pr_titles(monkeypatch):

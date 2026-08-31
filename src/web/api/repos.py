@@ -323,6 +323,12 @@ def scan(origin: str, destination: str = "master", prefixes: str = ""):
 def create_pr(repo: str, origin: str, destination: str = "master", title: str = ""):
     data = _require_session()
     try:
+        if not data.client.has_commits_ahead(repo, origin, destination):
+            return JSONResponse(
+                {"ok": False, "no_changes": True,
+                 "error": f"No se puede crear el PR: no hay cambios entre {origin} y {destination}."},
+                status_code=400,
+            )
         pr = data.client.create_pr(repo, origin, destination, title=title or None)
     except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
@@ -340,6 +346,7 @@ def create_missing_prs(origin: str, destination: str = "master", title: str = ""
     target = _pr_title(origin, destination, title)
     created: list[str] = []
     skipped: list[str] = []
+    no_changes: list[str] = []
     failed: list[dict] = []
     for repo in data.client.repos_with_branch(origin):
         slug = repo.slug
@@ -348,11 +355,21 @@ def create_missing_prs(origin: str, destination: str = "master", title: str = ""
             if pr:
                 skipped.append(slug)
                 continue
+            if not data.client.has_commits_ahead(slug, origin, destination):
+                no_changes.append(slug)
+                continue
             data.client.create_pr(slug, origin, destination, title=target)
             created.append(slug)
         except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
             failed.append({"repo": slug, "error": str(exc)})
-    return {"ok": True, "title": target, "created": created, "skipped": skipped, "failed": failed}
+    return {
+        "ok": True,
+        "title": target,
+        "created": created,
+        "skipped": skipped,
+        "no_changes": no_changes,
+        "failed": failed,
+    }
 
 
 @router.post("/prs/update-titles")

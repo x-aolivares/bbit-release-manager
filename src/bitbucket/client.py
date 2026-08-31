@@ -259,6 +259,25 @@ class BitbucketClient:
             return ""
         return data["values"][0].get("hash", "")
 
+    def has_commits_ahead(self, slug: str, branch: str, base: str) -> bool:
+        """¿La rama tiene al menos un commit que base aún no tiene?
+
+        GET /commits/{branch}?exclude={base} → commits de branch ausentes en
+        base: es lo que determina si un PR branch → base se puede crear.
+        Ante un error no crítico asume True para no bloquear la creación.
+        """
+        try:
+            data = self._request(
+                "GET",
+                f"/repositories/{self.workspace}/{slug}/commits/{branch}",
+                params={"exclude": base, "pagelen": 1},
+            )
+        except BitbucketAuthError:
+            raise
+        except BitbucketError:
+            return True
+        return bool(data and data.get("values"))
+
     def commits_behind(self, slug: str, branch: str, base: str) -> int:
         """Cantidad de commits en base que la rama no tiene (gap de sync).
 
