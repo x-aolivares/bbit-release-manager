@@ -130,7 +130,7 @@ export class Home {
   workflowCfgRepo = signal<string | null>(null);
 
   prefixCols(): string {
-    return this.prefixes().map(() => ' 11rem').join('');
+    return this.prefixes().map(() => ' 9.5rem').join('');
   }
 
   addPrefix() {
@@ -329,6 +329,36 @@ export class Home {
     return { label: `${behind} atrás`, cls: 'bb-sync--danger' };
   }
 
+  syncDot(cls: string): string {
+    if (cls === 'bb-sync--warn') return 'bb-dot--pending';
+    if (cls === 'bb-sync--danger') return 'bb-dot--fail';
+    return 'bb-dot--ok';
+  }
+
+  repoUrl(repo: ScanRepo): string {
+    return `https://bitbucket.org/${repo.workspace}/${repo.slug}`;
+  }
+
+  envTagHref(repo: ScanRepo, prefix: string): string {
+    const deploy = repo.deploys[prefix];
+    if (deploy?.url) return deploy.url;
+    const tag = this.envTag(repo, prefix);
+    return tag ? `${this.repoUrl(repo)}/src/${encodeURIComponent(tag)}` : this.repoUrl(repo);
+  }
+
+  envTagClass(repo: ScanRepo, prefix: string): string {
+    const deploy = repo.deploys[prefix];
+    return deploy ? this.statusClass(deploy.status) : 'bb-deploy--pending';
+  }
+
+  envTagTitle(repo: ScanRepo, prefix: string): string {
+    const tag = this.envTag(repo, prefix);
+    const deploy = repo.deploys[prefix];
+    return deploy
+      ? `${tag} · ${deploy.workflow} · ${deploy.status}`
+      : `${tag} · sin deploy validado`;
+  }
+
   envTag(repo: ScanRepo, prefix: string): string | null {
     return repo.match_tag?.[prefix.toLowerCase()] ?? null;
   }
@@ -342,10 +372,10 @@ export class Home {
     return this.prefixes().some((p) => !this.envTag(repo, p));
   }
 
-  generateTags(repo?: ScanRepo) {
+  generateTags(repo?: ScanRepo, prefix?: string) {
     if (!this.origin) return;
     const dest = this.destination || 'master';
-    const prefixes = this.prefixes().join(',');
+    const prefixes = prefix ? prefix : this.prefixes().join(',');
     let url = `/api/tags?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}`;
     if (repo) {
       url += `&repo=${encodeURIComponent(repo.slug)}`;

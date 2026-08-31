@@ -152,33 +152,14 @@
   background: #fafbfc;
 }
 
-.bb-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+.bb-celllink {
+  font-size: 12.5px;
+  font-weight: 700;
+  text-decoration: none;
 }
 
-.bb-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--bb-surface);
-  border: 1px solid var(--bb-border);
-  border-radius: 6px;
-  padding: 3px 8px;
-  font-size: 12px;
-}
-
-.bb-taggen {
-  margin-top: 6px;
-
-  .bb-link {
-    font-size: 12px;
-    cursor: pointer;
-    background: none;
-    border: none;
-    padding: 0;
-  }
+.bb-celllink:hover {
+  opacity: 0.75;
 }
 
 .bb-tagwarn {
@@ -427,12 +408,6 @@
   opacity: 0.75;
 }
 
-.bb-celllink-meta {
-  font-size: 11px;
-  font-weight: 600;
-  opacity: 0.8;
-}
-
 .bb-link {
   color: var(--bb-blue);
   text-decoration: none;
@@ -441,6 +416,29 @@
 
 .bb-link:hover {
   text-decoration: underline;
+}
+
+button.bb-link {
+  font-size: 12.5px;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+    text-decoration: none;
+  }
+}
+
+.bb-taggen-link {
+  color: #b26a00;
+}
+
+.bb-repo-name {
+  font-size: 13px;
 }
 
 .bb-deploy {

@@ -219,7 +219,7 @@
                 <span>Repositorio</span>
                 <span>Sync</span>
                 <span>PR</span>
-                <span>Tags</span>
+                <span>Tagged Commit</span>
                 @for (p of prefixes(); track p) {
                   <span class="bb-deploy-col bb-mono">{{ p }}</span>
                 }
@@ -227,12 +227,12 @@
               @for (repo of repos(); track repo.slug) {
                 <div class="bb-repos-row">
                   <span>
-                    <a class="bb-link" [href]="repo.branch_url" target="_blank"
-                       [title]="'Rama ' + origin">{{ repo.name }}</a>
-                    <span class="bb-muted bb-xs bb-mono">{{ repo.commit.slice(0, 8) }}</span>
+                    <a class="bb-link bb-repo-name" [href]="repoUrl(repo)" target="_blank"
+                       [title]="repo.name">{{ repo.name }}</a>
                   </span>
                   <span>
                     @let sync = syncInfo(repo.behind);
+                    <span class="bb-dot {{ syncDot(sync.cls) }}"></span>
                     <span class="bb-sync {{ sync.cls }}">{{ sync.label }}</span>
                   </span>
                   <span>
@@ -245,71 +245,40 @@
                         }
                       </a>
                     } @else {
-                      <ion-button size="small" fill="outline" class="bb-btn"
-                                  [disabled]="creatingPr() !== null"
-                                  (click)="createPr(repo)">
+                      <button class="bb-link bb-pr-link" [disabled]="creatingPr() !== null"
+                              (click)="createPr(repo)"
+                              [title]="'Crea el PR hacia la rama destino'">
                         @if (creatingPr() === repo.slug) {
                           <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
                         } @else {
-                          Crear PR
+                          Sin PR a {{ destination || 'master' }}
                         }
-                      </ion-button>
+                      </button>
                     }
                   </span>
                   <span>
-                    @if (repo.tags.length === 0) {
-                      <span class="bb-muted">—</span>
-                    } @else {
-                      <div class="bb-tags">
-                        @for (t of repo.tags; track t.name) {
-                          <span class="bb-tag">
-                            <span class="bb-mono">{{ t.name }}</span>
-                            @if (!isEnvTag(repo, t.name) && t.deploy) {
-                              <a class="bb-link bb-deploy {{ statusClass(t.deploy.status) }}"
-                                 [href]="t.deploy.url" target="_blank">
-                                {{ t.deploy.workflow }} · {{ t.deploy.status }}
-                              </a>
-                            } @else if (!isEnvTag(repo, t.name)) {
-                              <span class="bb-muted">sin deploy</span>
-                            }
-                          </span>
-                        }
-                      </div>
-                    }
-                    @if (ciConfigured() && missingTagFor(repo)) {
-                      <div class="bb-taggen">
-                        <button class="bb-link" (click)="generateTags(repo)"
-                                [disabled]="taggingRepo() !== null">
-                          @if (taggingRepo() === repo.slug) {
-                            <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
-                          } @else {
-                            + Generar tags
-                          }
-                        </button>
-                      </div>
-                    }
-                    <div class="bb-taggen">
-                      <button class="bb-link" (click)="generateWorkflows(repo)"
-                              [disabled]="workflowCfgRepo() !== null || prefixes().length === 0">
-                        @if (workflowCfgRepo() === repo.slug) {
-                          <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
-                        } @else {
-                          + Generar workflows
-                        }
-                      </button>
-                    </div>
+                    <a class="bb-link bb-mono" [href]="repo.branch_url" target="_blank"
+                       [title]="'Rama ' + origin">{{ repo.commit.slice(0, 8) }}</a>
                   </span>
                   @for (p of prefixes(); track p) {
                     <span class="bb-deploy-col">
-                      @if (repo.deploys[p]) {
-                        <a class="bb-celllink {{ statusClass(repo.deploys[p]!.status) }}"
-                           [href]="repo.deploys[p]!.url" target="_blank"
-                           [title]="envTag(repo, p) + ' · ' + repo.deploys[p]!.workflow + ' · ' + repo.deploys[p]!.status">
-                          {{ statusIcon(repo.deploys[p]!.status) }} {{ envTag(repo, p) }}
-                          <span class="bb-celllink-meta">{{ repo.deploys[p]!.workflow }} · {{ repo.deploys[p]!.status }}</span>
+                      @if (envTag(repo, p)) {
+                        <a class="bb-celllink {{ envTagClass(repo, p) }}"
+                           [href]="envTagHref(repo, p)" target="_blank"
+                           [title]="envTagTitle(repo, p)">
+                          {{ envTag(repo, p) }}
                         </a>
-                      } @else if (envTag(repo, p)) {
-                        <span class="bb-tagwarn bb-xs" [title]="envTag(repo, p) + ' sin deploy validado'">◒ {{ envTag(repo, p) }}</span>
+                      } @else if (ciConfigured()) {
+                        <button class="bb-link bb-taggen-link"
+                                [disabled]="taggingRepo() !== null"
+                                (click)="generateTags(repo, p)"
+                                [title]="'Genera ' + p + '-{id} según el último pipeline de la rama'">
+                          @if (taggingRepo() === repo.slug) {
+                            <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
+                          } @else {
+                            generate tag
+                          }
+                        </button>
                       } @else {
                         <span class="bb-muted">—</span>
                       }
