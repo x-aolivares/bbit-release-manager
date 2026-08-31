@@ -231,6 +231,58 @@ def test_find_pr_returns_source_commit():
     assert pr["title"] == "T"
 
 
+def test_find_pr_ignores_non_open():
+    payload = {
+        "values": [
+            {
+                "id": 5,
+                "title": "Merged",
+                "state": "MERGED",
+                "links": {"html": {"href": "http://pr/5"}},
+                "source": {"commit": {"hash": "old"}},
+            },
+            {
+                "id": 6,
+                "title": "Open",
+                "state": "OPEN",
+                "links": {"html": {"href": "http://pr/6"}},
+                "source": {"commit": {"hash": "new1"}},
+            },
+        ]
+    }
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/pullrequests"): lambda r: httpx.Response(200, json=payload),
+    }))
+    try:
+        pr = client.find_pr("r1", "release", "master")
+    finally:
+        client.close()
+    assert pr is not None
+    assert pr["id"] == 6
+    assert pr["state"] == "OPEN"
+    assert pr["source_commit"] == "new1"
+
+
+def test_find_pr_none_when_only_merged():
+    payload = {
+        "values": [{
+            "id": 5,
+            "title": "Merged",
+            "state": "MERGED",
+            "links": {"html": {"href": "http://pr/5"}},
+            "source": {"commit": {"hash": "old"}},
+        }]
+    }
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/pullrequests"): lambda r: httpx.Response(200, json=payload),
+    }))
+    try:
+        pr = client.find_pr("r1", "release", "master")
+    finally:
+        client.close()
+    assert pr is None
+
+
 def test_create_pr():
     def post(request):
         assert "/pullrequests" in request.url.path

@@ -316,7 +316,8 @@ class BitbucketClient:
 
         Bitbucket Cloud ignora los params source_branch/destination_branch en
         GET /pullrequests: devuelve los PRs recientes sin filtrar por rama.
-        Se filtra con la query `q` para evitar falsos positivos.
+        Se filtra con la query `q` para evitar falsos positivos y además se
+        valida que el `state` del PR sea `OPEN` (nunca MERGED/DECLINED/...).
         """
         q = 'source.branch.name="{}" AND destination.branch.name="{}"'.format(
             source.replace('"', '\\"'), destination.replace('"', '\\"')
@@ -331,6 +332,8 @@ class BitbucketClient:
             },
         )
         for pr in (data or {}).get("values", []):
+            if pr.get("state", "").upper() != "OPEN":
+                continue
             links = pr.get("links", {}) or {}
             html = (links.get("html") or {}).get("href", "")
             return {

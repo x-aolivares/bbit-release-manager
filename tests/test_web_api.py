@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from src._version import read_version
 from src.web import session as session_mod
 from src.web.main import FRONTEND_DIST, app
 from src.web.session import destroy_session
@@ -45,7 +46,7 @@ def test_health_ok():
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["version"] == "0.7.3"
+    assert body["version"] == read_version()
     assert body["connected"] is False
 
 
