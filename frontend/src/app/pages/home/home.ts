@@ -70,6 +70,13 @@ interface ScanStats {
 interface SsmParam {
   param: string;
   arn: string;
+  tipo: 'nuevo' | 'reutilizado' | string;
+  qa_value: string | null;
+  repos: string[];
+}
+
+interface RemovedParam {
+  param: string;
   repos: string[];
 }
 
@@ -77,7 +84,9 @@ interface DiffResponse {
   origin: string;
   destination: string;
   prefixes: string[];
+  mode: string;
   params: SsmParam[];
+  removed: RemovedParam[];
 }
 
 @Component({
@@ -117,6 +126,8 @@ export class Home {
 
   repos = signal<ScanRepo[]>([]);
   params = signal<SsmParam[]>([]);
+  removed = signal<RemovedParam[]>([]);
+  scanMode = 'diff';
   stats = signal<ScanStats | null>(null);
   addingPrefix = signal(false);
   ciConfigured = signal(true);
@@ -221,6 +232,7 @@ export class Home {
         this.repoCount.set(0);
         this.repos.set([]);
         this.params.set([]);
+        this.removed.set([]);
         this.stats.set(null);
         this.storedCreds.set(!deleteCredentials);
       },
@@ -232,6 +244,7 @@ export class Home {
     this.loading.set(true);
     this.error.set(null);
     this.params.set([]);
+    this.removed.set([]);
     this.creatingPr.set(null);
     const dest = this.destination || 'master';
     const prefixes = this.prefixes().join(',');
@@ -255,11 +268,18 @@ export class Home {
   }
 
   private loadParams(dest: string) {
-    this.http.get<DiffResponse>(`/api/diff?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}`)
+    this.http.get<DiffResponse>(`/api/diff?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&mode=${this.scanMode}`)
       .subscribe({
-        next: (r) => this.params.set(r.params ?? []),
-        error: () => this.error.set('Error al obtener parámetros nuevos.'),
+        next: (r) => {
+          this.params.set(r.params ?? []);
+          this.removed.set(r.removed ?? []);
+        },
+        error: () => this.error.set('Error al obtener parámetros SSM.'),
       });
+  }
+
+  tipoClass(tipo: string): string {
+    return tipo === 'reutilizado' ? 'bb-badge--warn' : 'bb-badge--ok';
   }
 
   createPr(repo: ScanRepo) {

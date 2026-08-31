@@ -516,13 +516,19 @@ def test_circleci_config_remigra_forma_triggers_invalida(monkeypatch):
 def test_diff_skips_raw_without_ssm(monkeypatch):
     raw_calls = []
 
-    plain_file = SimpleNamespace(path="app.py", status="modified", added_lines=("print('hola')",))
+    plain_file = SimpleNamespace(path="app.py", status="modified", added_lines=("print('hola')",), removed_lines=())
     ssm_file = SimpleNamespace(
         path="config/x.yaml",
         status="modified",
         added_lines=("key: {{resolve:ssm:config/app/key}}",),
+        removed_lines=(),
     )
-    deleted_ssm = SimpleNamespace(path="gone.yaml", status="deleted", added_lines=("{{resolve:ssm:config/old}}",))
+    deleted_ssm = SimpleNamespace(
+        path="gone.yaml",
+        status="deleted",
+        added_lines=(),
+        removed_lines=("v: /config/gone",),
+    )
 
     class StubClient:
         def __init__(self, ws, tok, **kw):
@@ -545,17 +551,68 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
             return "headOrigin" if branch == "release/x" else "headDest"
         def raw_file(self, repo, ref, path):
             raw_calls.append((repo, ref, path))
-            return "k: {{resolve:ssm:config/app/key}}" if ref == "headOrigin" else "no ssm"
+            if path == "gone.yaml":
+                return None if ref == "headOrigin" else "v: {{resolve:ssm:/config/gone}}"
+            if ref == "headOrigin":
+                return "k: {{resolve:ssm:config/app/key}}"
+            return "no ssm"
 
     monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("src.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
-    assert [c[2] for c in raw_calls] == ["config/x.yaml", "config/x.yaml"]
-    assert body["repos"][0]["new_params"] == [{"param": "config/app/key", "arn": ""}]
-    assert body["params"] == [{"param": "config/app/key", "arn": "", "repos": ["r1"]}]
-    assert "deleted" not in "".join(c[2] for c in raw_calls)
+    assert [c[2] for c in raw_calls] == ["config/x.yaml", "config/x.yaml", "gone.yaml", "gone.yaml"]
+    assert body["mode"] == "diff"
+    assert body["params"] == [
+        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"]},
+    ]
+    assert body["removed"] == [{"param": "/config/gone", "repos": ["r1"]}]
+    assert body["repos"][0]["added"] == ["/config/app/key"]
+    assert body["repos"][0]["removed"] == ["/config/gone"]
+
+
+def test_diff_mode_all_lists_whole_repo(monkeypatch):
+    seen = {"list": [], "raw": []}
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def list_files(self, repo, ref):
+            seen["list"].append((repo, ref))
+            return ["config/a.yaml", "data.sql", "logo.png"]
+        def raw_file(self, repo, ref, path):
+            seen["raw"].append((repo, ref, path))
+            if path == "config/a.yaml" and ref == "headOrigin":
+                return "k: {{resolve:ssm:/config/a/b}}"
+            return None
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch):
+            return "headOrigin" if branch == "release/x" else "headDest"
+
+    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("src.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/diff", params={"origin": "release/x", "mode": "all"}).json()
+    assert body["mode"] == "all"
+    assert seen["list"] == [("r1", "headOrigin"), ("r1", "headDest")]
+    assert ("r1", "headOrigin", "logo.png") not in seen["raw"]
+    assert body["params"] == [
+        {"param": "/config/a/b", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"]},
+    ]
+    assert body["repos"][0]["added"] == ["/config/a/b"]
 
 
 def test_create_pr_endpoint(monkeypatch):

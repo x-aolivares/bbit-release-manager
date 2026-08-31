@@ -1,31 +1,84 @@
-"""Extracción de parámetros SSM desde líneas añadidas de un diff."""
+"""Extracción y clasificación de parámetros SSM desde texto de repos."""
 
 from __future__ import annotations
 
 import re
 from typing import Iterable
 
-SSM_RE = re.compile(r"\{\{resolve:ssm:([A-Za-z0-9_./-]+)(?::([A-Za-z0-9_.:/-]+))?\}\}")
+# `{{resolve:ssm:/path:version}}` con versión/ARN opcional y barra inicial conservada.
+SSM_RESOLVE_RE = re.compile(
+    r"\{\{resolve:ssm:([A-Za-z0-9_./-]+)(?::([A-Za-z0-9_.:/-]+))?\}\}"
+)
+
+# Caracteres válidos en un segmento de ruta SSM (no `:` ni `}`).
+_PATH_CHARS = r"[A-Za-z0-9_.,-]+"
+
+
+def _prefix_slugs(prefixes: Iterable[str]) -> list[str]:
+    """Prefijos limpios en minúscula sin barra inicial (config -> 'config')."""
+    slugs: list[str] = []
+    for p in prefixes or []:
+        s = p.strip().strip("/").lower()
+        if s:
+            slugs.append(s)
+    return slugs
+
+
+def build_ssm_path_re(prefixes: Iterable[str]) -> re.Pattern:
+    """Regex de rutas SSM `/{prefix}/seg/...` con lookbehind para no confundir
+    con paths de Python (`/usr/...`) ni URLs (`https://...`)."""
+    slugs = _prefix_slugs(prefixes)
+    if slugs:
+        alt = "|".join(re.escape(s) for s in slugs)
+        return re.compile(rf"(?<![\w:])(?:/(?:{alt})(?:/{_PATH_CHARS})+)")
+    return re.compile(rf"(?<![\w:])/(?:{_PATH_CHARS})(?:/{_PATH_CHARS})*")
+
+
+def _match_prefix(path: str, slugs: list[str]) -> bool:
+    if not slugs:
+        return True
+    return any(path.lower().startswith(f"/{s}") for s in slugs)
 
 
 def extract_ssm_params(lines: Iterable[str], prefixes: list[str]) -> list[tuple[str, str]]:
-    """Devuelve (path, arn) de parámetros SSM únicos cuya ruta matchea un prefijo.
+    """Devuelve (path, arn) de parámetros SSM únicos, con la barra inicial.
 
-    Un parámetro se considera NUEVO si su `{{resolve:ssm:...}}` aparece en una
-    línea añadida del diff (no existía en la rama base).
+    Captura rutas peladas `/config/...` `/common/...` (sueltas, en comillas o
+    dentro de `${...}`) y la forma `{{resolve:ssm:/path:arn}}`.
     """
-    clean_prefixes = [p.strip().strip("/").lower() for p in prefixes if p.strip()]
+    slugs = _prefix_slugs(prefixes)
+    path_re = build_ssm_path_re(prefixes)
     seen: set[tuple[str, str]] = set()
     for line in lines:
-        for m in SSM_RE.finditer(line):
-            path = m.group(1).lstrip("/")
-            arn = m.group(2) or ""
-            if not path:
-                continue
-            if clean_prefixes and not any(
-                path.lower().startswith(p) for p in clean_prefixes
-            ):
-                continue
-            seen.add((path, arn))
+        for m in SSM_RESOLVE_RE.finditer(line):
+            path = "/" + m.group(1).lstrip("/")
+            if _match_prefix(path, slugs):
+                seen.add((path, m.group(2) or ""))
+        for m in path_re.finditer(line):
+            seen.add((m.group(0), ""))
     # Orden determinístico para reportes estables.
-    return sorted(seen, key=lambda t: t[0])
+    return sorted(seen, key=lambda t: (t[0], t[1]))
+
+
+def classify_ssm(
+    origin: dict[str, set[str]],
+    dest: dict[str, set[str]],
+) -> dict[str, str]:
+    """Clasifica caminos SSM según nuevas referencias por repo.
+
+    Devuelve `tipo` por path:
+    - `nuevo`: path sumado en origen de algún repo y que no existe en ninguna
+      rama destino (creado para la iniciativa).
+    - `reutilizado`: path sumado en origen de un repo que ya está en la rama
+      destino de otro/s repo/s (productivo) → revisar SSM.
+    """
+    global_dest: set[str] = set()
+    for paths in dest.values():
+        global_dest |= paths
+
+    tipo: dict[str, str] = {}
+    for paths in origin.values():
+        for path in paths:
+            if path not in tipo:
+                tipo[path] = "reutilizado" if path in global_dest else "nuevo"
+    return tipo

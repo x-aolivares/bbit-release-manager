@@ -8,19 +8,47 @@ from ...bitbucket import client as bb
 from ...config import Config
 from ...circleci.client import CircleCiClient, CircleCiError
 from ...circleci.configyml import ensure_tag_workflows
-from ...scan.params import extract_ssm_params
+from ...scan.params import classify_ssm, extract_ssm_params
 from ..session import create_session, get_session, destroy_session, active_session_id
 
 router = APIRouter(prefix="/api", tags=["repos"])
 
 MAX_WORKERS = 8
-SSM_MARKERS = ("ssm:", "{{resolve:")
 
 
-def _suggests_ssm(file) -> bool:
-    """¿El archivo puede aportar un parámetro SSM nuevo? Solo si sus líneas
-    añadidas mencionan un marker de SSM (evita raw_files inútiles)."""
-    return any(("ssm:" in line) or ("{{resolve:" in line) for line in file.added_lines)
+def _suggests_ssm(file, prefixes) -> bool:
+    """¿El archivo puede aportar un parámetro SSM (añadido o quitado)? Evita
+    raw_files inútiles en modo diff."""
+    lines = list(file.added_lines) + list(file.removed_lines or ())
+    return bool(extract_ssm_params(lines, prefixes))
+
+
+NON_TEXT_EXT = {
+    ".png", ".jpg", ".jpeg", ".gif", ".pdf", ".woff", ".woff2", ".ttf",
+    ".eot", ".ico", ".zip", ".gz", ".tar", ".jar", ".class", ".pyc",
+    ".lock", ".svg", ".map", ".bin", ".dat",
+}
+
+
+def _read_files_params(client, slug: str, ref: str, files: list[str], prefixes) -> set:
+    """Parámetros SSM en los raw de un ref para archivos de tipo texto."""
+    def _one(path: str):
+        name = path.rsplit("/", 1)[-1]
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if ext and f".{ext}" in NON_TEXT_EXT:
+            return set()
+        raw = client.raw_file(slug, ref, path)
+        if raw is None:
+            return set()
+        return set(extract_ssm_params([raw], prefixes))
+
+    out: set = set()
+    if not files:
+        return out
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(files) or 1)) as ex:
+        for result in ex.map(_one, files):
+            out |= result
+    return out
 
 
 def _require_session():
@@ -513,10 +541,20 @@ def circleci_config(origin: str, prefixes: str = "", repo: str = ""):
 
 
 @router.get("/diff")
-def diff(origin: str, destination: str = "master"):
+def diff(origin: str, destination: str = "master", mode: str = "diff"):
+    """Parámetros SSM de la iniciativa origin → destination.
+
+    `mode=diff` (default): analiza solo los archivos tocados por el diff.
+    `mode=all`: recorre todos los archivos del repo en ambos refs (más lento).
+
+    Clasifica cada parámetro en `nuevo` (no existe en ninguna rama destino) o
+    `reutilizado` (ya productivo en destino de otro repo → revisar SSM), y
+    lista los `removed` (solo en rama destino, no implica eliminarlos).
+    """
     data = _require_session()
     cfg = Config()
     prefixes = cfg.ssm_prefixes
+    mode = mode if mode == "all" else "diff"
     repos = data.client.repos_with_branch(origin)
     by_slug = {r.slug: r for r in repos}
 
@@ -534,64 +572,104 @@ def diff(origin: str, destination: str = "master"):
         dest_ref = client.commit_for_branch(repo.slug, destination) or destination
         return origin_ref, dest_ref
 
-    def _run_repo_diff(client, repo):
-        """Etapa A: diff de texto por repo (en paralelo)."""
-        return repo.slug, client.diff(repo.slug, destination, origin)
+    added_by_repo: dict[str, set] = {}
+    removed_by_repo: dict[str, set] = {}
+    dest_by_repo: dict[str, set] = {}
 
-    # Etapa A: diffs y selección de archivos con indicio SSM.
-    candidates: list[tuple[str, str, str, str]] = []
-    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(repos) or 1)) as ex:
-        futures = [ex.submit(_run_repo_diff, data.client, r) for r in repos]
-        for slug, d in (f.result() for f in futures):
-            pending = [f for f in d.files if f.status != "deleted" and _suggests_ssm(f)]
-            if not pending:
-                continue
-            origin_ref, dest_ref = _repo_refs(data.client, by_slug[slug])
-            for f in pending:
-                candidates.append((slug, f.path, origin_ref, dest_ref))
+    if mode == "all":
+        def _scan_all(client, repo):
+            slug = repo.slug
+            origin_ref, dest_ref = _repo_refs(client, repo)
+            origin_params = _read_files_params(client, slug, origin_ref,
+                                               client.list_files(slug, origin_ref), prefixes)
+            dest_params = _read_files_params(client, slug, dest_ref,
+                                             client.list_files(slug, dest_ref), prefixes)
+            return slug, origin_params, dest_params
 
-    # Etapa B: raws + extracción por archivo (en paralelo).
-    def _file_params(client, cand):
-        slug, path, origin_ref, dest_ref = cand
-        raw_origin = client.raw_file(slug, origin_ref, path)
-        if raw_origin is None:
-            return []
-        origin_params = set(extract_ssm_params([raw_origin], prefixes))
-        raw_dest = client.raw_file(slug, dest_ref, path)
-        dest_params = set(extract_ssm_params([raw_dest], prefixes)) if raw_dest else set()
-        return [(p, a) for p, a in sorted(origin_params - dest_params)]
+        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(repos) or 1)) as ex:
+            futures = [ex.submit(_scan_all, data.client, r) for r in repos]
+            for slug, origin_params, dest_params in (f.result() for f in futures):
+                added_by_repo[slug] = origin_params - dest_params
+                removed_by_repo[slug] = dest_params - origin_params
+                dest_by_repo[slug] = dest_params
+    else:
+        def _run_repo_diff(client, repo):
+            return repo.slug, client.diff(repo.slug, destination, origin)
 
-    merged: dict[tuple[str, str], set[str]] = {}
-    if candidates:
-        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(candidates) or 1)) as ex:
-            futures = [ex.submit(_file_params, data.client, c) for c in candidates]
-            results = [f.result() for f in futures]
-        for (slug, _path, _o, _d), new in zip(candidates, results):
-            for p, a in new:
-                merged.setdefault((p, a), set()).add(slug)
+        # Etapa A: diffs y selección de archivos con indicio SSM.
+        candidates: list[tuple[str, str, str, str]] = []
+        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(repos) or 1)) as ex:
+            futures = {ex.submit(_run_repo_diff, data.client, r): r for r in repos}
+            for fut, repo in futures.items():
+                slug, d = fut.result()
+                pending = [f for f in d.files if _suggests_ssm(f, prefixes)]
+                if not pending:
+                    continue
+                origin_ref, dest_ref = _repo_refs(data.client, repo)
+                for f in pending:
+                    candidates.append((slug, f.path, origin_ref, dest_ref))
 
-    repos_out = []
-    for slug in [r.slug for r in repos]:
-        new = sorted(
-            (
-                {"param": p, "arn": a}
-                for (p, a), slugs in merged.items()
-                if slug in slugs
-            ),
-            key=lambda x: x["param"],
-        )
-        repos_out.append({"repo": slug, "new_params": new})
-    params = sorted(
-        [
-            {"param": p, "arn": a, "repos": sorted(slugs)}
-            for (p, a), slugs in merged.items()
-        ],
-        key=lambda x: x["param"],
-    )
+        # Etapa B: raws + extracción por archivo (en paralelo).
+        def _file_params(client, cand):
+            slug, path, origin_ref, dest_ref = cand
+            raw_origin = client.raw_file(slug, origin_ref, path)
+            raw_dest = client.raw_file(slug, dest_ref, path)
+            origin_params = set(extract_ssm_params([raw_origin], prefixes)) if raw_origin else set()
+            dest_params = set(extract_ssm_params([raw_dest], prefixes)) if raw_dest else set()
+            return origin_params, dest_params
+
+        if candidates:
+            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(candidates) or 1)) as ex:
+                results = [ex.submit(_file_params, data.client, c).result() for c in candidates]
+            for (slug, _path, _o, _d), (origin_params, dest_params) in zip(candidates, results):
+                added_by_repo.setdefault(slug, set()).update(origin_params - dest_params)
+                removed_by_repo.setdefault(slug, set()).update(dest_params - origin_params)
+                dest_by_repo.setdefault(slug, set()).update(dest_params)
+
+    origin_paths = {slug: {p for p, _ in v} for slug, v in added_by_repo.items()}
+    dest_paths = {slug: {p for p, _ in v} for slug, v in dest_by_repo.items()}
+    tipo = classify_ssm(origin_paths, dest_paths)
+
+    merged: dict[str, dict] = {}
+    for slug, added in added_by_repo.items():
+        for path, arn in added:
+            entry = merged.setdefault(path, {"arns": set(), "repos": set()})
+            entry["arns"].add(arn)
+            entry["repos"].add(slug)
+    params = [
+        {
+            "param": path,
+            "arn": ", ".join(sorted(entry["arns"] - {""})),
+            "tipo": tipo.get(path, "nuevo"),
+            "qa_value": None,
+            "repos": sorted(entry["repos"]),
+        }
+        for path, entry in sorted(merged.items())
+    ]
+
+    removed_merged: dict[str, set[str]] = {}
+    for slug, paths in removed_by_repo.items():
+        for path, _arn in paths:
+            removed_merged.setdefault(path, set()).add(slug)
+    removed = [
+        {"param": path, "repos": sorted(slugs)}
+        for path, slugs in sorted(removed_merged.items())
+    ]
+
+    repos_out = [
+        {
+            "repo": slug,
+            "added": sorted({p for p, _ in added_by_repo.get(slug, set())}),
+            "removed": sorted({p for p, _ in removed_by_repo.get(slug, set())}),
+        }
+        for slug in by_slug
+    ]
     return {
         "origin": origin,
         "destination": destination,
         "prefixes": [p.rstrip("/") for p in prefixes],
+        "mode": mode,
         "repos": repos_out,
         "params": params,
+        "removed": removed,
     }

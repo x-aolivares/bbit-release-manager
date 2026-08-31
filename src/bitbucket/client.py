@@ -44,6 +44,7 @@ class DiffFile:
     lines_added: int = 0
     lines_removed: int = 0
     added_lines: tuple[str, ...] = ()
+    removed_lines: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -204,16 +205,18 @@ class BitbucketClient:
         added = 0
         removed = 0
         added_lines: list[str] = []
+        removed_lines: list[str] = []
         in_hunk = False
         for line in text.splitlines():
             if line.startswith("diff --git "):
                 if path:
-                    files.append(DiffFile(path, status, added, removed, tuple(added_lines)))
+                    files.append(DiffFile(path, status, added, removed, tuple(added_lines), tuple(removed_lines)))
                 path = line.split(" b/", 1)[-1].split(" a/", 1)[-1]
                 status = "modified"
                 added = 0
                 removed = 0
                 added_lines = []
+                removed_lines = []
                 in_hunk = False
             elif line.startswith("new file mode"):
                 status = "added"
@@ -233,8 +236,11 @@ class BitbucketClient:
                         added_lines.append(content)
                 elif line.startswith("-") and not line.startswith("---"):
                     removed += 1
+                    content = line[1:].strip()
+                    if content:
+                        removed_lines.append(content)
         if path:
-            files.append(DiffFile(path, status, added, removed, tuple(added_lines)))
+            files.append(DiffFile(path, status, added, removed, tuple(added_lines), tuple(removed_lines)))
         return files
 
     def raw_file(self, slug: str, ref: str, path: str) -> str | None:
@@ -247,6 +253,34 @@ class BitbucketClient:
         if resp.status_code >= 400:
             return None
         return resp.text
+
+    def list_files(self, slug: str, ref: str, tree: str = "") -> list[str]:
+        """Lista los paths de tipo archivo bajo un ref/árbol, recursivo.
+
+        GET /src/{ref}/{tree} devuelve un nivel del árbol con paginación;
+        se recorre hasta la base. Resultado ordenado y sin duplicados.
+        """
+        files: set[str] = set()
+        url: str | None = (
+            f"/repositories/{self.workspace}/{slug}/src/{ref}/{tree}".rstrip("/")
+        )
+        params: dict | None = {"pagelen": 100}
+        while url:
+            payload = self._request("GET", url, params=params)
+            if payload is None:
+                break
+            params = None
+            for item in payload.get("values", []):
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "directory":
+                    files.update(self.list_files(slug, ref, item.get("path", "")))
+                elif item.get("type") == "file":
+                    files.add(item.get("path", ""))
+            url = (payload.get("next") or "").replace(API_BASE, "")
+            if not url:
+                break
+        return sorted(files)
 
     def commit_for_branch(self, slug: str, branch: str) -> str:
         """Último commit de una rama (hash completo)."""

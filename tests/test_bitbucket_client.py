@@ -315,6 +315,41 @@ def test_has_commits_ahead_ignores_api_error():
         client.close()
 
 
+def test_list_files_recursive_paginated():
+    def handler(request):
+        q = request.url.params
+        if q.get("page") == "2":
+            return httpx.Response(200, json={"values": [{"path": "b.txt", "type": "file"}]})
+        if request.url.path.endswith("/src/abc"):
+            return httpx.Response(200, json={
+                "values": [
+                    {"path": "z.txt", "type": "file"},
+                    {"path": "config", "type": "directory"},
+                ],
+                "next": "https://api.bitbucket.org/2.0/repositories/ws/r1/src/abc?page=2",
+            })
+        if request.url.path.endswith("/src/abc/config"):
+            return httpx.Response(200, json={
+                "values": [{"path": "config/nested.yaml", "type": "file"}],
+            })
+        return httpx.Response(404, json={})
+
+    client = BitbucketClient("ws", "tok", transport=httpx.MockTransport(handler))
+    try:
+        files = client.list_files("r1", "abc")
+    finally:
+        client.close()
+    assert files == ["b.txt", "config/nested.yaml", "z.txt"]
+
+
+def test_list_files_empty_on_404():
+    client = BitbucketClient("ws", "tok", transport=_transport({}))
+    try:
+        assert client.list_files("r1", "abc") == []
+    finally:
+        client.close()
+
+
 def test_create_pr():
     def post(request):
         assert "/pullrequests" in request.url.path

@@ -269,6 +269,39 @@
   background: var(--bb-elevated, #fff);
 }
 
+.bb-seg {
+  display: inline-flex;
+  border: 1px solid var(--bb-border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.bb-seg-btn {
+  border: 0;
+  background: transparent;
+  color: var(--bb-muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.bb-seg-btn--active {
+  background: var(--bb-blue);
+  color: #fff;
+}
+
+.bb-removed {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--bb-border);
+}
+
+.bb-removed-title {
+  margin-bottom: 2px;
+}
+
 .bb-actions {
   display: flex;
   flex-wrap: wrap;

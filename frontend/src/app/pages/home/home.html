@@ -130,6 +130,19 @@
           </div>
         </div>
         <div class="bb-field">
+          <label>Modo de análisis de SSM</label>
+          <div class="bb-seg">
+            <button class="bb-seg-btn" [class.bb-seg-btn--active]="scanMode === 'diff'"
+                    (click)="scanMode = 'diff'">Solo el diff</button>
+            <button class="bb-seg-btn" [class.bb-seg-btn--active]="scanMode === 'all'"
+                    (click)="scanMode = 'all'">Todos los archivos</button>
+          </div>
+          <div class="bb-muted bb-hint">
+            "Solo el diff" analiza los archivos tocados por la rama (rápido);
+            "Todos los archivos" recorre el repo completo por ref (más lento).
+          </div>
+        </div>
+        <div class="bb-field">
           <label>Ambientes de deploy</label>
           <div class="bb-chips">
             @for (p of prefixes(); track p; let i = $index) {
@@ -294,33 +307,60 @@
         </ion-card>
       }
 
-      @if (params().length > 0) {
+      @if (params().length > 0 || removed().length > 0) {
         <ion-card class="bb-card">
           <ion-card-header>
             <ion-card-title class="bb-subtitle">
-              Parámetros SSM nuevos en '{{ origin }}' (no existían en '{{ destination }}')
+              Parámetros SSM en '{{ origin }}' vs '{{ destination }}'
             </ion-card-title>
           </ion-card-header>
           <ion-card-content>
             <div class="bb-table bb-table--params">
               <div class="bb-repos-head">
                 <span>Parámetro</span>
-                <span>ARN</span>
+                <span>Tipo</span>
+                <span>Valor en QA</span>
                 <span>Repos</span>
               </div>
               @for (p of params(); track p.param) {
                 <div class="bb-repos-row">
                   <span class="bb-mono">{{ p.param }}</span>
-                  <span class="bb-mono bb-muted">{{ p.arn || '—' }}</span>
+                  <span>
+                    <span class="bb-badge {{ tipoClass(p.tipo) }}">{{ p.tipo }}</span>
+                  </span>
+                  <span class="bb-mono">{{ p.qa_value || '—' }}</span>
                   <span class="bb-mono">{{ p.repos.join(', ') }}</span>
                 </div>
               }
             </div>
+            @if (removed().length > 0) {
+              <div class="bb-removed">
+                <div class="bb-subtitle bb-removed-title">
+                  Solo en rama destino (no eliminar)
+                </div>
+                <p class="bb-muted bb-hint">
+                  Existen en '{{ destination }}' pero ya no se referencian en '{{ origin }}'.
+                  No implica que el parámetro haya que borrarlo.
+                </p>
+                <div class="bb-table bb-table--params">
+                  <div class="bb-repos-head">
+                    <span>Parámetro</span>
+                    <span>Repos</span>
+                  </div>
+                  @for (p of removed(); track p.param) {
+                    <div class="bb-repos-row">
+                      <span class="bb-mono">{{ p.param }}</span>
+                      <span class="bb-mono">{{ p.repos.join(', ') }}</span>
+                    </div>
+                  }
+                </div>
+              </div>
+            }
           </ion-card-content>
         </ion-card>
       } @else if (repos().length > 0) {
         <ion-card class="bb-card">
-          <ion-card-content class="bb-muted">Sin parámetros SSM nuevos.</ion-card-content>
+          <ion-card-content class="bb-muted">Sin parámetros SSM.</ion-card-content>
         </ion-card>
       }
     }
