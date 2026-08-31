@@ -180,6 +180,7 @@
               }
               Generar tags faltantes
             </button>
+            <button class="bb-btn-secondary" (click)="openReport()">Generar listado de proyectos</button>
           }
         </div>
       </div>
@@ -362,6 +363,38 @@
         <ion-card class="bb-card">
           <ion-card-content class="bb-muted">Sin parámetros SSM.</ion-card-content>
         </ion-card>
+      }
+
+      @if (reportOpen()) {
+        <div class="bb-modal-mask" (click)="reportOpen.set(false)">
+          <div class="bb-modal" (click)="$event.stopPropagation()">
+            <div class="bb-modal-title">Listado de proyectos — {{ origin }}</div>
+            <div class="bb-modal-row">
+              <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'branch'"
+                      (click)="selectReportMode('branch')">URLs rama origen</button>
+              <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'pr'"
+                      (click)="selectReportMode('pr')">URLs de PRs</button>
+              <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'tag'"
+                      (click)="selectReportMode('tag')">URLs de tags</button>
+            </div>
+            @if (reportMode === 'tag' && prefixes().length > 1) {
+              <div class="bb-modal-row">
+                <span class="bb-muted">Ambiente:</span>
+                @for (p of prefixes(); track p; let i = $index) {
+                  <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportEnv() === i"
+                          (click)="reportEnv.set(i); reportCopied.set(false)">{{ p }}</button>
+                }
+              </div>
+            }
+            <textarea class="bb-report-area" readonly [value]="reportText()"></textarea>
+            <div class="bb-modal-row bb-modal-actions">
+              <button class="bb-btn-primary bb-btn-sm" (click)="copyReport()">
+                {{ reportCopied() ? '¡Copiado!' : 'Copiar' }}
+              </button>
+              <button class="bb-btn-secondary bb-btn-sm" (click)="reportOpen.set(false)">Cerrar</button>
+            </div>
+          </div>
+        </div>
       }
     }
   </div>

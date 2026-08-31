@@ -140,6 +140,11 @@ export class Home {
   tagging = signal(false);
   taggingRepo = signal<string | null>(null);
 
+  reportOpen = signal(false);
+  reportMode: 'branch' | 'pr' | 'tag' = 'branch';
+  reportEnv = signal(0);
+  reportCopied = signal(false);
+
   prefixCols(): string {
     return this.prefixes().map(() => ' 9.5rem').join('');
   }
@@ -280,6 +285,51 @@ export class Home {
 
   tipoClass(tipo: string): string {
     return tipo === 'reutilizado' ? 'bb-badge--warn' : 'bb-badge--ok';
+  }
+
+  openReport() {
+    this.reportMode = 'branch';
+    this.reportEnv.set(0);
+    this.reportCopied.set(false);
+    this.reportOpen.set(true);
+  }
+
+  selectReportMode(mode: 'branch' | 'pr' | 'tag') {
+    this.reportMode = mode;
+    this.reportCopied.set(false);
+  }
+
+  reportEnvPrefix(): string {
+    return this.prefixes()[this.reportEnv()] ?? '';
+  }
+
+  reportText(): string {
+    const repos = [...this.repos()].sort((a, b) => a.slug.localeCompare(b.slug));
+    const lines: string[] = [];
+    for (const repo of repos) {
+      let url = '';
+      if (this.reportMode === 'branch') {
+        url = repo.branch_url ?? '';
+      } else if (this.reportMode === 'pr') {
+        url = repo.pr?.exists && repo.pr.url ? repo.pr.url : '';
+      } else {
+        const env = this.reportEnvPrefix().toLowerCase();
+        const tag = env ? this.envTag(repo, env) : null;
+        url = tag ? this.envTagHref(repo, env) : '';
+      }
+      lines.push(repo.slug);
+      lines.push(url || '-------------------');
+    }
+    return lines.join('\n');
+  }
+
+  async copyReport() {
+    try {
+      await navigator.clipboard.writeText(this.reportText());
+      this.reportCopied.set(true);
+    } catch {
+      this.reportCopied.set(false);
+    }
   }
 
   createPr(repo: ScanRepo) {
