@@ -1,0 +1,10 @@
+{
+  "$schema": "http://json.schemastore.org/ng-openapi-gen",
+  "input": "openapi.json",
+  "output": "src/app/api-gen",
+  "module": "api-gen",
+  "exportModels": true,
+  "exportServices": true,
+  "providedInRoot": true,
+  "generateApiModule": false
+}

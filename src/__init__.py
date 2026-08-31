@@ -1,0 +1,1 @@
+"""BBit Release Manager - CLI de Bitbucket sync + web UI."""

@@ -1,0 +1,80 @@
+/*
+ * BBit Release Manager - Bitbucket-inspired light theme
+ * -----------------------------------------------------
+ * Accent azul de Bitbucket (#0052CC), paneles grises (#F4F5F7), bordes #DFE1E6.
+ * Forzamos el tema claro para replicar la estética de la página oficial.
+ */
+
+/**
+ * Ionic CSS Variables
+ */
+:root {
+  /* Bitbucket / Atlassian blue */
+  --ion-color-primary: #0052cc;
+  --ion-color-primary-rgb: 0, 82, 204;
+  --ion-color-primary-contrast: #ffffff;
+  --ion-color-primary-contrast-rgb: 255, 255, 255;
+  --ion-color-primary-shade: #0048b3;
+  --ion-color-primary-tint: #1a63d1;
+
+  --ion-color-secondary: #0747a6;
+  --ion-color-secondary-rgb: 7, 71, 166;
+  --ion-color-secondary-contrast: #ffffff;
+  --ion-color-secondary-contrast-rgb: 255, 255, 255;
+  --ion-color-secondary-shade: #063e92;
+  --ion-color-secondary-tint: #2059af;
+
+  --ion-color-success: #006644;
+  --ion-color-success-rgb: 0, 102, 68;
+  --ion-color-success-contrast: #ffffff;
+  --ion-color-success-contrast-rgb: 255, 255, 255;
+  --ion-color-success-shade: #005a3c;
+  --ion-color-success-tint: #1a7557;
+
+  --ion-color-warning: #b26b00;
+  --ion-color-warning-rgb: 178, 107, 0;
+  --ion-color-warning-contrast: #ffffff;
+  --ion-color-warning-contrast-rgb: 255, 255, 255;
+  --ion-color-warning-shade: #9d5e00;
+  --ion-color-warning-tint: #ba7a1a;
+
+  --ion-color-danger: #d93025;
+  --ion-color-danger-rgb: 217, 48, 37;
+  --ion-color-danger-contrast: #ffffff;
+  --ion-color-danger-contrast-rgb: 255, 255, 255;
+  --ion-color-danger-shade: #bf2a21;
+  --ion-color-danger-tint: #dd453b;
+
+  --ion-color-dark: #172b4d;
+  --ion-color-dark-rgb: 23, 43, 77;
+  --ion-color-dark-contrast: #ffffff;
+  --ion-color-dark-contrast-rgb: 255, 255, 255;
+  --ion-color-dark-shade: #142644;
+  --ion-color-dark-tint: #2e405f;
+
+  --ion-color-medium: #5e6c84;
+  --ion-color-medium-rgb: 94, 108, 132;
+  --ion-color-medium-contrast: #ffffff;
+  --ion-color-medium-contrast-rgb: 255, 255, 255;
+  --ion-color-medium-shade: #535f75;
+  --ion-color-medium-tint: #6e7b91;
+
+  --ion-color-light: #f4f5f7;
+  --ion-color-light-rgb: 244, 245, 247;
+  --ion-color-light-contrast: #172b4d;
+  --ion-color-light-contrast-rgb: 23, 43, 77;
+  --ion-color-light-shade: #d7d8dc;
+  --ion-color-light-tint: #f5f6f8;
+
+  /* App surfaces */
+  --ion-background-color: #ffffff;
+  --ion-background-color-rgb: 255, 255, 255;
+  --ion-text-color: #172b4d;
+  --ion-text-color-rgb: 23, 43, 77;
+  --ion-border-color: #dfe1e6;
+  --ion-toolbar-background: #ffffff;
+  --ion-toolbar-color: #172b4d;
+  --ion-card-background: #ffffff;
+  --ion-item-background: #ffffff;
+  --ion-item-border-color: #dfe1e6;
+}

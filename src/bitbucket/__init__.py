@@ -1,0 +1,1 @@
+"""Cliente y operaciones contra la API REST de Bitbucket."""
