@@ -284,8 +284,37 @@ export class Home {
       });
   }
 
+  paramRows(): { param: string; estado: string }[] {
+    const rows: { param: string; estado: string }[] = [];
+    for (const p of this.params()) {
+      rows.push({ param: p.param, estado: p.tipo });
+    }
+    for (const p of this.removed()) {
+      rows.push({ param: p.param, estado: 'solo destino' });
+    }
+    return rows.sort((a, b) => a.param.localeCompare(b.param));
+  }
+
+  estadoLabel(estado: string): string {
+    switch (estado) {
+      case 'reutilizado':
+        return 'Reutilizado';
+      case 'solo destino':
+        return 'Solo destino';
+      default:
+        return 'Nuevo';
+    }
+  }
+
   tipoClass(tipo: string): string {
-    return tipo === 'reutilizado' ? 'bb-badge--warn' : 'bb-badge--ok';
+    switch (tipo) {
+      case 'reutilizado':
+        return 'bb-badge--warn';
+      case 'solo destino':
+        return 'bb-badge--neutral';
+      default:
+        return 'bb-badge--ok';
+    }
   }
 
   openReport() {

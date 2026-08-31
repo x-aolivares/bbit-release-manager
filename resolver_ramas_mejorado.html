@@ -1,114 +1,55 @@
 <div style="font-family: var(--font-sans);">
-<h2 class="sr-only">Mockup mejorado del panel resolver ramas y tabla de repos con estado de sync, PR y deploys</h2>
+<h2 class="sr-only">Tabla rediseñada de parámetros SSM comparando release contra master</h2>
 
-<div style="background: var(--surface-1); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem;">
-  <p style="font-size: 15px; font-weight: 500; margin: 0 0 1rem;">Resolver ramas</p>
-  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px;">
-    <div>
-      <label style="font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 4px;">Rama origen</label>
-      <input type="text" value="release/REP-325073" style="width: 100%; font-family: var(--font-mono); font-size: 13px;" readonly />
-    </div>
-    <div>
-      <label style="font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 4px;">Rama destino</label>
-      <input type="text" value="master" style="width: 100%; font-family: var(--font-mono); font-size: 13px;" readonly />
-    </div>
-  </div>
-  <div style="margin-bottom: 12px;">
-    <label style="font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 6px;">Ambientes de deploy</label>
-    <div style="display: flex; gap: 8px;">
-      <span style="background: var(--surface-2); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 4px 12px; font-size: 13px;">uat</span>
-      <span style="background: var(--surface-2); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 4px 12px; font-size: 13px;">stgp</span>
-      <span style="background: var(--surface-2); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 4px 12px; font-size: 13px;">prod</span>
-      <button style="border-style: dashed; font-size: 13px; padding: 4px 12px;"><i class="ti ti-plus" style="font-size:14px; vertical-align:-2px;" aria-hidden="true"></i> Agregar</button>
-    </div>
-  </div>
-  <div style="margin-bottom: 16px;">
-    <label style="font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 4px;">Título del PR</label>
-    <input type="text" value="Marketplace to master" style="width: 100%; font-size: 13px;" />
-  </div>
-  <div style="display: flex; gap: 8px; align-items: center;">
-    <button style="background: var(--fill-accent); color: var(--on-accent); border: none; font-size: 13px; padding: 8px 16px; font-weight: 500;">Resolver ramas</button>
-    <button style="font-size: 13px; padding: 8px 16px;">Crear PRs faltantes</button>
-    <button style="font-size: 13px; padding: 8px 16px;">Actualizar títulos</button>
-  </div>
-</div>
-
-<div style="display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; margin-bottom: 1rem;">
-  <div style="background: var(--surface-1); border-radius: var(--radius); padding: 1rem;">
-    <p style="font-size: 13px; color: var(--text-secondary); margin: 0 0 4px;">Repos</p>
-    <p style="font-size: 24px; font-weight: 500; margin: 0;">3</p>
-  </div>
-  <div style="background: var(--surface-1); border-radius: var(--radius); padding: 1rem;">
-    <p style="font-size: 13px; color: var(--text-secondary); margin: 0 0 4px;">Con PR</p>
-    <p style="font-size: 24px; font-weight: 500; margin: 0; color: var(--text-success);">3/3</p>
-  </div>
-  <div style="background: var(--surface-1); border-radius: var(--radius); padding: 1rem;">
-    <p style="font-size: 13px; color: var(--text-secondary); margin: 0 0 4px;">Sincronizados</p>
-    <p style="font-size: 24px; font-weight: 500; margin: 0; color: var(--text-warning);">1/3</p>
-  </div>
-  <div style="background: var(--surface-1); border-radius: var(--radius); padding: 1rem;">
-    <p style="font-size: 13px; color: var(--text-secondary); margin: 0 0 4px;">Con deploy en prod</p>
-    <p style="font-size: 24px; font-weight: 500; margin: 0; color: var(--text-danger);">0/3</p>
-  </div>
+<div style="background: var(--surface-1); border-radius: 12px; padding: 1rem; margin-bottom: 0.75rem;">
+  <p style="font-size: 15px; font-weight: 500; margin: 0;">Parámetros SSM — release/REP-325073 vs master</p>
 </div>
 
 <table style="width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed;">
   <colgroup>
-    <col style="width: 16%;"><col style="width: 14%;"><col style="width: 12%;"><col style="width: 10%;"><col style="width: 12%;"><col style="width: 12%;"><col style="width: 12%;"><col style="width: 12%;">
+    <col style="width: 40%;"><col style="width: 24%;"><col style="width: 14%;"><col style="width: 22%;">
   </colgroup>
   <thead>
     <tr style="border-bottom: 0.5px solid var(--border-strong);">
-      <th style="text-align: left; padding: 8px 6px; color: var(--text-secondary); font-weight: 500;">Repositorio</th>
-      <th style="text-align: left; padding: 8px 6px; color: var(--text-secondary); font-weight: 500;">Sync</th>
-      <th style="text-align: left; padding: 8px 6px; color: var(--text-secondary); font-weight: 500;">PR</th>
-      <th style="text-align: left; padding: 8px 6px; color: var(--text-secondary); font-weight: 500;">Tags</th>
-      <th style="text-align: left; padding: 8px 6px; color: var(--text-secondary); font-weight: 500;">Uat</th>
-      <th style="text-align: left; padding: 8px 6px; color: var(--text-secondary); font-weight: 500;">Stgp</th>
-      <th style="text-align: left; padding: 8px 6px; color: var(--text-secondary); font-weight: 500;">Prod</th>
+      <th style="text-align: left; padding: 8px 6px; color: var(--text-secondary); font-weight: 500;">Parámetro</th>
+      <th style="text-align: left; padding: 8px 6px; color: var(--text-secondary); font-weight: 500;">Repos</th>
+      <th style="text-align: left; padding: 8px 6px; color: var(--text-secondary); font-weight: 500;">Tipo</th>
+      <th style="text-align: left; padding: 8px 6px; color: var(--text-secondary); font-weight: 500;">Valor en qa</th>
     </tr>
   </thead>
   <tbody>
     <tr style="border-bottom: 0.5px solid var(--border);">
+      <td style="padding: 10px 6px; font-family: var(--font-mono); font-size: 12px;">/config/commons/api/timeout</td>
       <td style="padding: 10px 6px;">
-        <div style="font-weight: 500;">bbit-test-03</div>
-        <div style="font-family: var(--font-mono); color: var(--text-muted); font-size: 11px;">b66835a5</div>
+        <span style="background: var(--surface-2); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 2px 8px; font-size: 12px;">bbit-test-02</span>
       </td>
       <td style="padding: 10px 6px;">
-        <span style="background: var(--bg-danger); color: var(--text-danger); border-radius: var(--radius); padding: 2px 8px; font-size: 12px;">4 atrás</span>
+        <span style="background: var(--bg-success); color: var(--text-success); border-radius: var(--radius); padding: 2px 8px; font-size: 12px;">nuevo</span>
       </td>
-      <td style="padding: 10px 6px;"><a href="#" style="color: var(--text-accent);">#2</a></td>
       <td style="padding: 10px 6px; color: var(--text-muted);">—</td>
-      <td style="padding: 10px 6px; color: var(--text-muted);"><i class="ti ti-minus" style="font-size:14px;" aria-hidden="true"></i></td>
-      <td style="padding: 10px 6px; color: var(--text-muted);"><i class="ti ti-minus" style="font-size:14px;" aria-hidden="true"></i></td>
-      <td style="padding: 10px 6px; color: var(--text-muted);"><i class="ti ti-minus" style="font-size:14px;" aria-hidden="true"></i></td>
     </tr>
     <tr style="border-bottom: 0.5px solid var(--border);">
+      <td style="padding: 10px 6px; font-family: var(--font-mono); font-size: 12px;">/config/backend/db/max-connections</td>
       <td style="padding: 10px 6px;">
-        <div style="font-weight: 500;">bbit-test-01</div>
-        <div style="font-family: var(--font-mono); color: var(--text-muted); font-size: 11px;">f6a36655</div>
+        <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+          <span style="background: var(--surface-2); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 2px 8px; font-size: 12px;">bbit-test-01</span>
+          <span style="background: var(--surface-2); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 2px 8px; font-size: 12px;">bbit-test-03</span>
+        </div>
       </td>
       <td style="padding: 10px 6px;">
-        <span style="background: var(--bg-success); color: var(--text-success); border-radius: var(--radius); padding: 2px 8px; font-size: 12px;">al día</span>
+        <span style="background: var(--bg-warning); color: var(--text-warning); border-radius: var(--radius); padding: 2px 8px; font-size: 12px;">modificado</span>
       </td>
-      <td style="padding: 10px 6px;"><a href="#" style="color: var(--text-accent);">#1</a></td>
-      <td style="padding: 10px 6px; color: var(--text-muted);">—</td>
-      <td style="padding: 10px 6px;"><i class="ti ti-check" style="font-size:14px; color: var(--text-success);" aria-hidden="true"></i></td>
-      <td style="padding: 10px 6px; color: var(--text-muted);"><i class="ti ti-minus" style="font-size:14px;" aria-hidden="true"></i></td>
-      <td style="padding: 10px 6px; color: var(--text-muted);"><i class="ti ti-minus" style="font-size:14px;" aria-hidden="true"></i></td>
+      <td style="padding: 10px 6px;">20</td>
     </tr>
     <tr>
+      <td style="padding: 10px 6px; font-family: var(--font-mono); font-size: 12px;">/config/auth/legacy-token</td>
       <td style="padding: 10px 6px;">
-        <div style="font-weight: 500;">bbit-test-02</div>
-        <div style="font-family: var(--font-mono); color: var(--text-muted); font-size: 11px;">62128c01</div>
+        <span style="background: var(--surface-2); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 2px 8px; font-size: 12px;">bbit-test-02</span>
       </td>
       <td style="padding: 10px 6px;">
-        <span style="background: var(--bg-warning); color: var(--text-warning); border-radius: var(--radius); padding: 2px 8px; font-size: 12px;">1 atrás</span>
+        <span style="background: var(--bg-danger); color: var(--text-danger); border-radius: var(--radius); padding: 2px 8px; font-size: 12px;">eliminado</span>
       </td>
-      <td style="padding: 10px 6px;"><a href="#" style="color: var(--text-accent);">#1</a></td>
       <td style="padding: 10px 6px; color: var(--text-muted);">—</td>
-      <td style="padding: 10px 6px;"><i class="ti ti-check" style="font-size:14px; color: var(--text-success);" aria-hidden="true"></i></td>
-      <td style="padding: 10px 6px;"><i class="ti ti-check" style="font-size:14px; color: var(--text-success);" aria-hidden="true"></i></td>
-      <td style="padding: 10px 6px; color: var(--text-muted);"><i class="ti ti-minus" style="font-size:14px;" aria-hidden="true"></i></td>
     </tr>
   </tbody>
 </table>

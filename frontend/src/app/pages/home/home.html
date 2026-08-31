@@ -321,47 +321,28 @@
             </ion-card-title>
           </ion-card-header>
           <ion-card-content>
+            @if (removed().length > 0) {
+              <p class="bb-muted bb-hint bb-params-hint">
+                "Solo destino" = existe en '{{ destination }}' pero ya no se referencias en '{{ origin }}'.
+                No implica que el parámetro haya que borrarlo.
+              </p>
+            }
             <div class="bb-table bb-table--params">
               <div class="bb-repos-head">
                 <span>Parámetro</span>
-                <span>Tipo</span>
+                <span>Estado</span>
                 <span>Valor en QA</span>
-                <span>Repos</span>
               </div>
-              @for (p of params(); track p.param) {
+              @for (p of paramRows(); track p.param) {
                 <div class="bb-repos-row">
                   <span class="bb-mono">{{ p.param }}</span>
                   <span>
-                    <span class="bb-badge {{ tipoClass(p.tipo) }}">{{ p.tipo }}</span>
+                    <span class="bb-badge {{ tipoClass(p.estado) }}">{{ estadoLabel(p.estado) }}</span>
                   </span>
-                  <span class="bb-mono">{{ p.qa_value || '—' }}</span>
-                  <span class="bb-mono">{{ p.repos.join(', ') }}</span>
+                  <span class="bb-mono bb-qa-val">------</span>
                 </div>
               }
             </div>
-            @if (removed().length > 0) {
-              <div class="bb-removed">
-                <div class="bb-subtitle bb-removed-title">
-                  Solo en rama destino (no eliminar)
-                </div>
-                <p class="bb-muted bb-hint">
-                  Existen en '{{ destination }}' pero ya no se referencian en '{{ origin }}'.
-                  No implica que el parámetro haya que borrarlo.
-                </p>
-                <div class="bb-table bb-table--params">
-                  <div class="bb-repos-head">
-                    <span>Parámetro</span>
-                    <span>Repos</span>
-                  </div>
-                  @for (p of removed(); track p.param) {
-                    <div class="bb-repos-row">
-                      <span class="bb-mono">{{ p.param }}</span>
-                      <span class="bb-mono">{{ p.repos.join(', ') }}</span>
-                    </div>
-                  }
-                </div>
-              </div>
-            }
           </ion-card-content>
         </ion-card>
       } @else if (repos().length > 0) {

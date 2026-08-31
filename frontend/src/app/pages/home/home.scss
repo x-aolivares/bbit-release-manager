@@ -127,7 +127,16 @@
 
 .bb-table--params .bb-repos-head,
 .bb-table--params .bb-repos-row {
-  grid-template-columns: 1.6fr 1.6fr 1fr;
+  grid-template-columns: 1.6fr 1fr 1fr;
+}
+
+.bb-params-hint {
+  margin: 0 0 10px;
+}
+
+.bb-qa-val {
+  color: var(--bb-text-secondary);
+  letter-spacing: 0.1em;
 }
 
 .bb-repos-head {
