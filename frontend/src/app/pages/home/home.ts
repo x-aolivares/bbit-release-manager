@@ -377,6 +377,21 @@ export class Home {
     return this.prefixes().some((p) => !this.envTag(repo, p));
   }
 
+  missingEnvs(repo: ScanRepo): string[] {
+    return this.prefixes().filter((p) => !this.envTag(repo, p));
+  }
+
+  reposNeedingTags(): ScanRepo[] {
+    if (!this.ciConfigured()) return [];
+    return this.repos().filter((r) => this.missingEnvs(r).length > 0);
+  }
+
+  missingTooltip(): string {
+    return this.reposNeedingTags()
+      .map((r) => `${r.slug} → ${this.missingEnvs(r).join(', ')}`)
+      .join('\n');
+  }
+
   generateTags(repo?: ScanRepo, prefix?: string) {
     if (!this.origin) return;
     const dest = this.destination || 'master';

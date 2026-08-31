@@ -192,6 +192,10 @@
             <p class="bb-stat-label">Sincronizados</p>
             <p class="bb-stat-value bb-stat--warn">{{ stats()!.synced }}/{{ stats()!.repos }}</p>
           </div>
+          <div class="bb-stat" [title]="missingTooltip()">
+            <p class="bb-stat-label">Por taguear</p>
+            <p class="bb-stat-value bb-stat--danger">{{ reposNeedingTags().length }}/{{ stats()!.repos }}</p>
+          </div>
           <div class="bb-stat">
             <p class="bb-stat-label">Con deploy en prod</p>
             <p class="bb-stat-value bb-stat--danger">{{ stats()!.prod }}/{{ stats()!.repos }}</p>
@@ -229,6 +233,12 @@
                   <span>
                     <a class="bb-link bb-repo-name" [href]="repoUrl(repo)" target="_blank"
                        [title]="repo.name">{{ repo.name }}</a>
+                    @if (ciConfigured() && missingEnvs(repo).length > 0) {
+                      <span class="bb-retaag"
+                            [title]="'Requiere taguear: ' + missingEnvs(repo).join(', ')">
+                        requiere taguear: {{ missingEnvs(repo).join(', ') }}
+                      </span>
+                    }
                   </span>
                   <span>
                     @let sync = syncInfo(repo.behind);
@@ -261,9 +271,9 @@
                        [title]="'Rama ' + origin">{{ repo.commit.slice(0, 8) }}</a>
                   </span>
                   @for (p of prefixes(); track p) {
-                    <span class="bb-deploy-col">
+                    <span>
                       @if (envTag(repo, p)) {
-                        <a class="bb-celllink {{ envTagClass(repo, p) }}"
+                        <a class="bb-link bb-mono {{ envTagClass(repo, p) }}"
                            [href]="envTagHref(repo, p)" target="_blank"
                            [title]="envTagTitle(repo, p)">
                           {{ envTag(repo, p) }}
