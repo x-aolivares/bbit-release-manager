@@ -322,6 +322,7 @@ def scan(origin: str, destination: str = "master", prefixes: str = ""):
         results = [f.result() for f in futures]
 
     items = [r[0] for r in results]
+    items.sort(key=lambda x: x["slug"])
     first_ci_error = next((r[1] for r in results if r[1]), None)
     if first_ci_error:
         ci_error = ci_error or first_ci_error
@@ -662,7 +663,7 @@ def diff(origin: str, destination: str = "master", mode: str = "diff"):
             "added": sorted({p for p, _ in added_by_repo.get(slug, set())}),
             "removed": sorted({p for p, _ in removed_by_repo.get(slug, set())}),
         }
-        for slug in by_slug
+        for slug in sorted(by_slug)
     ]
     return {
         "origin": origin,
