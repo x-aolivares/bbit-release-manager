@@ -116,17 +116,39 @@ class CircleCiClient:
     def workflows(self, pipeline_id: str) -> list[dict]:
         return self._paginate(f"/pipeline/{pipeline_id}/workflow", {})
 
+    def workflow_jobs(self, workflow_id: str) -> list[dict]:
+        """Jobs de un workflow (para el deep-link al job del deploy)."""
+        return self._paginate(f"/workflow/{workflow_id}/job", {})
+
     def _deploy_from_workflow(self, repo: str, pipeline: dict, workflow: dict) -> DeployJob:
         slug = self.project_slug(repo)
         number = (pipeline.get("number") or 0)
         wf_id = workflow.get("id", "")
+        url = f"{WEB_BASE}/{slug}/{number}/workflows/{wf_id}"
+        try:
+            jobs = self.workflow_jobs(wf_id)
+        except CircleCiError:
+            jobs = []
+        # Preferimos el job de aprobación del workflow de deploy; si no hay,
+        # usamos el primer job como destino del deep-link.
+        job = next((j for j in jobs if j.get("type") == "approval"), None)
+        if job is None and jobs:
+            job = jobs[0]
+        if job and job.get("id"):
+            job_type = job.get("type") or "build"
+            build_number = job.get("number") or job.get("job_number") or ""
+            url = (
+                f"{WEB_BASE}/{slug}/{number}/details?useNewPipelines=true"
+                f"&job={job['id']}&workflowId={wf_id}"
+                f"&buildNumber={build_number}&jobType={job_type}"
+            )
         return DeployJob(
             workflow=workflow.get("name", ""),
             pipeline_id=pipeline.get("id", ""),
             pipeline_number=number,
             status=workflow.get("status", ""),
             created_at=workflow.get("created_at", ""),
-            url=f"{WEB_BASE}/{slug}/{number}/workflows/{wf_id}",
+            url=url,
         )
 
     def pipeline_id_for_commit(self, repo: str, branch: str, commit: str) -> int | None:

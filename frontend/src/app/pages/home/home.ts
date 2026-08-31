@@ -399,6 +399,10 @@ export class Home {
   envTagHref(repo: ScanRepo, prefix: string): string {
     const tag = this.envTag(repo, prefix);
     if (!tag) return this.repoUrl(repo);
+    const deploy = repo.deploys[prefix];
+    if (deploy?.url) {
+      return deploy.url;
+    }
     if (repo.ci_project) {
       const vcs = repo.ci_vcs || 'bb';
       return `https://app.circleci.com/pipelines/${vcs}/${repo.workspace}?useNewPipelines=true&project=${repo.ci_project}&filter=${encodeURIComponent(`git_tag:equals:${tag}`)}`;

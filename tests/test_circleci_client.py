@@ -76,15 +76,45 @@ def test_deploy_job_for_pipeline():
             ],
         })
 
+    def jobs(request):
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [
+                {"id": "jobuuid", "type": "approval", "number": 5, "name": "approve"},
+            ],
+        })
+
     client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
         ("GET", "/api/v2/pipeline/p1/workflow"): workflows,
+        ("GET", "/api/v2/workflow/wf1/job"): jobs,
     }))
     pipeline = {"id": "p1", "number": 7}
     try:
         job = client.deploy_job_for_pipeline("r1", pipeline, "stgp")
         assert job.workflow == "deploy-stgp"
-        assert "workflows/wf1" in job.url
+        assert job.url == (
+            "https://app.circleci.com/pipelines/bb/o/r1/7/details?useNewPipelines=true"
+            "&job=jobuuid&workflowId=wf1&buildNumber=5&jobType=approval"
+        )
         assert client.deploy_job_for_pipeline("r1", pipeline, "uat") is None
+    finally:
+        client.close()
+
+
+def test_deploy_url_fallback_without_jobs():
+    def workflows(request):
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [{"id": "wf1", "name": "deploy", "status": "success", "created_at": "x"}],
+        })
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/pipeline/p1/workflow"): workflows,
+    }))
+    pipeline = {"id": "p1", "number": 7}
+    try:
+        job = client.deploy_job_for_pipeline("r1", pipeline, "deploy")
+        assert "workflows/wf1" in job.url
     finally:
         client.close()
 
@@ -107,15 +137,27 @@ def test_deploy_for_tag():
             items = []
         return httpx.Response(200, json={"next_page_token": None, "items": items})
 
+    def jobs(request):
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [
+                {"id": "jobuuid", "type": "build", "number": 4, "name": "deploy-uat"},
+            ],
+        })
+
     client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
         ("GET", "/api/v2/project/bb/o/r1/pipeline"): pipelines,
         ("GET", "/api/v2/pipeline/p1/workflow"): workflows,
         ("GET", "/api/v2/pipeline/p2/workflow"): workflows,
+        ("GET", "/api/v2/workflow/wf1/job"): jobs,
     }))
     try:
         job = client.deploy_for_tag("r1", "uat-7", "abc", "uat")
         assert job is not None and job.workflow == "deploy-uat"
-        assert "workflows/wf1" in job.url
+        assert job.url == (
+            "https://app.circleci.com/pipelines/bb/o/r1/12/details?useNewPipelines=true"
+            "&job=jobuuid&workflowId=wf1&buildNumber=4&jobType=build"
+        )
         assert client.deploy_for_tag("r1", "uat-7", "abc", "stgp") is None
         assert client.deploy_for_tag("r1", "uat-7", "nope", "uat") is None
     finally:
@@ -135,9 +177,13 @@ def test_deploys_for_tags():
             "items": [{"id": "w", "name": "deploy", "status": "running", "created_at": "x"}],
         })
 
+    def jobs(request):
+        return httpx.Response(200, json={"next_page_token": None, "items": []})
+
     client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
         ("GET", "/api/v2/project/bb/o/r1/pipeline"): pipelines,
         ("GET", "/api/v2/pipeline/t1/workflow"): workflows,
+        ("GET", "/api/v2/workflow/w/job"): jobs,
     }))
     try:
         found = client.deploys_for_tags("r1", ["v1", "v2"])
