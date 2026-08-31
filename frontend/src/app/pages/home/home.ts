@@ -128,8 +128,6 @@ export class Home {
   creatingPr = signal<string | null>(null);
   tagging = signal(false);
   taggingRepo = signal<string | null>(null);
-  workflowCfg = signal(false);
-  workflowCfgRepo = signal<string | null>(null);
 
   prefixCols(): string {
     return this.prefixes().map(() => ' 9.5rem').join('');
@@ -406,40 +404,6 @@ export class Home {
       complete: () => {
         this.tagging.set(false);
         this.taggingRepo.set(null);
-      },
-    });
-  }
-
-  generateWorkflows(repo?: ScanRepo) {
-    if (!this.origin || this.prefixes().length === 0) return;
-    const prefixes = this.prefixes().join(',');
-    let url = `/api/circleci-config?origin=${encodeURIComponent(this.origin)}&prefixes=${encodeURIComponent(prefixes)}`;
-    if (repo) {
-      url += `&repo=${encodeURIComponent(repo.slug)}`;
-      this.workflowCfgRepo.set(repo.slug);
-    } else {
-      this.workflowCfg.set(true);
-    }
-    this.error.set(null);
-    this.http.post<any>(url, {}).subscribe({
-      next: (r) => {
-        if (r.ok) {
-          const written = r.items?.filter((i: any) => !i.skipped) ?? [];
-          const envs = r.items?.flatMap((i: any) => i.envs) ?? [];
-          const errors = r.items?.flatMap((i: any) => i.errors) ?? [];
-          const msg =
-            `config.yml escritos: ${written.length}` +
-            (envs.length ? ` (envs: ${envs.join(', ')})` : '') +
-            (errors.length ? ` | errores: ${errors.join('; ')}` : '');
-          this.error.set(msg);
-        } else {
-          this.error.set(r.error ?? 'Error al generar workflows.');
-        }
-      },
-      error: (e) => this.error.set(e.error?.error ?? e.message ?? 'Error al generar workflows.'),
-      complete: () => {
-        this.workflowCfg.set(false);
-        this.workflowCfgRepo.set(null);
       },
     });
   }

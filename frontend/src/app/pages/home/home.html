@@ -167,13 +167,6 @@
               }
               Generar tags faltantes
             </button>
-            <button class="bb-btn-secondary" (click)="generateWorkflows()"
-                    [disabled]="workflowCfg() || prefixes().length === 0">
-              @if (workflowCfg()) {
-                <span class="bb-spinner-inline"></span>
-              }
-              Generar workflows de tags
-            </button>
           }
         </div>
       </div>
