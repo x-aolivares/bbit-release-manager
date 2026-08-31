@@ -309,14 +309,21 @@ class BitbucketClient:
         return f"https://bitbucket.org/{self.workspace}/{slug}/branch/{branch}"
 
     def find_pr(self, slug: str, source: str, destination: str) -> dict | None:
-        """Localiza un PR abierto source → destination."""
+        """Localiza un PR abierto source → destination.
+
+        Bitbucket Cloud ignora los params source_branch/destination_branch en
+        GET /pullrequests: devuelve los PRs recientes sin filtrar por rama.
+        Se filtra con la query `q` para evitar falsos positivos.
+        """
+        q = 'source.branch.name="{}" AND destination.branch.name="{}"'.format(
+            source.replace('"', '\\"'), destination.replace('"', '\\"')
+        )
         data = self._request(
             "GET",
             f"/repositories/{self.workspace}/{slug}/pullrequests",
             params={
                 "state": "OPEN",
-                "source_branch": source,
-                "destination_branch": destination,
+                "q": q,
                 "pagelen": 5,
             },
         )

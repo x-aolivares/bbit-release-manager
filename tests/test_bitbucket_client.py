@@ -173,6 +173,26 @@ def test_find_pr_none():
     assert pr is None
 
 
+def test_find_pr_filters_by_both_branches():
+    seen = {}
+
+    def handler(request):
+        seen["q"] = request.url.params.get("q")
+        return httpx.Response(200, json={"values": []})
+
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/pullrequests"): handler,
+    }))
+    try:
+        assert client.find_pr("r1", "circleci-project-setup", "release/REP-325073") is None
+    finally:
+        client.close()
+    assert seen["q"] == (
+        'source.branch.name="circleci-project-setup" '
+        'AND destination.branch.name="release/REP-325073"'
+    )
+
+
 def test_find_pr_returns_source_commit():
     payload = {
         "values": [{
