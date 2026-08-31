@@ -3,8 +3,9 @@
 ## Objetivo
 Generar un listado copiable con las URLs de cada repo de la iniciativa en un
 modal: **ramas de origen**, **PRs** y **tags** (con selector de ambiente si hay
-más de uno). Se presenta un texto plano con 2 líneas por repo (slug + URL), y
-`-------------------` (19 guiones) cuando el dato no existe.
+más de uno). Es texto plano con **1 línea por repo** en orden alfabético de
+slug, lista solo para copiar y pegar (sin headers): la URL, o `-------------------`
+(19 guiones) cuando el dato no existe.
 
 ## Contexto
 - Tras resolver las ramas, el front ya conoce por repo (`ScanRepo`):
@@ -19,8 +20,8 @@ más de uno). Se presenta un texto plano con 2 líneas por repo (slug + URL), y
 - **`frontend/.../home.ts`**:
   - Señal `reportOpen` (modal), `reportMode: 'branch' | 'pr' | 'tag'`,
     `reportEnv` (índice de `prefixes()`).
-  - `reportText()` arma el texto: por repo en orden alfabético, línea con el
-    slug y línea con la URL (o `-------------------` si falta).
+  - `reportText()` arma el texto: por repo en orden alfabético una línea con la
+    URL (o `-------------------` si falta); sin headers para pegado directo.
   - Botón externo de cerrar/copiar al portapapeles (`navigator.clipboard`).
 - **`frontend/.../home.html`**:
   - Botón "Generar listado de proyectos" en `.bb-actions`.
@@ -30,11 +31,11 @@ más de uno). Se presenta un texto plano con 2 líneas por repo (slug + URL), y
 - **`frontend/.../home.scss`**: estilos del overlay y del panel del modal.
 
 ## Criterios de aceptación
-- [ ] Modal se abre solo con `repos().length > 0`.
-- [ ] Modos: rama origen, PRs, tags (con selector de ambiente si hace falta).
-- [ ] Texto: 2 líneas por repo, orden alfabético por slug; URL o 19 guiones.
-- [ ] "Copiar" copia el texto al portapapeles y muestra feedback.
-- [ ] `ng build` sin errores.
+- [x] Modal se abre solo con `repos().length > 0`.
+- [x] Modos: rama origen, PRs, tags (con selector de ambiente si hace falta).
+- [x] Texto: 1 línea por repo, orden alfabético por slug; URL o 19 guiones, sin headers.
+- [x] "Copiar" copia el texto al portapapeles y muestra feedback.
+- [x] `ng build` sin errores.
 
 ## Alcance
 | Archivo | Cambio |

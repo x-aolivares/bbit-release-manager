@@ -317,7 +317,6 @@ export class Home {
         const tag = env ? this.envTag(repo, env) : null;
         url = tag ? this.envTagHref(repo, env) : '';
       }
-      lines.push(repo.slug);
       lines.push(url || '-------------------');
     }
     return lines.join('\n');
