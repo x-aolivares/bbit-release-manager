@@ -159,6 +159,8 @@ def test_scan_returns_repos_with_pr_and_params(monkeypatch):
             return "abc123"
         def commits_behind(self, repo, branch, base):
             return 2
+        def has_commits_ahead(self, repo, branch, base):
+            return False
         def tags_on_commit(self, repo, commit):
             return [{"name": "v1", "date": "x"}]
         def find_pr(self, repo, origin, destination):
@@ -184,6 +186,7 @@ def test_scan_returns_repos_with_pr_and_params(monkeypatch):
     assert body["repos"][0]["slug"] == "r1"
     assert body["repos"][0]["commit"] == "abc123"
     assert body["repos"][0]["behind"] == 2
+    assert body["repos"][0]["no_changes"] is True
     assert body["stats"]["repos"] == 1
     assert body["stats"]["synced"] == 0
     assert body["repos"][0]["pr"]["exists"] is False
@@ -255,6 +258,8 @@ def test_scan_deploys_from_tag(monkeypatch):
             return "abc123"
         def commits_behind(self, repo, branch, base):
             return 0
+        def has_commits_ahead(self, repo, branch, base):
+            return True
         def tags_on_commit(self, repo, commit):
             return [{"name": "uat-7", "date": "x"}, {"name": "v1", "date": "x"}]
         def find_pr(self, repo, origin, destination):

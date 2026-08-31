@@ -52,6 +52,7 @@ interface ScanRepo {
   branch_url: string;
   commit: string;
   behind: number;
+  no_changes?: boolean;
   tags: TagRow[];
   pr: PrInfo;
   deploys: Record<string, DeployInfo | null>;

@@ -244,6 +244,10 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
         commit = pr["source_commit"]
     else:
         commit = client.commit_for_branch(repo.slug, origin)
+    if not pr:
+        no_changes = not client.has_commits_ahead(repo.slug, origin, destination)
+    else:
+        no_changes = False
     behind = client.commits_behind(repo.slug, origin, destination)
     match_commit = commit
     if ci is not None and pr and pr.get("source_commit"):
@@ -290,6 +294,7 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
         "branch_url": client.branch_url(repo.slug, origin),
         "commit": commit,
         "behind": behind,
+        "no_changes": no_changes,
         "tags": tag_rows,
         "pr": _serialize_pr(pr),
         "deploys": deploys,

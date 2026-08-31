@@ -261,7 +261,7 @@
                           — {{ repo.pr.title }}
                         }
                       </a>
-                    } @else {
+                    } @else if (!repo.no_changes) {
                       <button class="bb-link bb-pr-link" [disabled]="creatingPr() !== null"
                               (click)="createPr(repo)"
                               [title]="'Crea el PR hacia la rama destino'">
@@ -271,6 +271,11 @@
                           Sin PR a {{ destination || 'master' }}
                         }
                       </button>
+                    } @else {
+                      <span class="bb-muted"
+                            [title]="'La rama ' + origin + ' no tiene cambios contra ' + (destination || 'master')">
+                        Sin cambios contra {{ destination || 'master' }}
+                      </span>
                     }
                   </span>
                   <span>
