@@ -8,6 +8,7 @@ exists.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -19,6 +20,14 @@ from .api import health, repos
 FRONTEND_DIST = (
     Path(__file__).resolve().parent.parent.parent / "frontend" / "dist" / "browser"
 )
+
+
+def _setup_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        force=True,
+    )
 
 
 def _serve_spa(app: FastAPI) -> None:
@@ -52,6 +61,7 @@ def _serve_unavailable(app: FastAPI) -> None:
 
 
 def create_app() -> FastAPI:
+    _setup_logging()
     app = FastAPI(
         title="BBit Release Manager",
         description="Revisión de ramas y parámetros SSM contra la API de Bitbucket",

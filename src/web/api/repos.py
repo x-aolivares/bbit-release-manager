@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import logging
 import re
 
 from fastapi import APIRouter, HTTPException
@@ -10,6 +11,8 @@ from ...circleci.client import CircleCiClient, CircleCiError
 from ...circleci.configyml import ensure_tag_workflows
 from ...scan.params import classify_ssm, extract_ssm_params
 from ..session import create_session, get_session, destroy_session, active_session_id
+
+log = logging.getLogger("bbit.scan")
 
 router = APIRouter(prefix="/api", tags=["repos"])
 
@@ -285,6 +288,8 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
                 deploy = ci.deploy_for_tag(repo.slug, found_tag, match_commit, env)
             except CircleCiError as exc:
                 ci_error = ci_error or str(exc)
+        elif ci is not None and not found_tag:
+            log.info("scan: %s env=%s sin tag %s-en en commit %s", repo.slug, env, env, match_commit[:12])
         deploys[env] = _serialize_deploy(deploy)
 
     item = {

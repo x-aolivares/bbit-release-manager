@@ -7,9 +7,12 @@ Requiere un token de usuario (Circle-Token) y el project slug de la forma
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import httpx
+
+log = logging.getLogger("bbit.circleci")
 
 API_BASE = "https://circleci.com/api/v2"
 WEB_BASE = "https://app.circleci.com/pipelines"
@@ -165,14 +168,6 @@ class CircleCiClient:
                 best = number
         return best
 
-    def deploy_job_for_pipeline(self, repo: str, pipeline: dict, prefix: str) -> DeployJob | None:
-        """Primer workflow del pipeline cuyo nombre contiene el prefijo."""
-        for workflow in self.workflows(pipeline.get("id", "")):
-            name = workflow.get("name", "")
-            if prefix and prefix.lower() in name.lower():
-                return self._deploy_from_workflow(repo, pipeline, workflow)
-        return None
-
     def deploy_for_tag(
         self,
         repo: str,
@@ -183,10 +178,39 @@ class CircleCiClient:
         """Deploy del tag: pipeline corrido sobre ese tag con revision == commit."""
         if not tag or not commit:
             return None
-        for pipeline in self.pipelines(repo, tag=tag):
-            if (pipeline.get("vcs") or {}).get("revision", "") != commit:
+        pipelines = self.pipelines(repo, tag=tag)
+        if not pipelines:
+            log.warning("deploy_for_tag: %s tag=%s commit=%s -> sin pipelines", repo, tag, commit)
+        for pipeline in pipelines:
+            rev = (pipeline.get("vcs") or {}).get("revision", "")
+            if rev != commit:
+                log.info(
+                    "deploy_for_tag: %s tag=%s descarta pipeline vcs.revision=%s (commit=%s)",
+                    repo, tag, rev[:12], commit[:12],
+                )
                 continue
-            return self.deploy_job_for_pipeline(repo, pipeline, prefix)
+            job = self.deploy_job_for_pipeline(repo, pipeline, prefix)
+            log.info(
+                "deploy_for_tag: %s tag=%s commit=%s prefix=%s -> workflow=%r status=%r",
+                repo, tag, commit[:12], prefix,
+                job.workflow if job else None,
+                job.status if job else None,
+            )
+            return job
+        return None
+
+    def deploy_job_for_pipeline(self, repo: str, pipeline: dict, prefix: str) -> DeployJob | None:
+        """Primer workflow del pipeline cuyo nombre contiene el prefijo."""
+        workflows = self.workflows(pipeline.get("id", ""))
+        for workflow in workflows:
+            name = workflow.get("name", "")
+            if prefix and prefix.lower() in name.lower():
+                return self._deploy_from_workflow(repo, pipeline, workflow)
+        log.warning(
+            "deploy_job_for_pipeline: %s pipeline=%s prefix=%s sin workflow que contenga %r (workflows=%s)",
+            repo, pipeline.get("id"), prefix, prefix,
+            [w.get("name") for w in workflows],
+        )
         return None
 
     def deploys_for_tags(self, repo: str, tags: list[str]) -> dict[str, DeployJob | None]:

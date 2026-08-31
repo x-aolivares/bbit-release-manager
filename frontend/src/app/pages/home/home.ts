@@ -454,6 +454,16 @@ export class Home {
     return repo.match_tag?.[prefix.toLowerCase()] ?? null;
   }
 
+  envTagLabel(repo: ScanRepo, prefix: string): string {
+    const tag = this.envTag(repo, prefix);
+    if (!tag) return '—';
+    const deploy = repo.deploys?.[prefix.toLowerCase()];
+    if (deploy?.status) {
+      return `${tag} · ${deploy.status}`;
+    }
+    return `${tag} · created`;
+  }
+
   isEnvTag(repo: ScanRepo, name: string): boolean {
     const n = name.toLowerCase();
     return this.prefixes().some((p) => new RegExp(`^${p.toLowerCase()}-\\d+$`).test(n));
