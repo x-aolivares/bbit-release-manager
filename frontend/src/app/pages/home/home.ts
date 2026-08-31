@@ -142,7 +142,7 @@ export class Home {
   taggingRepo = signal<string | null>(null);
 
   reportOpen = signal(false);
-  reportMode: 'branch' | 'pr' | 'tag' = 'branch';
+  reportMode: 'branch' | 'pr' | 'tag' | 'params' = 'branch';
   reportEnv = signal(0);
   reportCopied = signal(false);
 
@@ -295,7 +295,7 @@ export class Home {
     this.reportOpen.set(true);
   }
 
-  selectReportMode(mode: 'branch' | 'pr' | 'tag') {
+  selectReportMode(mode: 'branch' | 'pr' | 'tag' | 'params') {
     this.reportMode = mode;
     this.reportCopied.set(false);
   }
@@ -305,6 +305,9 @@ export class Home {
   }
 
   reportText(): string {
+    if (this.reportMode === 'params') {
+      return this.params().map((p) => p.param).join('\n');
+    }
     const repos = [...this.repos()].sort((a, b) => a.slug.localeCompare(b.slug));
     const lines: string[] = [];
     for (const repo of repos) {

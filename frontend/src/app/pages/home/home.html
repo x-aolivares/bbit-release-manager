@@ -381,6 +381,8 @@
                       (click)="selectReportMode('pr')">URLs de PRs</button>
               <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'tag'"
                       (click)="selectReportMode('tag')">URLs de tags</button>
+              <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'params'"
+                      (click)="selectReportMode('params')">Parámetros SSM</button>
             </div>
             @if (reportMode === 'tag' && prefixes().length > 1) {
               <div class="bb-modal-row">
