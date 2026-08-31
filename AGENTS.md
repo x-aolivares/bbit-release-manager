@@ -1,4 +1,4 @@
-# bbit-release-manager — Agent Instructions
+# my-org-bbit-release-manager — Agent Instructions
 
 ## Versioning
 
@@ -15,6 +15,33 @@ Before committing any changes, bump the version in `pyproject.toml`:
 - **Modular** — cada dominio en su propio módulo (`bitbucket/`, `scan/`, `report/`, `web/`)
 - **Retrocompatible** — no romper comandos existentes. Si un cambio altera comportamiento, version mayor
 - **Versionable** — todo cambio se versiona, se commitea y se pushea
+
+## Route Map (carpeta `route-map/`)
+
+La carpeta `route-map/` en la raíz contiene el plan de desarrollo de cada tema
+que se discuta del proyecto. Reglas:
+
+- **Un archivo por tema/iteración**: cada plan identifica un solo tema pendiente o en curso, con objetivo, contexto, cambios, criterios de aceptación, alcance, orden de implementación, verificación y nota de versión.
+- **Numeración monotónica**: `route-plan-v{N}.md` con `N` incremental; cada tema nuevo que se discuta recibe `v{N+1}` (nunca se reutiliza un número).
+- **Antes de trabajar un tema**: leer el `route-plan` correspondiente más reciente; si el tema todavía no tiene plan, crearlo con el próximo número antes de implementar.
+- **Tema completado**: marcar con `[x]` los puntos del checklist y agregar al final `Estado: implementado` una vez verificado (tests verdes + criterios de aceptación).
+- **Los plan files se versionan**: se commitean junto con el trabajo que describen (`docs:` si es plan únicamente, o junto al `feat:`/`fix:` correspondiente).
+
+Template de cada `route-plan-v{N}.md`:
+
+```markdown
+# Route Plan — v{N} · <tema>
+
+## Objetivo
+## Contexto          <estado actual, flujo, piso/límites>
+## Cambios propuestos
+## Criterios de aceptación
+## Alcance            <tabla archivo → cambio>
+## Orden de implementación
+## Verificación
+## Nota de versión
+## Estado            <checklist [ ]/[x] + "Estado: implementado" al cerrar>
+```
 
 ## Workflow
 
