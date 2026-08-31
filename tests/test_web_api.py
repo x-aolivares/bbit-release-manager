@@ -45,7 +45,7 @@ def test_health_ok():
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["version"] == "0.5.2"
+    assert body["version"] == "0.6.0"
     assert body["connected"] is False
 
 
@@ -186,7 +186,8 @@ def test_scan_returns_repos_with_pr_and_params(monkeypatch):
     assert body["stats"]["repos"] == 1
     assert body["stats"]["synced"] == 0
     assert body["repos"][0]["pr"]["exists"] is False
-    assert body["repos"][0]["deploys"] == {}
+    assert body["repos"][0]["deploys"] == {"uat": None}
+    assert body["repos"][0]["match_tag"] == {"uat": None}
     assert body["repos"][0]["tags"][0]["name"] == "v1"
 
 
@@ -227,10 +228,142 @@ def test_scan_reuses_pr_hash(monkeypatch):
     monkeypatch.setattr("src.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
-    body = client.get("/api/scan", params={"origin": "release/x"}).json()
+    body = client.get("/api/scan", params={"origin": "release/x", "prefixes": "uat"}).json()
     assert body["repos"][0]["commit"] == "abc123"
     assert commit_calls == []  # el hash vino del PR, no de GET /commits
     assert body["stats"]["with_pr"] == 1
+    assert body["repos"][0]["deploys"] == {"uat": None}
+    assert body["repos"][0]["match_tag"] == {"uat": None}
+
+
+def test_scan_deploys_from_tag(monkeypatch):
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch):
+            return "abc123"
+        def commits_behind(self, repo, branch, base):
+            return 0
+        def tags_on_commit(self, repo, commit):
+            return [{"name": "uat-7", "date": "x"}, {"name": "v1", "date": "x"}]
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+
+    class StubCi:
+        def deploys_for_tags(self, repo, tags):
+            return {"uat-7": SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7")}
+        def deploy_for_tag(self, repo, tag, deploy_id, commit, prefix):
+            if tag == "uat-7" and deploy_id == 7 and commit == "abc123" and prefix == "uat":
+                return SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7")
+            return None
+
+    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("src.web.api.repos._circleci", lambda: StubCi())
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/scan", params={"origin": "release/x", "prefixes": "uat,stgp"}).json()
+    repo = body["repos"][0]
+    assert repo["match_tag"] == {"uat": "uat-7", "stgp": None}
+    assert repo["deploys"]["uat"] == {"workflow": "deploy-uat", "status": "success", "created_at": "x", "url": "http://cci/7"}
+    assert repo["deploys"]["stgp"] is None
+    assert body["stats"]["prod"] == 0
+
+
+def test_scan_resolves_full_hash_with_pr(monkeypatch):
+    calls = []
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch):
+            calls.append(branch)
+            return "abc123456789000000000000000000000000000000"
+        def commits_behind(self, repo, branch, base):
+            return 0
+        def tags_on_commit(self, repo, commit):
+            return [{"name": "uat-7", "date": "x"}]
+        def find_pr(self, repo, origin, destination):
+            return {"id": 1, "title": "T", "url": "u", "state": "OPEN", "source_commit": "abc123456789"}
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+
+    class StubCi:
+        def deploys_for_tags(self, repo, tags):
+            return {}
+        def deploy_for_tag(self, repo, tag, deploy_id, commit, prefix):
+            assert commit == "abc123456789000000000000000000000000000000"
+            return SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7")
+
+    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("src.web.api.repos._circleci", lambda: StubCi())
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/scan", params={"origin": "release/x", "prefixes": "uat"}).json()
+    assert body["repos"][0]["deploys"]["uat"]["status"] == "success"
+    assert calls.count("release/x") == 1  # hash completo resuelto una sola vez
+
+
+def test_generate_tags(monkeypatch):
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch):
+            return "abc123"
+        def tag_exists(self, slug, name):
+            return name == "stgp-7"
+        def create_tag(self, slug, name, commit):
+            created.append((slug, name, commit))
+
+    class StubCi:
+        def pipeline_id_for_commit(self, repo, branch, commit):
+            return 7
+
+    created = []
+    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("src.web.api.repos._circleci", lambda: StubCi())
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.post("/api/tags", params={"origin": "release/x", "prefixes": "uat,stgp"}).json()
+    assert body["ok"] is True
+    item = body["items"][0]
+    assert item["pipeline_id"] == 7
+    assert item["created"] == ["uat-7"]
+    assert item["skipped"] == ["stgp-7"]
+    assert created == [("r1", "uat-7", "abc123")]
 
 
 def test_diff_skips_raw_without_ssm(monkeypatch):

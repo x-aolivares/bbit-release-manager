@@ -31,42 +31,83 @@ def test_project_slug():
     client.close()
 
 
-def test_scheduled_deploys_for_commit():
+def test_pipeline_id_for_commit():
     def pipelines(request):
         assert request.url.params.get("branch") == "release"
         return httpx.Response(200, json={
             "next_page_token": None,
             "items": [
-                {"id": "p1", "number": 7,
-                 "trigger": {"type": "schedule"},
-                 "vcs": {"revision": "abc", "branch": "release"}},
-                {"id": "p2", "number": 8,
-                 "trigger": {"type": "webhook"},
-                 "vcs": {"revision": "abc", "branch": "release"}},
-            ],
-        })
-
-    def workflows(request):
-        assert request.url.path == "/api/v2/pipeline/p1/workflow"
-        return httpx.Response(200, json={
-            "next_page_token": None,
-            "items": [
-                {"id": "wf1", "name": "deploy-stgp", "status": "success", "created_at": "2026-01-01"}
+                {"id": "p1", "number": 12, "vcs": {"revision": "abc", "branch": "release"}},
+                {"id": "p2", "number": 99, "vcs": {"revision": "abc", "branch": "release"}},
+                {"id": "p3", "number": 50, "vcs": {"revision": "other", "branch": "release"}},
             ],
         })
 
     client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
         ("GET", "/api/v2/project/bb/o/r1/pipeline"): pipelines,
-        ("GET", "/api/v2/pipeline/p1/workflow"): workflows,
     }))
     try:
-        found = client.scheduled_deploys_for_commit("r1", "release", "abc", ["uat", "stgp", "prod"])
+        assert client.pipeline_id_for_commit("r1", "release", "abc") == 99
+        assert client.pipeline_id_for_commit("r1", "release", "xyz") is None
     finally:
         client.close()
-    assert found["stgp"] is not None
-    assert found["stgp"].workflow == "deploy-stgp"
-    assert "workflows/wf1" in found["stgp"].url
-    assert found["uat"] is None
+
+
+def test_deploy_job_for_pipeline():
+    def workflows(request):
+        assert request.url.path == "/api/v2/pipeline/p1/workflow"
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [
+                {"id": "wf1", "name": "deploy-stgp", "status": "success", "created_at": "x"},
+                {"id": "wf2", "name": "build", "status": "success", "created_at": "x"},
+            ],
+        })
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/pipeline/p1/workflow"): workflows,
+    }))
+    pipeline = {"id": "p1", "number": 7}
+    try:
+        job = client.deploy_job_for_pipeline("r1", pipeline, "stgp")
+        assert job.workflow == "deploy-stgp"
+        assert "workflows/wf1" in job.url
+        assert client.deploy_job_for_pipeline("r1", pipeline, "uat") is None
+    finally:
+        client.close()
+
+
+def test_deploy_for_tag():
+    def pipelines(request):
+        assert request.url.params.get("branch") == "uat-7"
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [
+                {"id": "p1", "number": 7, "vcs": {"tag": "uat-7", "revision": "abc"}},
+                {"id": "p2", "number": 8, "vcs": {"tag": "uat-7", "revision": "zzz"}},
+            ],
+        })
+
+    def workflows(request):
+        if request.url.path == "/api/v2/pipeline/p1/workflow":
+            items = [{"id": "wf1", "name": "deploy-uat", "status": "running", "created_at": "x"}]
+        else:
+            items = []
+        return httpx.Response(200, json={"next_page_token": None, "items": items})
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): pipelines,
+        ("GET", "/api/v2/pipeline/p1/workflow"): workflows,
+        ("GET", "/api/v2/pipeline/p2/workflow"): workflows,
+    }))
+    try:
+        job = client.deploy_for_tag("r1", "uat-7", 7, "abc", "uat")
+        assert job is not None and job.workflow == "deploy-uat"
+        assert "workflows/wf1" in job.url
+        assert client.deploy_for_tag("r1", "uat-7", 7, "nope", "uat") is None
+        assert client.deploy_for_tag("r1", "uat-7", 42, "abc", "uat") is None
+    finally:
+        client.close()
 
 
 def test_deploys_for_tags():

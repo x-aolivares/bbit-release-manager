@@ -55,6 +55,7 @@ interface ScanRepo {
   tags: TagRow[];
   pr: PrInfo;
   deploys: Record<string, DeployInfo | null>;
+  match_tag: Record<string, string | null>;
 }
 
 interface ScanStats {
@@ -123,6 +124,8 @@ export class Home {
   syncingPrs = signal(false);
 
   creatingPr = signal<string | null>(null);
+  tagging = signal(false);
+  taggingRepo = signal<string | null>(null);
 
   prefixCols(): string {
     return this.prefixes().map(() => ' 8rem').join('');
@@ -322,5 +325,49 @@ export class Home {
     if (behind <= 0) return { label: 'al día', cls: 'bb-sync--ok' };
     if (behind <= 4) return { label: `${behind} atrás`, cls: 'bb-sync--warn' };
     return { label: `${behind} atrás`, cls: 'bb-sync--danger' };
+  }
+
+  envTag(repo: ScanRepo, prefix: string): string | null {
+    return repo.match_tag?.[prefix.toLowerCase()] ?? null;
+  }
+
+  missingTagFor(repo: ScanRepo): boolean {
+    return this.prefixes().some((p) => !this.envTag(repo, p));
+  }
+
+  generateTags(repo?: ScanRepo) {
+    if (!this.origin) return;
+    const dest = this.destination || 'master';
+    const prefixes = this.prefixes().join(',');
+    let url = `/api/tags?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}`;
+    if (repo) {
+      url += `&repo=${encodeURIComponent(repo.slug)}`;
+      this.taggingRepo.set(repo.slug);
+    } else {
+      this.tagging.set(true);
+    }
+    this.error.set(null);
+    this.http.post<any>(url, {}).subscribe({
+      next: (r) => {
+        if (r.ok) {
+          const created = r.items?.flatMap((i: any) => i.created) ?? [];
+          const skipped = r.items?.flatMap((i: any) => i.skipped) ?? [];
+          const errors = r.items?.flatMap((i: any) => i.errors) ?? [];
+          const msg =
+            `Tags creados: ${created.join(', ') || 'ninguno'}` +
+            (skipped.length ? ` | ya existían: ${skipped.join(', ')}` : '') +
+            (errors.length ? ` | errores: ${errors.join('; ')}` : '');
+          this.error.set(msg);
+          this.resolve();
+        } else {
+          this.error.set(r.error ?? 'Error al generar tags.');
+        }
+      },
+      error: (e) => this.error.set(e.error?.error ?? e.message ?? 'Error al generar tags.'),
+      complete: () => {
+        this.tagging.set(false);
+        this.taggingRepo.set(null);
+      },
+    });
   }
 }

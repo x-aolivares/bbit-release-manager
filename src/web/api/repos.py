@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import re
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
@@ -191,11 +192,19 @@ def _serialize_deploy(deploy) -> dict | None:
     }
 
 
+def _tag_match(prefix: str) -> re.Pattern:
+    return re.compile(rf"^{re.escape(prefix)}-(\d+)$", re.IGNORECASE)
+
+
 def _repo_scan(client, ci, repo, origin, destination, clean):
     """Payload de un repo (etapa paralela de /scan).
 
     Reusa el head de la rama origen desde el PR cuando existe
     (source_commit), evitando GET /commits/{branch}.
+
+    La columna de cada ambiente sale del tag `{env}-{pipeline_id}` del commit:
+    el deploy es válido solo si el pipeline del tag tiene ese número, la
+    revisión del commit y un workflow que mencione el ambiente.
     """
     try:
         pr = client.find_pr(repo.slug, origin, destination)
@@ -207,7 +216,10 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
     else:
         commit = client.commit_for_branch(repo.slug, origin)
     behind = client.commits_behind(repo.slug, origin, destination)
-    tags = client.tags_on_commit(repo.slug, commit)
+    match_commit = commit
+    if ci is not None and pr and pr.get("source_commit"):
+        match_commit = client.commit_for_branch(repo.slug, origin) or commit
+    tags = client.tags_on_commit(repo.slug, match_commit)
 
     ci_error = None
     tag_rows = []
@@ -223,12 +235,25 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
         tag_rows = [{"name": t["name"], "deploy": None} for t in tags]
 
     deploys: dict[str, dict | None] = {}
-    if ci is not None:
-        try:
-            found = ci.scheduled_deploys_for_commit(repo.slug, origin, commit, clean)
-            deploys = {p: _serialize_deploy(d) for p, d in found.items()}
-        except CircleCiError as exc:
-            ci_error = ci_error or str(exc)
+    match_tag: dict[str, str | None] = {}
+    for prefix in clean:
+        env = prefix.lower()
+        found_tag = None
+        deploy_id = None
+        for t in tags:
+            m = _tag_match(env).match(t["name"])
+            if m:
+                found_tag = t["name"]
+                deploy_id = int(m.group(1))
+                break
+        match_tag[env] = found_tag
+        deploy = None
+        if ci is not None and found_tag and deploy_id and match_commit:
+            try:
+                deploy = ci.deploy_for_tag(repo.slug, found_tag, deploy_id, match_commit, env)
+            except CircleCiError as exc:
+                ci_error = ci_error or str(exc)
+        deploys[env] = _serialize_deploy(deploy)
 
     item = {
         "slug": repo.slug,
@@ -240,6 +265,7 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
         "tags": tag_rows,
         "pr": _serialize_pr(pr),
         "deploys": deploys,
+        "match_tag": match_tag,
     }
     return item, ci_error
 
@@ -350,6 +376,67 @@ def update_pr_titles(origin: str, destination: str = "master", title: str = ""):
         except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
             failed.append({"repo": slug, "error": str(exc)})
     return {"ok": True, "title": target, "updated": updated, "skipped": skipped, "failed": failed}
+
+
+@router.post("/tags")
+def generate_tags(origin: str, prefixes: str = "", repo: str = "", destination: str = "master"):
+    """Crea tags `{env}-{pipeline_id}` sobre el head de la rama origen,
+    por ambiente elegido y reusando el mismo pipeline id por commit.
+
+    Por defecto aplica a todos los repos con la rama; con `repo` solo ese.
+    Idempotente: no sobrescribe tags ya existentes.
+    """
+    data = _require_session()
+    cfg = Config()
+    envs = [p.strip().lower() for p in prefixes.split(",") if p.strip()] or cfg.deploy_prefixes
+    ci = _circleci()
+    if ci is None:
+        return JSONResponse(
+            {"ok": False, "error": "Sin CIRCLECI_TOKEN no se puede resolver el pipeline del commit."},
+            status_code=400,
+        )
+
+    def _repos():
+        for r in data.client.repos_with_branch(origin):
+            if not repo or r.slug == repo:
+                yield r
+
+    candidates = list(_repos())
+    if repo and not candidates:
+        return JSONResponse(
+            {"ok": False, "error": f"El repo '{repo}' no contiene la rama '{origin}'."},
+            status_code=400,
+        )
+
+    items = []
+    for r in candidates:
+        slug = r.slug
+        commit = data.client.commit_for_branch(slug, origin)
+        try:
+            pipeline_id = ci.pipeline_id_for_commit(slug, origin, commit)
+        except CircleCiError as exc:
+            items.append({"repo": slug, "commit": commit, "pipeline_id": None,
+                          "created": [], "skipped": [], "errors": [str(exc)]})
+            continue
+        if not pipeline_id:
+            items.append({"repo": slug, "commit": commit, "pipeline_id": None,
+                          "created": [], "skipped": [],
+                          "errors": [f"El commit {commit[:8]} no tiene pipeline en CircleCI"]})
+            continue
+        created, skipped, errors = [], [], []
+        for env in envs:
+            tag = f"{env}-{pipeline_id}"
+            try:
+                if data.client.tag_exists(slug, tag):
+                    skipped.append(tag)
+                    continue
+                data.client.create_tag(slug, tag, commit)
+                created.append(tag)
+            except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+                errors.append(f"{tag}: {exc}")
+        items.append({"repo": slug, "commit": commit, "pipeline_id": pipeline_id,
+                      "created": created, "skipped": skipped, "errors": errors})
+    return {"ok": True, "origin": origin, "envs": envs, "items": items}
 
 
 @router.get("/diff")

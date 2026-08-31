@@ -162,6 +162,23 @@ def test_tags_on_commit():
     assert [t["name"] for t in tags] == ["v1"]
 
 
+def test_tags_on_commit_prefix_full_hash():
+    payload = {
+        "values": [
+            {"name": "uat-3", "target": {"hash": "e38579ed0ace", "date": "2026-01-01"}},
+            {"name": "v1", "target": {"hash": "other"}},
+        ]
+    }
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/refs/tags"): lambda r: httpx.Response(200, json=payload),
+    }))
+    try:
+        tags = client.tags_on_commit("r1", "e38579ed0aceff370704b5272d1d339f6b2dde7d")
+    finally:
+        client.close()
+    assert [t["name"] for t in tags] == ["uat-3"]
+
+
 def test_find_pr_none():
     client = BitbucketClient("ws", "tok", transport=_transport({
         ("GET", "/2.0/repositories/ws/r1/pullrequests"): lambda r: httpx.Response(200, json={"values": []}),
@@ -259,5 +276,44 @@ def test_create_pr_requires_write_scope():
     try:
         with pytest.raises(BitbucketAuthError):
             client.create_pr("r1", "release", "master")
+    finally:
+        client.close()
+
+
+def test_tag_exists():
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/refs/tags/uat-7"): lambda r: httpx.Response(200, json={"name": "uat-7"}),
+    }))
+    try:
+        assert client.tag_exists("r1", "uat-7") is True
+        assert client.tag_exists("r1", "stgp-9") is False
+    finally:
+        client.close()
+
+
+def test_create_tag():
+    def post(request):
+        assert request.url.path == "/2.0/repositories/ws/r1/refs/tags"
+        body = request.read()
+        assert b'"name":"uat-7"' in body and b'"hash":"abc"' in body
+        return httpx.Response(201, json={"name": "uat-7", "target": {"hash": "abc"}})
+
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("POST", "/2.0/repositories/ws/r1/refs/tags"): post,
+    }))
+    try:
+        tag = client.create_tag("r1", "uat-7", "abc")
+    finally:
+        client.close()
+    assert tag == {"name": "uat-7", "target": "abc"}
+
+
+def test_create_tag_requires_write_scope():
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("POST", "/2.0/repositories/ws/r1/refs/tags"): lambda r: httpx.Response(403, json={"message": "no"}),
+    }))
+    try:
+        with pytest.raises(BitbucketAuthError):
+            client.create_tag("r1", "uat-7", "abc")
     finally:
         client.close()

@@ -124,38 +124,46 @@ class CircleCiClient:
             url=f"{WEB_BASE}/{slug}/{number}/workflows/{wf_id}",
         )
 
-    def scheduled_deploys_for_commit(
+    def pipeline_id_for_commit(self, repo: str, branch: str, commit: str) -> int | None:
+        """Número de pipeline más reciente que vcs.revision == commit en la rama."""
+        if not commit:
+            return None
+        best = None
+        for pipeline in self.pipelines(repo, branch=branch):
+            revision = (pipeline.get("vcs") or {}).get("revision", "")
+            if revision != commit:
+                continue
+            number = pipeline.get("number") or 0
+            if best is None or number > best:
+                best = number
+        return best
+
+    def deploy_job_for_pipeline(self, repo: str, pipeline: dict, prefix: str) -> DeployJob | None:
+        """Primer workflow del pipeline cuyo nombre contiene el prefijo."""
+        for workflow in self.workflows(pipeline.get("id", "")):
+            name = workflow.get("name", "")
+            if prefix and prefix.lower() in name.lower():
+                return self._deploy_from_workflow(repo, pipeline, workflow)
+        return None
+
+    def deploy_for_tag(
         self,
         repo: str,
-        branch: str,
+        tag: str,
+        deploy_id: int,
         commit: str,
-        prefixes: list[str],
-    ) -> dict[str, DeployJob | None]:
-        """Mapea cada prefijo a su deploy programado para el commit dado.
-
-        Busca pipelines de trigger 'schedule' cuyo vcs.revision coincide con el
-        commit y cuyo workflow matchea el prefijo (substring case-insensitive).
-        """
-        result: dict[str, DeployJob | None] = {p: None for p in prefixes}
-        if not commit:
-            return result
-        pipelines = self.pipelines(repo, branch=branch)
-        matched: dict[str, DeployJob] = {}
-        for pipeline in pipelines:
-            trigger = (pipeline.get("trigger") or {}).get("type", "")
-            revision = (pipeline.get("vcs") or {}).get("revision", "")
-            if trigger != "schedule" or revision != commit:
+        prefix: str,
+    ) -> DeployJob | None:
+        """Deploy del tag: pipeline con number == deploy_id y revision == commit."""
+        if not tag or not deploy_id:
+            return None
+        for pipeline in self.pipelines(repo, tag=tag):
+            if (pipeline.get("number") or 0) != deploy_id:
                 continue
-            for workflow in self.workflows(pipeline.get("id", "")):
-                name = workflow.get("name", "")
-                for prefix in prefixes:
-                    if prefix and prefix.lower() in name.lower():
-                        existing = matched.get(prefix)
-                        if existing is None:
-                            matched[prefix] = self._deploy_from_workflow(repo, pipeline, workflow)
-        for prefix, deploy in matched.items():
-            result[prefix] = deploy
-        return result
+            if (pipeline.get("vcs") or {}).get("revision", "") != commit:
+                continue
+            return self.deploy_job_for_pipeline(repo, pipeline, prefix)
+        return None
 
     def deploys_for_tags(self, repo: str, tags: list[str]) -> dict[str, DeployJob | None]:
         """Para cada tag, el último pipeline corrido sobre ese tag."""

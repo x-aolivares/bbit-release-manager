@@ -295,7 +295,10 @@ class BitbucketClient:
             params = None
             for item in payload.get("values", []):
                 target = item.get("target") or {}
-                if target.get("hash") == commit_hash:
+                thash = target.get("hash", "")
+                if thash and (thash == commit_hash
+                              or thash.startswith(commit_hash)
+                              or commit_hash.startswith(thash)):
                     tags.append({
                         "name": item.get("name", ""),
                         "date": item.get("date") or target.get("date") or "",
@@ -403,3 +406,26 @@ class BitbucketClient:
             "url": (links.get("html") or {}).get("href", ""),
             "state": payload.get("state", ""),
         }
+
+    def tag_exists(self, slug: str, name: str) -> bool:
+        """¿Existe el tag en el repo? (404 → False)."""
+        return self._request("GET", f"/repositories/{self.workspace}/{slug}/refs/tags/{name}") is not None
+
+    def create_tag(self, slug: str, name: str, commit: str) -> dict:
+        """Crea un tag apuntando a un commit. Requiere scope repository:write."""
+        resp = self._client.request(
+            "POST",
+            f"/repositories/{self.workspace}/{slug}/refs/tags",
+            json={"name": name, "target": {"hash": commit}},
+        )
+        if resp.status_code in (401, 403):
+            raise BitbucketAuthError(
+                f"Bitbucket {resp.status_code}: sin permisos para crear tag "
+                "(requiere scope repository:write)"
+            )
+        if resp.status_code >= 400:
+            raise BitbucketError(
+                f"Bitbucket {resp.status_code} al crear tag: {resp.text[:300]}"
+            )
+        payload = resp.json()
+        return {"name": payload.get("name", name), "target": (payload.get("target") or {}).get("hash", "")}

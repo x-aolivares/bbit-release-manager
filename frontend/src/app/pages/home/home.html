@@ -160,6 +160,13 @@
           @if (repos().length > 0) {
             <button class="bb-btn-secondary" (click)="syncPrs('create')" [disabled]="syncingPrs()">Crear PRs faltantes</button>
             <button class="bb-btn-secondary" (click)="syncPrs('update')" [disabled]="syncingPrs()">Actualizar títulos</button>
+            <button class="bb-btn-secondary" (click)="generateTags()"
+                    [disabled]="tagging() || !ciConfigured()">
+              @if (tagging()) {
+                <span class="bb-spinner-inline"></span>
+              }
+              Generar tags faltantes
+            </button>
           }
         </div>
       </div>
@@ -262,15 +269,29 @@
                         }
                       </div>
                     }
+                    @if (ciConfigured() && missingTagFor(repo)) {
+                      <div class="bb-taggen">
+                        <button class="bb-link" (click)="generateTags(repo)"
+                                [disabled]="taggingRepo() !== null">
+                          @if (taggingRepo() === repo.slug) {
+                            <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
+                          } @else {
+                            + Generar tags
+                          }
+                        </button>
+                      </div>
+                    }
                   </span>
                   @for (p of prefixes(); track p) {
                     <span class="bb-deploy-col">
                       @if (repo.deploys[p]) {
                         <a class="bb-celllink {{ statusClass(repo.deploys[p]!.status) }}"
                            [href]="repo.deploys[p]!.url" target="_blank"
-                           [title]="repo.deploys[p]!.workflow + ' · ' + repo.deploys[p]!.status">
+                           [title]="envTag(repo, p) + ' · ' + repo.deploys[p]!.workflow + ' · ' + repo.deploys[p]!.status">
                           {{ statusIcon(repo.deploys[p]!.status) }}
                         </a>
+                      } @else if (envTag(repo, p)) {
+                        <span class="bb-tagwarn bb-xs" [title]="envTag(repo, p) + ' sin deploy validado'">◒</span>
                       } @else {
                         <span class="bb-muted">—</span>
                       }
