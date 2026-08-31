@@ -254,7 +254,15 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
     behind = client.commits_behind(repo.slug, origin, destination)
     match_commit = commit
     if ci is not None and pr and pr.get("source_commit"):
-        match_commit = client.commit_for_branch(repo.slug, origin) or commit
+        branch_head = client.commit_for_branch(repo.slug, origin)
+        log.info(
+            "scan: %s pr.source_commit=%s branch_head=%s match_commit=%s",
+            repo.slug,
+            commit[:12],
+            (branch_head or "?")[:12],
+            (branch_head or commit)[:12],
+        )
+        match_commit = branch_head or commit
     tags = client.tags_on_commit(repo.slug, match_commit)
 
     ci_error = None
@@ -284,10 +292,19 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
         match_tag[env] = found_tag
         deploy = None
         if ci is not None and found_tag and match_commit:
+            log.info(
+                "scan: %s env=%s tag=%s commit=%s -> buscando deploy_for_tag",
+                repo.slug, env, found_tag, match_commit[:12],
+            )
             try:
                 deploy = ci.deploy_for_tag(repo.slug, found_tag, match_commit, env)
             except CircleCiError as exc:
                 ci_error = ci_error or str(exc)
+            log.info(
+                "scan: %s env=%s deploy=%s",
+                repo.slug, env,
+                f"{deploy.status}" if deploy else "None",
+            )
         elif ci is not None and not found_tag:
             log.info("scan: %s env=%s sin tag %s-en en commit %s", repo.slug, env, env, match_commit[:12])
         deploys[env] = _serialize_deploy(deploy)

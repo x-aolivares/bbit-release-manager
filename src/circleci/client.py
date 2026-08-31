@@ -177,12 +177,22 @@ class CircleCiClient:
     ) -> DeployJob | None:
         """Deploy del tag: pipeline corrido sobre ese tag con revision == commit."""
         if not tag or not commit:
+            log.warning("deploy_for_tag: %s tag=%r commit=%r -> tag o commit vacío", repo, tag, commit)
             return None
         pipelines = self.pipelines(repo, tag=tag)
         if not pipelines:
             log.warning("deploy_for_tag: %s tag=%s commit=%s -> sin pipelines", repo, tag, commit)
+        else:
+            log.info(
+                "deploy_for_tag: %s tag=%s commit=%s -> %d pipelines, buscando rev match",
+                repo, tag, commit[:12], len(pipelines),
+            )
         for pipeline in pipelines:
             rev = (pipeline.get("vcs") or {}).get("revision", "")
+            log.info(
+                "deploy_for_tag: %s pipeline#%s vcs.revision=%s vs commit=%s match=%s",
+                repo, pipeline.get("number"), rev[:12], commit[:12], rev == commit,
+            )
             if rev != commit:
                 log.info(
                     "deploy_for_tag: %s tag=%s descarta pipeline vcs.revision=%s (commit=%s)",
@@ -197,6 +207,10 @@ class CircleCiClient:
                 job.status if job else None,
             )
             return job
+        log.warning(
+            "deploy_for_tag: %s tag=%s commit=%s -> %d pipelines revisados, ninguno con rev match",
+            repo, tag, commit[:12], len(pipelines),
+        )
         return None
 
     def deploy_job_for_pipeline(self, repo: str, pipeline: dict, prefix: str) -> DeployJob | None:
