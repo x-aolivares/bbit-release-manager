@@ -271,9 +271,9 @@
                        [title]="'Rama ' + origin">{{ repo.commit.slice(0, 8) }}</a>
                   </span>
                   @for (p of prefixes(); track p) {
-                    <span>
+                    <span class="bb-deploy-col">
                       @if (envTag(repo, p)) {
-                        <a class="bb-link bb-mono {{ envTagClass(repo, p) }}"
+                        <a class="bb-link bb-mono"
                            [href]="envTagHref(repo, p)" target="_blank"
                            [title]="envTagTitle(repo, p)">
                           {{ envTag(repo, p) }}

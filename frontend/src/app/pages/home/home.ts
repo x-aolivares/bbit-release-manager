@@ -310,21 +310,6 @@ export class Home {
       });
   }
 
-  statusClass(status: string): string {
-    const s = (status || '').toLowerCase();
-    if (['success', 'completed'].includes(s)) return 'bb-deploy--ok';
-    if (['failed', 'faulted', 'error'].includes(s)) return 'bb-deploy--danger';
-    if (['running', 'on_hold', 'blocked', 'queued', 'not_run'].includes(s)) return 'bb-deploy--pending';
-    return '';
-  }
-
-  statusIcon(status: string): string {
-    const s = (status || '').toLowerCase();
-    if (['success', 'completed'].includes(s)) return '✓';
-    if (['failed', 'faulted', 'error'].includes(s)) return '✕';
-    return '◐';
-  }
-
   syncInfo(behind: number): { label: string; cls: string } {
     if (behind <= 0) return { label: 'al día', cls: 'bb-sync--ok' };
     if (behind <= 4) return { label: `${behind} atrás`, cls: 'bb-sync--warn' };
@@ -349,11 +334,6 @@ export class Home {
       return `https://app.circleci.com/pipelines/${vcs}/${repo.workspace}?useNewPipelines=true&project=${repo.ci_project}&filter=${encodeURIComponent(`git_tag:equals:${tag}`)}`;
     }
     return `${this.repoUrl(repo)}/src/${encodeURIComponent(tag)}`;
-  }
-
-  envTagClass(repo: ScanRepo, prefix: string): string {
-    const deploy = repo.deploys[prefix];
-    return deploy ? this.statusClass(deploy.status) : 'bb-deploy--pending';
   }
 
   envTagTitle(repo: ScanRepo, prefix: string): string {
