@@ -56,6 +56,8 @@ interface ScanRepo {
   pr: PrInfo;
   deploys: Record<string, DeployInfo | null>;
   match_tag: Record<string, string | null>;
+  ci_project?: string | null;
+  ci_vcs?: string | null;
 }
 
 interface ScanStats {
@@ -340,10 +342,13 @@ export class Home {
   }
 
   envTagHref(repo: ScanRepo, prefix: string): string {
-    const deploy = repo.deploys[prefix];
-    if (deploy?.url) return deploy.url;
     const tag = this.envTag(repo, prefix);
-    return tag ? `${this.repoUrl(repo)}/src/${encodeURIComponent(tag)}` : this.repoUrl(repo);
+    if (!tag) return this.repoUrl(repo);
+    if (repo.ci_project) {
+      const vcs = repo.ci_vcs || 'bb';
+      return `https://app.circleci.com/pipelines/${vcs}/${repo.workspace}?useNewPipelines=true&project=${repo.ci_project}&filter=${encodeURIComponent(`git_tag:equals:${tag}`)}`;
+    }
+    return `${this.repoUrl(repo)}/src/${encodeURIComponent(tag)}`;
   }
 
   envTagClass(repo: ScanRepo, prefix: string): string {

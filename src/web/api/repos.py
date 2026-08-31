@@ -223,10 +223,12 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
     tags = client.tags_on_commit(repo.slug, match_commit)
 
     ci_error = None
+    ci_project = None
     tag_rows = []
     if ci is not None:
         try:
             tag_deploys = ci.deploys_for_tags(repo.slug, [t["name"] for t in tags])
+            ci_project = ci.project_id(repo.slug)
         except CircleCiError as exc:
             tag_deploys = {}
             ci_error = str(exc)
@@ -264,6 +266,8 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
         "pr": _serialize_pr(pr),
         "deploys": deploys,
         "match_tag": match_tag,
+        "ci_project": ci_project,
+        "ci_vcs": ci.vcs if ci else None,
     }
     return item, ci_error
 

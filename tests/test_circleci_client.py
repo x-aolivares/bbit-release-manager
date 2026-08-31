@@ -31,6 +31,18 @@ def test_project_slug():
     client.close()
 
 
+def test_project_id():
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1"): lambda r: httpx.Response(
+            200, json={"id": "9beb07c8-cc3b-4da1-8bc4-e9121667fbb7", "slug": "bb/o/r1"}
+        ),
+    }))
+    try:
+        assert client.project_id("r1") == "9beb07c8-cc3b-4da1-8bc4-e9121667fbb7"
+    finally:
+        client.close()
+
+
 def test_pipeline_id_for_commit():
     def pipelines(request):
         assert request.url.params.get("branch") == "release"

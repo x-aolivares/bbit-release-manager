@@ -45,7 +45,7 @@ def test_health_ok():
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["version"] == "0.7.2"
+    assert body["version"] == "0.7.3"
     assert body["connected"] is False
 
 
@@ -262,12 +262,15 @@ def test_scan_deploys_from_tag(monkeypatch):
             return "http://atlassian/branch"
 
     class StubCi:
+        vcs = "bb"
         def deploys_for_tags(self, repo, tags):
             return {"uat-7": SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7")}
         def deploy_for_tag(self, repo, tag, commit, prefix):
             if tag == "uat-7" and commit == "abc123" and prefix == "uat":
                 return SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7")
             return None
+        def project_id(self, repo):
+            return "9beb07c8-cc3b-4da1-8bc4-e9121667fbb7"
 
     monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("src.web.api.repos._circleci", lambda: StubCi())
@@ -278,6 +281,8 @@ def test_scan_deploys_from_tag(monkeypatch):
     assert repo["match_tag"] == {"uat": "uat-7", "stgp": None}
     assert repo["deploys"]["uat"] == {"workflow": "deploy-uat", "status": "success", "created_at": "x", "url": "http://cci/7"}
     assert repo["deploys"]["stgp"] is None
+    assert repo["ci_project"] == "9beb07c8-cc3b-4da1-8bc4-e9121667fbb7"
+    assert repo["ci_vcs"] == "bb"
     assert body["stats"]["prod"] == 0
 
 
@@ -310,11 +315,14 @@ def test_scan_resolves_full_hash_with_pr(monkeypatch):
             return "http://atlassian/branch"
 
     class StubCi:
+        vcs = "bb"
         def deploys_for_tags(self, repo, tags):
             return {}
         def deploy_for_tag(self, repo, tag, commit, prefix):
             assert commit == "abc123456789000000000000000000000000000000"
             return SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7")
+        def project_id(self, repo):
+            return None
 
     monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("src.web.api.repos._circleci", lambda: StubCi())

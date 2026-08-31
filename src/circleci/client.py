@@ -67,6 +67,11 @@ class CircleCiClient:
     def project_slug(self, repo: str) -> str:
         return f"{self.vcs}/{self.org}/{repo}"
 
+    def project_id(self, repo: str) -> str | None:
+        """UUID del proyecto en CircleCI (se usa en el link web filtrado por tag)."""
+        payload = self._request("GET", f"/project/{self.project_slug(repo)}")
+        return payload.get("id") or None
+
     def me(self) -> dict:
         return self._request("GET", "/me")
 
