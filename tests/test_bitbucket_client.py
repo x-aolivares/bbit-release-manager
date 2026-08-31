@@ -173,6 +173,27 @@ def test_find_pr_none():
     assert pr is None
 
 
+def test_find_pr_returns_source_commit():
+    payload = {
+        "values": [{
+            "id": 7,
+            "title": "T",
+            "state": "OPEN",
+            "links": {"html": {"href": "http://pr/7"}},
+            "source": {"commit": {"hash": "abcDEF"}},
+        }]
+    }
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/pullrequests"): lambda r: httpx.Response(200, json=payload),
+    }))
+    try:
+        pr = client.find_pr("r1", "release", "master")
+    finally:
+        client.close()
+    assert pr["source_commit"] == "abcDEF"
+    assert pr["title"] == "T"
+
+
 def test_create_pr():
     def post(request):
         assert "/pullrequests" in request.url.path

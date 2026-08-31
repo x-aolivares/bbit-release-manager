@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
@@ -8,6 +10,15 @@ from ...scan.params import extract_ssm_params
 from ..session import create_session, get_session, destroy_session, active_session_id
 
 router = APIRouter(prefix="/api", tags=["repos"])
+
+MAX_WORKERS = 8
+SSM_MARKERS = ("ssm:", "{{resolve:")
+
+
+def _suggests_ssm(file) -> bool:
+    """¿El archivo puede aportar un parámetro SSM nuevo? Solo si sus líneas
+    añadidas mencionan un marker de SSM (evita raw_files inútiles)."""
+    return any(("ssm:" in line) or ("{{resolve:" in line) for line in file.added_lines)
 
 
 def _require_session():
@@ -180,6 +191,59 @@ def _serialize_deploy(deploy) -> dict | None:
     }
 
 
+def _repo_scan(client, ci, repo, origin, destination, clean):
+    """Payload de un repo (etapa paralela de /scan).
+
+    Reusa el head de la rama origen desde el PR cuando existe
+    (source_commit), evitando GET /commits/{branch}.
+    """
+    try:
+        pr = client.find_pr(repo.slug, origin, destination)
+    except bb.BitbucketError:
+        pr = None
+
+    if pr and pr.get("source_commit"):
+        commit = pr["source_commit"]
+    else:
+        commit = client.commit_for_branch(repo.slug, origin)
+    behind = client.commits_behind(repo.slug, origin, destination)
+    tags = client.tags_on_commit(repo.slug, commit)
+
+    ci_error = None
+    tag_rows = []
+    if ci is not None:
+        try:
+            tag_deploys = ci.deploys_for_tags(repo.slug, [t["name"] for t in tags])
+        except CircleCiError as exc:
+            tag_deploys = {}
+            ci_error = str(exc)
+        for t in tags:
+            tag_rows.append({"name": t["name"], "deploy": _serialize_deploy(tag_deploys.get(t["name"]))})
+    else:
+        tag_rows = [{"name": t["name"], "deploy": None} for t in tags]
+
+    deploys: dict[str, dict | None] = {}
+    if ci is not None:
+        try:
+            found = ci.scheduled_deploys_for_commit(repo.slug, origin, commit, clean)
+            deploys = {p: _serialize_deploy(d) for p, d in found.items()}
+        except CircleCiError as exc:
+            ci_error = ci_error or str(exc)
+
+    item = {
+        "slug": repo.slug,
+        "name": repo.name,
+        "workspace": repo.workspace,
+        "branch_url": client.branch_url(repo.slug, origin),
+        "commit": commit,
+        "behind": behind,
+        "tags": tag_rows,
+        "pr": _serialize_pr(pr),
+        "deploys": deploys,
+    }
+    return item, ci_error
+
+
 @router.get("/scan")
 def scan(origin: str, destination: str = "master", prefixes: str = ""):
     data = _require_session()
@@ -193,47 +257,18 @@ def scan(origin: str, destination: str = "master", prefixes: str = ""):
         ci_error = "Sin CIRCLECI_TOKEN configurado."
 
     repos = data.client.repos_with_branch(origin)
-    items = []
-    for repo in repos:
-        commit = data.client.commit_for_branch(repo.slug, origin)
-        behind = data.client.commits_behind(repo.slug, origin, destination)
-        tags = data.client.tags_on_commit(repo.slug, commit)
-        try:
-            pr = data.client.find_pr(repo.slug, origin, destination)
-        except bb.BitbucketError:
-            pr = None
+    workers = min(MAX_WORKERS, len(repos) or 1)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [
+            ex.submit(_repo_scan, data.client, ci, repo, origin, destination, clean)
+            for repo in repos
+        ]
+        results = [f.result() for f in futures]
 
-        tag_rows = []
-        if ci is not None:
-            try:
-                tag_deploys = ci.deploys_for_tags(repo.slug, [t["name"] for t in tags])
-            except CircleCiError as exc:
-                tag_deploys = {}
-                ci_error = ci_error or str(exc)
-            for t in tags:
-                tag_rows.append({"name": t["name"], "deploy": _serialize_deploy(tag_deploys.get(t["name"]))})
-        else:
-            tag_rows = [{"name": t["name"], "deploy": None} for t in tags]
-
-        deploys: dict[str, dict | None] = {}
-        if ci is not None:
-            try:
-                found = ci.scheduled_deploys_for_commit(repo.slug, origin, commit, clean)
-                deploys = {p: _serialize_deploy(d) for p, d in found.items()}
-            except CircleCiError as exc:
-                ci_error = ci_error or str(exc)
-
-        items.append({
-            "slug": repo.slug,
-            "name": repo.name,
-            "workspace": repo.workspace,
-            "branch_url": data.client.branch_url(repo.slug, origin),
-            "commit": commit,
-            "behind": behind,
-            "tags": tag_rows,
-            "pr": _serialize_pr(pr),
-            "deploys": deploys,
-        })
+    items = [r[0] for r in results]
+    first_ci_error = next((r[1] for r in results if r[1]), None)
+    if first_ci_error:
+        ci_error = ci_error or first_ci_error
 
     with_pr = sum(1 for it in items if it["pr"].get("exists"))
     synced = sum(1 for it in items if it["behind"] == 0)
@@ -323,42 +358,80 @@ def diff(origin: str, destination: str = "master"):
     cfg = Config()
     prefixes = cfg.ssm_prefixes
     repos = data.client.repos_with_branch(origin)
+    by_slug = {r.slug: r for r in repos}
 
-    per_repo = []
-    merged: dict[tuple[str, str], list[str]] = {}
-    for repo in repos:
-        d = data.client.diff(repo.slug, destination, origin)
-        origin_ref = data.client.commit_for_branch(repo.slug, origin) or origin
-        dest_ref = data.client.commit_for_branch(repo.slug, destination) or destination
-        new_params: list[tuple[str, str]] = []
-        for f in d.files:
-            if f.status == "deleted":
-                continue
-            raw_origin = data.client.raw_file(repo.slug, origin_ref, f.path)
-            if raw_origin is None:
-                continue
-            origin_params = set(extract_ssm_params([raw_origin], prefixes))
-            raw_dest = data.client.raw_file(repo.slug, dest_ref, f.path)
-            dest_params = set(extract_ssm_params([raw_dest], prefixes)) if raw_dest else set()
-            for p, a in sorted(origin_params - dest_params):
-                new_params.append((p, a))
-        new_params = sorted(set(new_params), key=lambda t: t[0])
-        per_repo.append({
-            "repo": repo.slug,
-            "new_params": [{"param": p, "arn": a} for p, a in new_params],
-        })
-        for p, a in new_params:
-            merged.setdefault((p, a), []).append(repo.slug)
+    def _repo_refs(client, repo):
+        """Refs para leer raws: head de origen (del PR si existe) y de destino."""
+        try:
+            pr = client.find_pr(repo.slug, origin, destination)
+        except bb.BitbucketError:
+            pr = None
+        origin_ref = ""
+        if pr and pr.get("source_commit"):
+            origin_ref = pr["source_commit"]
+        if not origin_ref:
+            origin_ref = client.commit_for_branch(repo.slug, origin) or origin
+        dest_ref = client.commit_for_branch(repo.slug, destination) or destination
+        return origin_ref, dest_ref
 
-    params = [
-        {"param": p, "arn": a, "repos": sorted(set(rs))}
-        for (p, a), rs in merged.items()
-    ]
-    params.sort(key=lambda x: x["param"])
+    def _run_repo_diff(client, repo):
+        """Etapa A: diff de texto por repo (en paralelo)."""
+        return repo.slug, client.diff(repo.slug, destination, origin)
+
+    # Etapa A: diffs y selección de archivos con indicio SSM.
+    candidates: list[tuple[str, str, str, str]] = []
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(repos) or 1)) as ex:
+        futures = [ex.submit(_run_repo_diff, data.client, r) for r in repos]
+        for slug, d in (f.result() for f in futures):
+            pending = [f for f in d.files if f.status != "deleted" and _suggests_ssm(f)]
+            if not pending:
+                continue
+            origin_ref, dest_ref = _repo_refs(data.client, by_slug[slug])
+            for f in pending:
+                candidates.append((slug, f.path, origin_ref, dest_ref))
+
+    # Etapa B: raws + extracción por archivo (en paralelo).
+    def _file_params(client, cand):
+        slug, path, origin_ref, dest_ref = cand
+        raw_origin = client.raw_file(slug, origin_ref, path)
+        if raw_origin is None:
+            return []
+        origin_params = set(extract_ssm_params([raw_origin], prefixes))
+        raw_dest = client.raw_file(slug, dest_ref, path)
+        dest_params = set(extract_ssm_params([raw_dest], prefixes)) if raw_dest else set()
+        return [(p, a) for p, a in sorted(origin_params - dest_params)]
+
+    merged: dict[tuple[str, str], set[str]] = {}
+    if candidates:
+        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(candidates) or 1)) as ex:
+            futures = [ex.submit(_file_params, data.client, c) for c in candidates]
+            results = [f.result() for f in futures]
+        for (slug, _path, _o, _d), new in zip(candidates, results):
+            for p, a in new:
+                merged.setdefault((p, a), set()).add(slug)
+
+    repos_out = []
+    for slug in [r.slug for r in repos]:
+        new = sorted(
+            (
+                {"param": p, "arn": a}
+                for (p, a), slugs in merged.items()
+                if slug in slugs
+            ),
+            key=lambda x: x["param"],
+        )
+        repos_out.append({"repo": slug, "new_params": new})
+    params = sorted(
+        [
+            {"param": p, "arn": a, "repos": sorted(slugs)}
+            for (p, a), slugs in merged.items()
+        ],
+        key=lambda x: x["param"],
+    )
     return {
         "origin": origin,
         "destination": destination,
         "prefixes": [p.rstrip("/") for p in prefixes],
-        "repos": per_repo,
+        "repos": repos_out,
         "params": params,
     }

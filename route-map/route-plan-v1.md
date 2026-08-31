@@ -85,8 +85,14 @@ actualizar el assert de health en `tests/test_web_api.py`.
 
 ## Estado
 
-- [ ] 1. hash del PR (reusar `source.commit.hash`)
-- [ ] 2. filtro de raw_files por indicio SSM
-- [ ] 3. cache de `list_repos` (opcional)
-- [ ] 4. ThreadPoolExecutor en fases 2 y 3
-- [ ] medición real (requests + tiempo)
+- [x] 1. hash del PR (reusar `source.commit.hash`)
+- [x] 2. filtro de raw_files por indicio SSM
+- [ ] 3. cache de `list_repos` (opcional — no implementado)
+- [x] 4. ThreadPoolExecutor en fases 2 y 3
+- [x] medición real (requests + tiempo)
+
+Estado: implementado (1, 2, 4) en v0.5.0. Item 3 queda pendiente (opcional).
+
+Medición real (0.5.0, workspace real, 3 repos): `/api/scan` 3.43s, `/api/diff` 5.09s
+con paridad de payload (mismos 3 params SSM; commits desde el PR, sin
+`GET /commits/{branch}`). Cobertura: 46 tests verdes.

@@ -328,6 +328,7 @@ class BitbucketClient:
                 "title": pr.get("title", ""),
                 "url": html,
                 "state": pr.get("state", ""),
+                "source_commit": (pr.get("source") or {}).get("commit", {}).get("hash", ""),
             }
         return None
 

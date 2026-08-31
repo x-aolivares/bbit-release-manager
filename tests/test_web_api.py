@@ -45,7 +45,7 @@ def test_health_ok():
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["version"] == "0.4.1"
+    assert body["version"] == "0.5.0"
     assert body["connected"] is False
 
 
@@ -193,6 +193,89 @@ def test_scan_returns_repos_with_pr_and_params(monkeypatch):
 def test_scan_requires_session():
     resp = client.get("/api/scan", params={"origin": "release/x"})
     assert resp.status_code == 401
+
+
+def test_scan_reuses_pr_hash(monkeypatch):
+    commit_calls = []
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch):
+            commit_calls.append(branch)
+            return "fromCommit"
+        def commits_behind(self, repo, branch, base):
+            return 1
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            return {"id": 1, "title": "T", "url": "u", "state": "OPEN", "source_commit": "abc123"}
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+
+    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("src.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/scan", params={"origin": "release/x"}).json()
+    assert body["repos"][0]["commit"] == "abc123"
+    assert commit_calls == []  # el hash vino del PR, no de GET /commits
+    assert body["stats"]["with_pr"] == 1
+
+
+def test_diff_skips_raw_without_ssm(monkeypatch):
+    raw_calls = []
+
+    plain_file = SimpleNamespace(path="app.py", status="modified", added_lines=("print('hola')",))
+    ssm_file = SimpleNamespace(
+        path="config/x.yaml",
+        status="modified",
+        added_lines=("key: {{resolve:ssm:config/app/key}}",),
+    )
+    deleted_ssm = SimpleNamespace(path="gone.yaml", status="deleted", added_lines=("{{resolve:ssm:config/old}}",))
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[plain_file, ssm_file, deleted_ssm])
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch):
+            return "headOrigin" if branch == "release/x" else "headDest"
+        def raw_file(self, repo, ref, path):
+            raw_calls.append((repo, ref, path))
+            return "k: {{resolve:ssm:config/app/key}}" if ref == "headOrigin" else "no ssm"
+
+    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("src.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    assert [c[2] for c in raw_calls] == ["config/x.yaml", "config/x.yaml"]
+    assert body["repos"][0]["new_params"] == [{"param": "config/app/key", "arn": ""}]
+    assert body["params"] == [{"param": "config/app/key", "arn": "", "repos": ["r1"]}]
+    assert "deleted" not in "".join(c[2] for c in raw_calls)
 
 
 def test_create_pr_endpoint(monkeypatch):
