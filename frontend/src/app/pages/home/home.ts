@@ -454,14 +454,24 @@ export class Home {
     return repo.match_tag?.[prefix.toLowerCase()] ?? null;
   }
 
-  envTagLabel(repo: ScanRepo, prefix: string): string {
+  envTagBadge(repo: ScanRepo, prefix: string): { label: string; cls: string } | null {
     const tag = this.envTag(repo, prefix);
-    if (!tag) return '—';
+    if (!tag) return null;
     const deploy = repo.deploys?.[prefix.toLowerCase()];
-    if (deploy?.status) {
-      return `${tag} · ${deploy.status}`;
+    if (!deploy) {
+      return { label: `${tag} · pendiente`, cls: 'bb-deploy--pending' };
     }
-    return `${tag} · created`;
+    const s = deploy.status;
+    if (s === 'success') {
+      return { label: `${tag} · ${s}`, cls: 'bb-deploy--ok' };
+    }
+    if (s === 'failed' || s === 'error') {
+      return { label: `${tag} · falló`, cls: 'bb-deploy--danger' };
+    }
+    if (s === 'on-hold' || s === 'running' || s === 'queued' || s === 'not_run') {
+      return { label: `${tag} · ${s}`, cls: 'bb-deploy--pending' };
+    }
+    return { label: `${tag} · ${s}`, cls: 'bb-deploy--pending' };
   }
 
   isEnvTag(repo: ScanRepo, name: string): boolean {
