@@ -83,8 +83,8 @@ def test_deploy_for_tag():
         return httpx.Response(200, json={
             "next_page_token": None,
             "items": [
-                {"id": "p1", "number": 7, "vcs": {"tag": "uat-7", "revision": "abc"}},
-                {"id": "p2", "number": 8, "vcs": {"tag": "uat-7", "revision": "zzz"}},
+                {"id": "p1", "number": 12, "vcs": {"tag": "uat-7", "revision": "abc"}},
+                {"id": "p2", "number": 7, "vcs": {"tag": "uat-7", "revision": "zzz"}},
             ],
         })
 
@@ -101,11 +101,11 @@ def test_deploy_for_tag():
         ("GET", "/api/v2/pipeline/p2/workflow"): workflows,
     }))
     try:
-        job = client.deploy_for_tag("r1", "uat-7", 7, "abc", "uat")
+        job = client.deploy_for_tag("r1", "uat-7", "abc", "uat")
         assert job is not None and job.workflow == "deploy-uat"
         assert "workflows/wf1" in job.url
-        assert client.deploy_for_tag("r1", "uat-7", 7, "nope", "uat") is None
-        assert client.deploy_for_tag("r1", "uat-7", 42, "abc", "uat") is None
+        assert client.deploy_for_tag("r1", "uat-7", "abc", "stgp") is None
+        assert client.deploy_for_tag("r1", "uat-7", "nope", "uat") is None
     finally:
         client.close()
 

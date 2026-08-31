@@ -167,6 +167,13 @@
               }
               Generar tags faltantes
             </button>
+            <button class="bb-btn-secondary" (click)="generateWorkflows()"
+                    [disabled]="workflowCfg() || prefixes().length === 0">
+              @if (workflowCfg()) {
+                <span class="bb-spinner-inline"></span>
+              }
+              Generar workflows de tags
+            </button>
           }
         </div>
       </div>
@@ -257,12 +264,12 @@
                         @for (t of repo.tags; track t.name) {
                           <span class="bb-tag">
                             <span class="bb-mono">{{ t.name }}</span>
-                            @if (t.deploy) {
+                            @if (!isEnvTag(repo, t.name) && t.deploy) {
                               <a class="bb-link bb-deploy {{ statusClass(t.deploy.status) }}"
                                  [href]="t.deploy.url" target="_blank">
                                 {{ t.deploy.workflow }} · {{ t.deploy.status }}
                               </a>
-                            } @else {
+                            } @else if (!isEnvTag(repo, t.name)) {
                               <span class="bb-muted">sin deploy</span>
                             }
                           </span>
@@ -281,6 +288,16 @@
                         </button>
                       </div>
                     }
+                    <div class="bb-taggen">
+                      <button class="bb-link" (click)="generateWorkflows(repo)"
+                              [disabled]="workflowCfgRepo() !== null || prefixes().length === 0">
+                        @if (workflowCfgRepo() === repo.slug) {
+                          <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
+                        } @else {
+                          + Generar workflows
+                        }
+                      </button>
+                    </div>
                   </span>
                   @for (p of prefixes(); track p) {
                     <span class="bb-deploy-col">
@@ -288,10 +305,11 @@
                         <a class="bb-celllink {{ statusClass(repo.deploys[p]!.status) }}"
                            [href]="repo.deploys[p]!.url" target="_blank"
                            [title]="envTag(repo, p) + ' · ' + repo.deploys[p]!.workflow + ' · ' + repo.deploys[p]!.status">
-                          {{ statusIcon(repo.deploys[p]!.status) }}
+                          {{ statusIcon(repo.deploys[p]!.status) }} {{ envTag(repo, p) }}
+                          <span class="bb-celllink-meta">{{ repo.deploys[p]!.workflow }} · {{ repo.deploys[p]!.status }}</span>
                         </a>
                       } @else if (envTag(repo, p)) {
-                        <span class="bb-tagwarn bb-xs" [title]="envTag(repo, p) + ' sin deploy validado'">◒</span>
+                        <span class="bb-tagwarn bb-xs" [title]="envTag(repo, p) + ' sin deploy validado'">◒ {{ envTag(repo, p) }}</span>
                       } @else {
                         <span class="bb-muted">—</span>
                       }

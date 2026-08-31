@@ -317,3 +317,36 @@ def test_create_tag_requires_write_scope():
             client.create_tag("r1", "uat-7", "abc")
     finally:
         client.close()
+
+
+def test_upsert_file():
+    def post(request):
+        assert request.url.path == "/2.0/repositories/ws/r1/src"
+        body = request.read()
+        assert b"name=\"message\"" in body and b"feat: workflow" in body
+        assert b"name=\"branch\"" in body and b"master" in body
+        assert b"name=\".circleci/config.yml\"" in body
+        assert b"; filename=\"config.yml\"" in body
+        assert b"uat-deploy-on-tag" in body
+        return httpx.Response(201, json={"hash": "abc123", "subject": "feat"})
+
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("POST", "/2.0/repositories/ws/r1/src"): post,
+    }))
+    try:
+        out = client.upsert_file("r1", "master", ".circleci/config.yml",
+                                 "uat-deploy-on-tag:\n  jobs: []", "feat: workflow")
+    finally:
+        client.close()
+    assert out["hash"] == "abc123"
+
+
+def test_upsert_file_requires_write_scope():
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("POST", "/2.0/repositories/ws/r1/src"): lambda r: httpx.Response(403, json={"message": "no"}),
+    }))
+    try:
+        with pytest.raises(BitbucketAuthError):
+            client.upsert_file("r1", "master", ".circleci/config.yml", "x: 1", "msg")
+    finally:
+        client.close()

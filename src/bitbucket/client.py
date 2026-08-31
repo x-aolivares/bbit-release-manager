@@ -429,3 +429,38 @@ class BitbucketClient:
             )
         payload = resp.json()
         return {"name": payload.get("name", name), "target": (payload.get("target") or {}).get("hash", "")}
+
+    def upsert_file(
+        self,
+        slug: str,
+        branch: str,
+        path: str,
+        content: str,
+        message: str,
+    ) -> dict:
+        """Crea o actualiza un archivo en una rama (POST /src, multipart).
+
+        Requiere scope repository:write. Devuelve {hash, subject} del commit.
+        """
+        resp = self._client.request(
+            "POST",
+            f"/repositories/{self.workspace}/{slug}/src",
+            data={"message": message, "branch": branch},
+            files={path: (path.split("/")[-1], content.encode("utf-8"), "text/plain")},
+        )
+        if resp.status_code in (401, 403):
+            raise BitbucketAuthError(
+                f"Bitbucket {resp.status_code}: sin permisos para escribir en la rama "
+                "(requiere scope repository:write)"
+            )
+        if resp.status_code >= 400:
+            raise BitbucketError(
+                f"Bitbucket {resp.status_code} al commitear {path}: {resp.text[:300]}"
+            )
+        if not resp.text.strip() or "json" not in (resp.headers.get("content-type") or ""):
+            return {"hash": "", "subject": message}
+        payload = resp.json()
+        return {
+            "hash": payload.get("hash", ""),
+            "subject": payload.get("subject", message),
+        }

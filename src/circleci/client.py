@@ -150,16 +150,13 @@ class CircleCiClient:
         self,
         repo: str,
         tag: str,
-        deploy_id: int,
         commit: str,
         prefix: str,
     ) -> DeployJob | None:
-        """Deploy del tag: pipeline con number == deploy_id y revision == commit."""
-        if not tag or not deploy_id:
+        """Deploy del tag: pipeline corrido sobre ese tag con revision == commit."""
+        if not tag or not commit:
             return None
         for pipeline in self.pipelines(repo, tag=tag):
-            if (pipeline.get("number") or 0) != deploy_id:
-                continue
             if (pipeline.get("vcs") or {}).get("revision", "") != commit:
                 continue
             return self.deploy_job_for_pipeline(repo, pipeline, prefix)

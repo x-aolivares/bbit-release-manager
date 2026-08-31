@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from ...bitbucket import client as bb
 from ...config import Config
 from ...circleci.client import CircleCiClient, CircleCiError
+from ...circleci.configyml import ensure_tag_workflows
 from ...scan.params import extract_ssm_params
 from ..session import create_session, get_session, destroy_session, active_session_id
 
@@ -239,18 +240,15 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
     for prefix in clean:
         env = prefix.lower()
         found_tag = None
-        deploy_id = None
         for t in tags:
-            m = _tag_match(env).match(t["name"])
-            if m:
+            if _tag_match(env).match(t["name"]):
                 found_tag = t["name"]
-                deploy_id = int(m.group(1))
                 break
         match_tag[env] = found_tag
         deploy = None
-        if ci is not None and found_tag and deploy_id and match_commit:
+        if ci is not None and found_tag and match_commit:
             try:
-                deploy = ci.deploy_for_tag(repo.slug, found_tag, deploy_id, match_commit, env)
+                deploy = ci.deploy_for_tag(repo.slug, found_tag, match_commit, env)
             except CircleCiError as exc:
                 ci_error = ci_error or str(exc)
         deploys[env] = _serialize_deploy(deploy)
@@ -436,6 +434,60 @@ def generate_tags(origin: str, prefixes: str = "", repo: str = "", destination: 
                 errors.append(f"{tag}: {exc}")
         items.append({"repo": slug, "commit": commit, "pipeline_id": pipeline_id,
                       "created": created, "skipped": skipped, "errors": errors})
+    return {"ok": True, "origin": origin, "envs": envs, "items": items}
+
+
+@router.post("/circleci-config")
+def circleci_config(origin: str, prefixes: str = "", repo: str = ""):
+    """Genera/actualiza `.circleci/config.yml` en los repos con workflows de tag.
+
+    Cada workflow `{env}-deploy-on-tag` corre solo cuando se crea un tag
+    `{env}-{n}` y exige aprobación manual antes del job `deploy-{env}`.
+    Escribe sobre la rama de origen (la del tag). No sobrescribe configs
+    existentes: hace merge agregando solo jobs/workflows faltantes.
+    """
+    data = _require_session()
+    cfg = Config()
+    envs = [p.strip().lower() for p in prefixes.split(",") if p.strip()] or cfg.deploy_prefixes
+
+    client = data.client
+    try:
+        repos = client.repos_with_branch(origin)
+    except bb.BitbucketError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    candidates = [r for r in repos if not repo or r.slug == repo]
+    if repo and not candidates:
+        return JSONResponse(
+            {"ok": False, "error": f"El repo '{repo}' no contiene la rama '{origin}'."},
+            status_code=400,
+        )
+
+    items = []
+    for r in candidates:
+        slug = r.slug
+        try:
+            head = client.commit_for_branch(slug, origin)
+            existing = client.raw_file(slug, head, ".circleci/config.yml")
+            content, changed, added = ensure_tag_workflows(existing, envs)
+            if not changed:
+                items.append({"repo": slug, "commit": "", "envs": [],
+                              "created": False, "updated": False, "skipped": True, "errors": []})
+                continue
+            result = client.upsert_file(
+                slug,
+                origin,
+                ".circleci/config.yml",
+                content,
+                f"feat: workflows de tag con aprobacion ({', '.join(added)})",
+            )
+            commit = result.get("hash") or client.commit_for_branch(slug, origin)
+            items.append({"repo": slug, "commit": commit, "envs": added,
+                          "created": not bool(existing), "updated": bool(existing),
+                          "skipped": False, "errors": []})
+        except (bb.BitbucketAuthError, bb.BitbucketError, ValueError) as exc:
+            items.append({"repo": slug, "commit": "", "envs": [],
+                          "created": False, "updated": False, "skipped": False,
+                          "errors": [str(exc)]})
     return {"ok": True, "origin": origin, "envs": envs, "items": items}
 
 
