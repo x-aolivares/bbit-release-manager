@@ -153,6 +153,16 @@ class Config:
         return [r.strip() for r in raw.split(",") if r.strip()] if raw else []
 
     @property
+    def project_prefixes(self) -> list[str]:
+        """Prefijos de nombre de repo (workspace). Vacío = todos los repos.
+
+        Limita qué proyectos se escanean: solo los cuyo slug empieza con
+        alguno de estos prefijos. Se aplica en list_repos/repos_with_branch.
+        """
+        raw = self.get("BITBUCKET_PROJECT_PREFIXES") or ""
+        return [p.strip().lower() for p in raw.split(",") if p.strip()] if raw else []
+
+    @property
     def default_branch(self) -> str:
         return self.get("BITBUCKET_DEFAULT_BRANCH") or "master"
 

@@ -43,6 +43,7 @@ def config(env: str = typer.Argument(None, help="Environment to show")):
         info(f"  Workspace:      {cfg.workspace or '(not set)'}")
         info(f"  Default branch: {cfg.default_branch}")
         info(f"  Repos filter:   {', '.join(cfg.repos) or '(all)'}")
+        info(f"  Proj prefixes:  {', '.join(cfg.project_prefixes) or '(all)'}")
         info(f"  SSM prefixes:   {', '.join(cfg.ssm_prefixes)}")
 
     if not env:
@@ -89,7 +90,7 @@ def session():
     info(f"Repos del workspace '{cfg.workspace}': {count}")
 
     with BitbucketClient(cfg.workspace, cfg.bitbucket_token) as client:
-        repos = client.list_repos(filter_names=cfg.repos or None)
+        repos = client.list_repos(filter_names=cfg.repos or None, prefixes=cfg.project_prefixes or None)
 
     from rich.table import Table
     from rich import box

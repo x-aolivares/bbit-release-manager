@@ -129,6 +129,10 @@ export class Home {
   prefixInput = '';
   prefixes = signal<string[]>(['uat', 'stgp', 'prod']);
 
+  projectPrefixInput = '';
+  projectPrefixes = signal<string[]>([]);
+  addingProjectPrefix = signal(false);
+
   bbTokenUrl = 'https://id.atlassian.com/manage-profile/security/api-tokens';
   cciTokenUrl = 'https://app.circleci.com/settings/user/tokens';
 
@@ -172,6 +176,22 @@ export class Home {
 
   removePrefix(index: number) {
     this.prefixes.update((list) => list.filter((_, i) => i !== index));
+  }
+
+  addProjectPrefix() {
+    const p = this.projectPrefixInput.trim().toLowerCase();
+    if (p && !this.projectPrefixes().includes(p)) {
+      this.projectPrefixes.update((list) => [...list, p]);
+    }
+    this.projectPrefixInput = '';
+  }
+
+  removeProjectPrefix(index: number) {
+    this.projectPrefixes.update((list) => list.filter((_, i) => i !== index));
+  }
+
+  projectPrefixParam(): string {
+    return this.projectPrefixes().join(',');
   }
 
   constructor() {
@@ -266,7 +286,7 @@ export class Home {
     if (!this.origin) return;
     this.projectsLoading.set(true);
     this.error.set(null);
-    this.http.get<any>(`/api/repos?origin=${encodeURIComponent(this.origin)}`).subscribe({
+    this.http.get<any>(`/api/repos?origin=${encodeURIComponent(this.origin)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}`).subscribe({
       next: (r) => {
         const items: ScanProject[] = (r.items ?? []).slice();
         items.sort((a, b) => a.slug.localeCompare(b.slug));
@@ -287,7 +307,7 @@ export class Home {
     this.creatingPr.set(null);
     const dest = this.projectsDest();
     const prefixes = this.prefixes().join(',');
-    const base = `/api/scan?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}`;
+    const base = `/api/scan?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}`;
 
     this.http.get<any>(base).subscribe({
       next: (r) => {
@@ -309,7 +329,7 @@ export class Home {
     this.paramsLoading.set(true);
     this.error.set(null);
     const dest = this.projectsDest();
-    this.http.get<DiffResponse>(`/api/diff?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&mode=${this.scanMode}`)
+    this.http.get<DiffResponse>(`/api/diff?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&mode=${this.scanMode}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}`)
       .subscribe({
         next: (r) => {
           this.params.set(r.params ?? []);

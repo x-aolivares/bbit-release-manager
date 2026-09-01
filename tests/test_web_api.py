@@ -153,7 +153,7 @@ def test_scan_returns_repos_with_pr_and_params(monkeypatch):
             )
         def close(self):
             pass
-        def repos_with_branch(self, origin):
+        def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch):
             return "abc123"
@@ -214,7 +214,7 @@ def test_scan_reuses_pr_hash(monkeypatch):
             )
         def close(self):
             pass
-        def repos_with_branch(self, origin):
+        def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch):
             commit_calls.append(branch)
@@ -252,7 +252,7 @@ def test_scan_deploys_from_tag(monkeypatch):
             )
         def close(self):
             pass
-        def repos_with_branch(self, origin):
+        def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch):
             return "abc123"
@@ -306,7 +306,7 @@ def test_scan_resolves_full_hash_with_pr(monkeypatch):
             )
         def close(self):
             pass
-        def repos_with_branch(self, origin):
+        def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch):
             calls.append(branch)
@@ -351,7 +351,7 @@ def test_generate_tags(monkeypatch):
             )
         def close(self):
             pass
-        def repos_with_branch(self, origin):
+        def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def find_pr(self, repo, origin, destination):
             return None
@@ -394,7 +394,7 @@ def test_circleci_config_creates(monkeypatch):
             )
         def close(self):
             pass
-        def repos_with_branch(self, origin):
+        def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch):
             return "head1"
@@ -428,7 +428,7 @@ def test_circleci_config_skips_when_present(monkeypatch):
             )
         def close(self):
             pass
-        def repos_with_branch(self, origin):
+        def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch):
             return "head1"
@@ -484,7 +484,7 @@ def test_circleci_config_remigra_forma_triggers_invalida(monkeypatch):
             )
         def close(self):
             pass
-        def repos_with_branch(self, origin):
+        def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch):
             return "head1"
@@ -546,7 +546,7 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
             )
         def close(self):
             pass
-        def repos_with_branch(self, origin):
+        def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def diff(self, repo, destination, origin):
             return SimpleNamespace(files=[plain_file, ssm_file, deleted_ssm])
@@ -591,7 +591,7 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
             )
         def close(self):
             pass
-        def repos_with_branch(self, origin):
+        def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def list_files(self, repo, ref):
             seen["list"].append((repo, ref))
@@ -662,7 +662,7 @@ def test_create_missing_prs(monkeypatch):
             )
         def close(self):
             pass
-        def repos_with_branch(self, origin):
+        def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug=f"r{i}", name=f"R{i}", workspace="ws", default_branch="master") for i in range(2)]
         def find_pr(self, repo, origin, dest):
             return None
@@ -725,7 +725,7 @@ def test_create_missing_skips_no_changes(monkeypatch):
             )
         def close(self):
             pass
-        def repos_with_branch(self, origin):
+        def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r0", name="R0", workspace="ws", default_branch="master")]
         def find_pr(self, repo, origin, dest):
             return None
@@ -757,7 +757,7 @@ def test_update_pr_titles(monkeypatch):
             )
         def close(self):
             pass
-        def repos_with_branch(self, origin):
+        def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug=f"r{i}", name=f"R{i}", workspace="ws", default_branch="master") for i in range(3)]
         def find_pr(self, repo, origin, dest):
             titles = {"r0": "viejo", "r1": "Nuevo titulo", "r2": "nuevo titulo"}

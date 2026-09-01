@@ -19,6 +19,18 @@ router = APIRouter(prefix="/api", tags=["repos"])
 MAX_WORKERS = 8
 
 
+def _project_prefixes(cfg, raw: str = "") -> list[str] | None:
+    """Prefijos de proyecto desde query param; si no, del config.
+
+    Vacío/ausente → None (no filtra: todos los repos del workspace).
+    """
+    vals = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    if vals:
+        return vals
+    default = getattr(cfg, "project_prefixes", None) or []
+    return default or None
+
+
 def _suggests_ssm(file, prefixes) -> bool:
     """¿El archivo puede aportar un parámetro SSM (añadido o quitado)? Evita
     raw_files inútiles en modo diff."""
@@ -186,17 +198,18 @@ def destroy(delete_credentials: bool = False):
 
 
 @router.get("/repos")
-def list_repos(origin: str = ""):
+def list_repos(origin: str = "", project_prefixes: str = ""):
     sid = active_session_id()
     if not sid:
         return {"items": [], "configured": False, "error": "No hay sesión activa. Conectá desde la web."}
     data = get_session(sid)
     if not data:
         return {"items": [], "configured": False, "error": "Sesión inválida."}
+    prefs = _project_prefixes(Config(), project_prefixes)
     if origin:
-        repos = data.client.repos_with_branch(origin)
+        repos = data.client.repos_with_branch(origin, prefixes=prefs)
     else:
-        repos = data.client.list_repos()
+        repos = data.client.list_repos(prefixes=prefs)
     return {
         "items": [
             {"slug": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch}
@@ -328,10 +341,11 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
 
 
 @router.get("/scan")
-def scan(origin: str, destination: str = "master", prefixes: str = ""):
+def scan(origin: str, destination: str = "master", prefixes: str = "", project_prefixes: str = ""):
     data = _require_session()
     cfg = Config()
     clean = [p.strip() for p in prefixes.split(",") if p.strip()] or cfg.deploy_prefixes
+    proj = _project_prefixes(cfg, project_prefixes)
 
     ci = _circleci()
     ci_configured = ci is not None
@@ -339,7 +353,7 @@ def scan(origin: str, destination: str = "master", prefixes: str = ""):
     if ci is None and cfg.circleci_token == "":
         ci_error = "Sin CIRCLECI_TOKEN configurado."
 
-    repos = data.client.repos_with_branch(origin)
+    repos = data.client.repos_with_branch(origin, prefixes=proj)
     workers = min(MAX_WORKERS, len(repos) or 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [
@@ -569,7 +583,7 @@ def circleci_config(origin: str, prefixes: str = "", repo: str = ""):
 
 
 @router.get("/diff")
-def diff(origin: str, destination: str = "master", mode: str = "diff"):
+def diff(origin: str, destination: str = "master", mode: str = "diff", project_prefixes: str = ""):
     """Parámetros SSM de la iniciativa origin → destination.
 
     `mode=diff` (default): analiza solo los archivos tocados por el diff.
@@ -582,8 +596,9 @@ def diff(origin: str, destination: str = "master", mode: str = "diff"):
     data = _require_session()
     cfg = Config()
     prefixes = cfg.ssm_prefixes
+    proj = _project_prefixes(cfg, project_prefixes)
     mode = mode if mode == "all" else "diff"
-    repos = data.client.repos_with_branch(origin)
+    repos = data.client.repos_with_branch(origin, prefixes=proj)
     by_slug = {r.slug: r for r in repos}
 
     def _repo_refs(client, repo):

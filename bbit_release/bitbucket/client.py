@@ -8,9 +8,11 @@ y obtención de diffs.
 from __future__ import annotations
 
 import httpx
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 API_BASE = "https://api.bitbucket.org/2.0"
+MAX_WORKERS = 8
 
 
 class BitbucketError(Exception):
@@ -122,8 +124,22 @@ class BitbucketClient:
         repos = self.list_repos()
         return info, identity, repos
 
-    def list_repos(self, filter_names: list[str] | None = None) -> list[Repository]:
+    def list_repos(
+        self,
+        filter_names: list[str] | None = None,
+        prefixes: list[str] | None = None,
+    ) -> list[Repository]:
         allowed = {n.lower() for n in (filter_names or [])}
+        prefs = [p.lower() for p in (prefixes or [])]
+
+        def _keep(slug: str) -> bool:
+            s = slug.lower()
+            if allowed and s not in allowed:
+                return False
+            if prefs and not any(s.startswith(p) for p in prefs):
+                return False
+            return True
+
         repos: list[Repository] = []
         url: str | None = f"/repositories/{self.workspace}"
         params: dict | None = {"pagelen": 100, "role": "member"}
@@ -134,7 +150,7 @@ class BitbucketClient:
             params = None
             for item in payload.get("values", []):
                 slug = item.get("slug", "")
-                if allowed and slug.lower() not in allowed:
+                if not _keep(slug):
                     continue
                 ws = (item.get("workspace") or {}).get("slug") or self.workspace
                 repos.append(
@@ -164,13 +180,30 @@ class BitbucketClient:
             return data["values"][0].get("name", "master")
         return "master"
 
-    def repos_with_branch(self, branch: str) -> list[Repository]:
-        repos = self.list_repos()
-        result: list[Repository] = []
-        for repo in repos:
-            if self.has_branch(repo.slug, branch):
-                result.append(repo)
-        return result
+    def repos_with_branch(
+        self,
+        branch: str,
+        prefixes: list[str] | None = None,
+    ) -> list[Repository]:
+        """Repos (filtrados por prefijo si se pasa) que contienen la rama.
+
+        El chequeo de existencia de la rama es un request por repo; se corre en
+        paralelo (ThreadPoolExecutor) para no serializar llamadas a la API.
+        """
+        repos = self.list_repos(prefixes=prefixes)
+        if not repos:
+            return []
+        workers = min(MAX_WORKERS, len(repos) or 1)
+        matched: list[Repository] = []
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = [(repo, ex.submit(self.has_branch, repo.slug, branch)) for repo in repos]
+            for repo, fut in futures:
+                try:
+                    if fut.result():
+                        matched.append(repo)
+                except BitbucketError:
+                    continue
+        return matched
 
     def diff(self, slug: str, from_ref: str, to_ref: str) -> DiffResult:
         """Diff entre refs como texto unificado (Cloud)."""

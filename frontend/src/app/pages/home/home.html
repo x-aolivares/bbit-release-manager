@@ -160,6 +160,24 @@
           </div>
         </div>
         <div class="bb-field">
+          <label>Prefijos de proyectos</label>
+          <div class="bb-chips">
+            @for (p of projectPrefixes(); track p; let i = $index) {
+              <span class="bb-chip-pill bb-mono">{{ p }}
+                <button class="bb-chip-x" (click)="removeProjectPrefix(i)">×</button>
+              </span>
+            }
+            @if (!addingProjectPrefix()) {
+              <button class="bb-chip-add" (click)="addingProjectPrefix.set(true)">+ Agregar</button>
+            } @else {
+              <input class="bb-chip-input" [(ngModel)]="projectPrefixInput" placeholder="orders" (keyup.enter)="addProjectPrefix()" />
+              <button class="bb-chip-add" (click)="addProjectPrefix()">OK</button>
+              <button class="bb-chip-add" (click)="addingProjectPrefix.set(false)">×</button>
+            }
+          </div>
+          <small class="bb-hint">Filtra repos cuyo slug empieza con el prefijo. Vacío = todos.</small>
+        </div>
+        <div class="bb-field">
           <label>Título del PR</label>
           <input class="bb-input" [(ngModel)]="prTitle" placeholder="Release: {origin} → {destination}" />
         </div>
