@@ -164,11 +164,23 @@
           <input class="bb-input" [(ngModel)]="prTitle" placeholder="Release: {origin} → {destination}" />
         </div>
         <div class="bb-actions">
-          <button class="bb-btn-primary" (click)="resolve()" [disabled]="loading() || !origin">
-            @if (loading()) {
+          <button class="bb-btn" (click)="loadProjects()" [disabled]="projectsLoading() || !origin">
+            @if (projectsLoading()) {
               <span class="bb-spinner-inline"></span>
             }
-            Resolver ramas
+            Obtener proyectos
+          </button>
+          <button class="bb-btn-primary" (click)="loadTable()" [disabled]="tableLoading() || !origin">
+            @if (tableLoading()) {
+              <span class="bb-spinner-inline"></span>
+            }
+            Cargar tabla
+          </button>
+          <button class="bb-btn" (click)="loadParams()" [disabled]="paramsLoading() || !origin">
+            @if (paramsLoading()) {
+              <span class="bb-spinner-inline"></span>
+            }
+            Cargar parámetros
           </button>
           @if (repos().length > 0) {
             <button class="bb-btn-secondary" (click)="syncPrs('create')" [disabled]="syncingPrs()">Crear PRs faltantes</button>
@@ -184,6 +196,24 @@
           }
         </div>
       </div>
+
+      @if (projects().length > 0) {
+        <ion-card class="bb-card">
+          <ion-card-header>
+            <ion-card-title class="bb-subtitle">
+              Proyectos con '{{ origin }}' ({{ projects().length }})
+            </ion-card-title>
+          </ion-card-header>
+          <ion-card-content>
+            <div class="bb-chips bb-project-list">
+              @for (p of projects(); track p.slug) {
+                <a class="bb-chip-pill bb-mono" [href]="'https://bitbucket.org/' + p.workspace + '/' + p.slug"
+                   target="_blank">{{ p.slug }}</a>
+              }
+            </div>
+          </ion-card-content>
+        </ion-card>
+      }
 
       @if (stats()) {
         <div class="bb-stats">

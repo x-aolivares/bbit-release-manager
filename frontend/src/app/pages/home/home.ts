@@ -61,6 +61,13 @@ interface ScanRepo {
   ci_vcs?: string | null;
 }
 
+interface ScanProject {
+  slug: string;
+  name: string;
+  workspace: string;
+  default_branch: string;
+}
+
 interface ScanStats {
   repos: number;
   with_pr: number;
@@ -126,6 +133,7 @@ export class Home {
   cciTokenUrl = 'https://app.circleci.com/settings/user/tokens';
 
   repos = signal<ScanRepo[]>([]);
+  projects = signal<ScanProject[]>([]);
   params = signal<SsmParam[]>([]);
   removed = signal<RemovedParam[]>([]);
   scanMode = 'diff';
@@ -136,6 +144,10 @@ export class Home {
   storedCreds = signal(false);
   askDisconnect = signal(false);
   syncingPrs = signal(false);
+
+  projectsLoading = signal(false);
+  tableLoading = signal(false);
+  paramsLoading = signal(false);
 
   creatingPr = signal<string | null>(null);
   tagging = signal(false);
@@ -237,6 +249,7 @@ export class Home {
         this.identity.set('');
         this.repoCount.set(0);
         this.repos.set([]);
+        this.projects.set([]);
         this.params.set([]);
         this.removed.set([]);
         this.stats.set(null);
@@ -245,14 +258,34 @@ export class Home {
     });
   }
 
-  resolve() {
+  projectsDest(): string {
+    return this.destination || 'master';
+  }
+
+  loadProjects() {
     if (!this.origin) return;
-    this.loading.set(true);
+    this.projectsLoading.set(true);
     this.error.set(null);
-    this.params.set([]);
-    this.removed.set([]);
+    this.http.get<any>(`/api/repos?origin=${encodeURIComponent(this.origin)}`).subscribe({
+      next: (r) => {
+        const items: ScanProject[] = (r.items ?? []).slice();
+        items.sort((a, b) => a.slug.localeCompare(b.slug));
+        this.projects.set(items);
+        if (!items.length) {
+          this.error.set(`Ningún repo contiene la rama '${this.origin}'.`);
+        }
+      },
+      error: () => this.error.set('Error al obtener los proyectos.'),
+      complete: () => this.projectsLoading.set(false),
+    });
+  }
+
+  loadTable() {
+    if (!this.origin) return;
+    this.tableLoading.set(true);
+    this.error.set(null);
     this.creatingPr.set(null);
-    const dest = this.destination || 'master';
+    const dest = this.projectsDest();
     const prefixes = this.prefixes().join(',');
     const base = `/api/scan?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}`;
 
@@ -264,16 +297,18 @@ export class Home {
         this.repos.set(r.repos ?? []);
         if (!r.repos?.length) {
           this.error.set(r.error ?? `Ningún repo contiene la rama '${this.origin}'.`);
-        } else {
-          this.loadParams(dest);
         }
       },
-      error: () => this.error.set('Error al resolver repos.'),
-      complete: () => this.loading.set(false),
+      error: () => this.error.set('Error al cargar la tabla.'),
+      complete: () => this.tableLoading.set(false),
     });
   }
 
-  private loadParams(dest: string) {
+  loadParams() {
+    if (!this.origin) return;
+    this.paramsLoading.set(true);
+    this.error.set(null);
+    const dest = this.projectsDest();
     this.http.get<DiffResponse>(`/api/diff?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&mode=${this.scanMode}`)
       .subscribe({
         next: (r) => {
@@ -281,7 +316,13 @@ export class Home {
           this.removed.set(r.removed ?? []);
         },
         error: () => this.error.set('Error al obtener parámetros SSM.'),
+        complete: () => this.paramsLoading.set(false),
       });
+  }
+
+  // Alias: tras crear/actualizar PRs o tags se recarga la tabla (no encadena params).
+  resolve() {
+    this.loadTable();
   }
 
   paramRows(): { param: string; estado: string }[] {
