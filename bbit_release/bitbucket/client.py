@@ -8,6 +8,7 @@ y obtención de diffs.
 from __future__ import annotations
 
 import httpx
+import re
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
@@ -197,6 +198,53 @@ class BitbucketClient:
         resp = self._request("GET", f"/repositories/{self.workspace}/{slug}/refs/branches/{branch}")
         return resp is not None
 
+    def list_branches(self, slug: str, prefix: str = "") -> list[str]:
+        """Nombres de ramas de un repo (paginado), opcionalmente limitado a un
+        prefijo de nombre."""
+        names: list[str] = []
+        url: str | None = f"/repositories/{self.workspace}/{slug}/refs/branches"
+        params: dict | None = {"pagelen": 100}
+        p = prefix.lower()
+        while url:
+            payload = self._request("GET", url, params=params)
+            if payload is None:
+                break
+            params = None
+            for item in payload.get("values", []):
+                name = item.get("name", "")
+                if p and not name.lower().startswith(p):
+                    continue
+                names.append(name)
+            url = (payload.get("next") or "").replace(API_BASE, "")
+            if not url:
+                break
+        return names
+
+    @staticmethod
+    def _latest_branch(names: list[str]) -> str:
+        """Elige la rama 'más reciente' entre los nombres: la de mayor sufijo
+        `-V{n}` y, si no, la mayor alfabéticamente."""
+        def _ver(n: str):
+            m = re.search(r"-V(\d+)(?:\.(\d+))?$", n, re.IGNORECASE)
+            if m:
+                major = int(m.group(1))
+                minor = int(m.group(2) or 0)
+                return major * 1000 + minor
+            return -1
+
+        return max(names, key=lambda n: (_ver(n), n))
+
+    def resolve_branch(self, slug: str, branch: str) -> str:
+        """Rama efectiva: la exacta si existe, o la más reciente que empiece con
+        el prefijo (p.ej. `release/REP-325073-V2` para `release/REP-325073`).
+        Devuelve "" si no hay ninguna."""
+        if self.has_branch(slug, branch):
+            return branch
+        names = self.list_branches(slug, prefix=branch)
+        if not names:
+            return ""
+        return self._latest_branch(names)
+
     def default_branch(self, slug: str) -> str:
         data = self._request(
             "GET",
@@ -214,8 +262,12 @@ class BitbucketClient:
     ) -> list[Repository]:
         """Repos (filtrados por prefijo si se pasa) que contienen la rama.
 
-        El chequeo de existencia de la rama es un request por repo; se corre en
-        paralelo (ThreadPoolExecutor) para no serializar llamadas a la API.
+        La rama se resuelve por prefijo: si no existe literal, cuenta como
+        presente si existe `branch` seguido de variante (p.ej.
+        `release/REP-325073-V2` para `release/REP-325073`).
+
+        El chequeo de existencia es un request por repo; se corre en paralelo
+        (ThreadPoolExecutor) para no serializar llamadas a la API.
         """
         repos = self.list_repos(prefixes=prefixes)
         if not repos:
@@ -223,7 +275,7 @@ class BitbucketClient:
         workers = min(MAX_WORKERS, len(repos) or 1)
         matched: list[Repository] = []
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = [(repo, ex.submit(self.has_branch, repo.slug, branch)) for repo in repos]
+            futures = [(repo, ex.submit(self.resolve_branch, repo.slug, branch)) for repo in repos]
             for repo, fut in futures:
                 try:
                     if fut.result():
@@ -343,10 +395,23 @@ class BitbucketClient:
         return sorted(files)
 
     def commit_for_branch(self, slug: str, branch: str) -> str:
-        """Último commit de una rama (hash completo)."""
+        """Último commit de una rama (hash completo).
+
+        Si la rama no existe literalmente, resuelve por prefijo (por ejemplo
+        `release/REP-325073` → `release/REP-325073-V2`)."""
         data = self._request(
             "GET",
             f"/repositories/{self.workspace}/{slug}/commits/{branch}",
+            params={"pagelen": 1},
+        )
+        if data and data.get("values"):
+            return data["values"][0].get("hash", "")
+        resolved = self.resolve_branch(slug, branch)
+        if not resolved or resolved == branch:
+            return ""
+        data = self._request(
+            "GET",
+            f"/repositories/{self.workspace}/{slug}/commits/{resolved}",
             params={"pagelen": 1},
         )
         if not data or not data.get("values"):

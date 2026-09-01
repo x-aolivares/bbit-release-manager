@@ -85,6 +85,57 @@ def test_repos_with_branch():
     assert [r.slug for r in found] == ["a"]
 
 
+def test_resolve_branch_prefix_matches_latest():
+    def branches_list(request):
+        return httpx.Response(200, json={"values": [
+            {"name": "release/REP-325073-V1"},
+            {"name": "release/REP-325073-V2"},
+            {"name": "release/REP-999999-X"},
+        ]})
+
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/refs/branches"): branches_list,
+    }))
+    try:
+        resolved = client.resolve_branch("r1", "release/REP-325073")
+    finally:
+        client.close()
+    assert resolved == "release/REP-325073-V2"
+
+
+def test_resolve_branch_exact_wins():
+    def exact(request):
+        return httpx.Response(200, json={"name": "main"})
+
+    def branches_list(request):
+        return httpx.Response(200, json={"values": [{"name": "main-v1"}]})
+
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/refs/branches/main"): exact,
+        ("GET", "/2.0/repositories/ws/r1/refs/branches"): branches_list,
+    }))
+    try:
+        resolved = client.resolve_branch("r1", "main")
+    finally:
+        client.close()
+    assert resolved == "main"
+
+
+def test_resolve_branch_none():
+    client = BitbucketClient("ws", "tok", transport=_transport({}))
+    try:
+        resolved = client.resolve_branch("r1", "missing")
+    finally:
+        client.close()
+    assert resolved == ""
+
+
+def test_latest_branch_version_suffix():
+    from bbit_release.bitbucket.client import BitbucketClient as B
+    names = ["release/REP/a-V1", "release/REP/a-V2", "release/REP/a-V10", "release/REP/a"]
+    assert B._latest_branch(names) == "release/REP/a-V10"
+
+
 def test_diff():
     diff_text = (
         "diff --git a/file.txt b/file.txt\n"

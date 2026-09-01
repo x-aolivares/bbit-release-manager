@@ -18,6 +18,29 @@ router = APIRouter(prefix="/api", tags=["repos"])
 
 MAX_WORKERS = 8
 
+# Cache en memoria de parámetros de master por sesión. Llave "session|slug" ->
+# set de (path, arn). Evita releer los masters (costosos) entre consultas.
+_MASTER_CACHE: dict[str, set] = {}
+
+# Cache en memoria del descubrimiento de repos/proyectos por sesión. Llave
+# "session|origin|prefixes" -> lista de repos. Evita repetir las N llamadas en
+# consultas sucesivas del mismo release.
+_REPO_CACHE: dict[str, list] = {}
+
+
+def _cache_key(slug: str) -> str:
+    return f"{active_session_id()}|{slug}"
+
+
+def _repo_cache_key(origin: str, prefs: list[str] | None) -> str:
+    p = ",".join(prefs or [])
+    return f"{active_session_id()}|{origin}|{p}"
+
+
+def _cache_master(slug: str, params: set) -> None:
+    if params:
+        _MASTER_CACHE[_cache_key(slug)] = set(params)
+
 
 def _project_prefixes(cfg, raw: str = "") -> list[str] | None:
     """Prefijos de proyecto desde query param; si no, del config.
@@ -198,7 +221,7 @@ def destroy(delete_credentials: bool = False):
 
 
 @router.get("/repos")
-def list_repos(origin: str = "", project_prefixes: str = ""):
+def list_repos(origin: str = "", project_prefixes: str = "", force: int = 0, exclude: str = ""):
     sid = active_session_id()
     if not sid:
         return {"items": [], "configured": False, "error": "No hay sesión activa. Conectá desde la web."}
@@ -206,10 +229,24 @@ def list_repos(origin: str = "", project_prefixes: str = ""):
     if not data:
         return {"items": [], "configured": False, "error": "Sesión inválida."}
     prefs = _project_prefixes(Config(), project_prefixes)
+    blocked = {s.strip().lower() for s in exclude.split(",") if s.strip()}
+
+    ckey = _repo_cache_key(origin, prefs)
+    cached = _REPO_CACHE.get(ckey)
+    if cached is not None and not force:
+        repos = [r for r in cached if r.slug.lower() not in blocked]
+        return {
+            "items": [{"slug": r.slug, "name": r.name, "workspace": r.workspace,
+                       "default_branch": r.default_branch} for r in repos],
+            "configured": True, "error": None, "cached": True,
+        }
+
     if origin:
         repos = data.client.repos_with_branch(origin, prefixes=prefs)
     else:
         repos = data.client.list_repos(prefixes=prefs)
+    _REPO_CACHE[ckey] = list(repos)
+    repos = [r for r in repos if r.slug.lower() not in blocked]
     return {
         "items": [
             {"slug": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch}
@@ -217,6 +254,7 @@ def list_repos(origin: str = "", project_prefixes: str = ""):
         ],
         "configured": True,
         "error": None,
+        "cached": False,
     }
 
 
@@ -592,14 +630,20 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
     Clasifica cada parámetro en `nuevo` (no existe en ninguna rama destino) o
     `reutilizado` (ya productivo en destino de otro repo → revisar SSM), y
     lista los `removed` (solo en rama destino, no implica eliminarlos).
+
+    El estado `reutilizado` se calcula contra el master de TODOS los repos del
+    proyecto (aunque no traigan la rama origen), para que un repo totalmente
+    nuevo que reutiliza parámetros ya productivos no los marque como `nuevo`.
     """
     data = _require_session()
     cfg = Config()
     prefixes = cfg.ssm_prefixes
     proj = _project_prefixes(cfg, project_prefixes)
     mode = mode if mode == "all" else "diff"
-    repos = data.client.repos_with_branch(origin, prefixes=proj)
-    by_slug = {r.slug: r for r in repos}
+
+    master_repos = data.client.list_repos(prefixes=proj)
+    branch_repos = data.client.repos_with_branch(origin, prefixes=proj)
+    by_slug = {r.slug: r for r in branch_repos}
 
     def _repo_refs(client, repo):
         """Refs para leer raws: head de origen (del PR si existe) y de destino."""
@@ -615,6 +659,17 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
         dest_ref = client.commit_for_branch(repo.slug, destination) or destination
         return origin_ref, dest_ref
 
+    def _resolve_master(client, repo) -> set:
+        """Master params de un repo (cache o lectura completa)."""
+        key = _cache_key(repo.slug)
+        if key in _MASTER_CACHE:
+            return set(_MASTER_CACHE[key])
+        dest_ref = client.commit_for_branch(repo.slug, destination) or destination
+        params = _read_files_params(client, repo.slug, dest_ref,
+                                    client.list_files(repo.slug, dest_ref), prefixes)
+        _cache_master(repo.slug, params)
+        return params
+
     added_by_repo: dict[str, set] = {}
     removed_by_repo: dict[str, set] = {}
     dest_by_repo: dict[str, set] = {}
@@ -627,22 +682,31 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
                                                client.list_files(slug, origin_ref), prefixes)
             dest_params = _read_files_params(client, slug, dest_ref,
                                              client.list_files(slug, dest_ref), prefixes)
+            _cache_master(slug, dest_params)
             return slug, origin_params, dest_params
 
-        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(repos) or 1)) as ex:
-            futures = [ex.submit(_scan_all, data.client, r) for r in repos]
-            for slug, origin_params, dest_params in (f.result() for f in futures):
-                added_by_repo[slug] = origin_params - dest_params
-                removed_by_repo[slug] = dest_params - origin_params
+        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(master_repos) or 1)) as ex:
+            futures = {ex.submit(_scan_all, data.client, r): r for r in master_repos}
+            for fut, repo in futures.items():
+                slug, origin_params, dest_params = fut.result()
                 dest_by_repo[slug] = dest_params
+                if slug in by_slug:
+                    added_by_repo[slug] = origin_params - dest_params
+                    removed_by_repo[slug] = dest_params - origin_params
     else:
         def _run_repo_diff(client, repo):
             return repo.slug, client.diff(repo.slug, destination, origin)
 
-        # Etapa A: diffs y selección de archivos con indicio SSM.
+        # Master params de TODOS los repos (cache o lectura completa).
+        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(master_repos) or 1)) as ex:
+            futures = {ex.submit(_resolve_master, data.client, r): r.slug for r in master_repos}
+            for fut, slug in futures.items():
+                dest_by_repo[slug] = set(fut.result())
+
+        # Etapa A: diffs y selección de archivos con indicio SSM (solo branch repos).
         candidates: list[tuple[str, str, str, str]] = []
-        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(repos) or 1)) as ex:
-            futures = {ex.submit(_run_repo_diff, data.client, r): r for r in repos}
+        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(branch_repos) or 1)) as ex:
+            futures = {ex.submit(_run_repo_diff, data.client, r): r for r in branch_repos}
             for fut, repo in futures.items():
                 slug, d = fut.result()
                 pending = [f for f in d.files if _suggests_ssm(f, prefixes)]
@@ -667,11 +731,13 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
             for (slug, _path, _o, _d), (origin_params, dest_params) in zip(candidates, results):
                 added_by_repo.setdefault(slug, set()).update(origin_params - dest_params)
                 removed_by_repo.setdefault(slug, set()).update(dest_params - origin_params)
-                dest_by_repo.setdefault(slug, set()).update(dest_params)
+
+    global_dest: set[str] = set()
+    for params in dest_by_repo.values():
+        global_dest |= {p for p, _ in params}
 
     origin_paths = {slug: {p for p, _ in v} for slug, v in added_by_repo.items()}
-    dest_paths = {slug: {p for p, _ in v} for slug, v in dest_by_repo.items()}
-    tipo = classify_ssm(origin_paths, dest_paths)
+    tipo = classify_ssm(origin_paths, global_dest)
 
     merged: dict[str, dict] = {}
     for slug, added in added_by_repo.items():

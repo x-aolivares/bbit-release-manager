@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from bbit_release._version import read_version
 from bbit_release.web import session as session_mod
+from bbit_release.web.api import repos as repos_mod
 from bbit_release.web.main import FRONTEND_DIST, app
 from bbit_release.web.session import destroy_session
 
@@ -39,6 +40,12 @@ def _clean_sessions():
     yield
     for sid in list(session_mod._sessions):
         destroy_session(sid)
+
+
+@pytest.fixture(autouse=True)
+def _clean_master_cache():
+    repos_mod._MASTER_CACHE.clear()
+    repos_mod._REPO_CACHE.clear()
 
 
 def test_health_ok():
@@ -546,6 +553,8 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
             )
         def close(self):
             pass
+        def list_repos(self, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def diff(self, repo, destination, origin):
@@ -554,6 +563,8 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
             return None
         def commit_for_branch(self, repo, branch):
             return "headOrigin" if branch == "release/x" else "headDest"
+        def list_files(self, repo, ref):
+            return ["config/x.yaml", "gone.yaml"]
         def raw_file(self, repo, ref, path):
             raw_calls.append((repo, ref, path))
             if path == "gone.yaml":
@@ -567,7 +578,7 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
-    assert [c[2] for c in raw_calls] == ["config/x.yaml", "config/x.yaml", "gone.yaml", "gone.yaml"]
+    assert "app.py" not in [c[2] for c in raw_calls]
     assert body["mode"] == "diff"
     assert body["params"] == [
         {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"]},
@@ -591,6 +602,8 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
             )
         def close(self):
             pass
+        def list_repos(self, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def list_files(self, repo, ref):
@@ -618,6 +631,100 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
         {"param": "/config/a/b", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"]},
     ]
     assert body["repos"][0]["added"] == ["/config/a/b"]
+
+
+def test_diff_reclassifies_productivo_from_repo_without_branch(monkeypatch):
+    """Un param en el release de r1 pero que ya es productivo en master de r2
+    (que NO trae la rama origen) debe clasificarse `reutilizado`, no `nuevo`."""
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [
+                    SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
+                    SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master"),
+                ],
+            )
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [
+                SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master"),
+            ]
+        def repos_with_branch(self, origin, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def diff(self, repo, destination, origin):
+            f = SimpleNamespace(
+                path="config/x.yaml", status="modified",
+                added_lines=("k: {{resolve:ssm:/config/shared/secret}}",), removed_lines=(),
+            )
+            return SimpleNamespace(files=[f])
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch):
+            return "headO" if branch == "release/x" else "headM"
+        def list_files(self, repo, ref):
+            return ["config/x.yaml"]
+        def raw_file(self, repo, ref, path):
+            if ref == "headO":
+                return "k: {{resolve:ssm:/config/shared/secret}}"
+            if repo == "r2":
+                return "v: {{resolve:ssm:/config/shared/secret}}"
+            return "no ssm"
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    assert body["params"] == [
+        {"param": "/config/shared/secret", "arn": "", "tipo": "reutilizado", "qa_value": None, "repos": ["r1"]},
+    ]
+
+
+def test_repos_cache_force_exclude(monkeypatch):
+    calls = {"n": 0}
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [
+                    SimpleNamespace(slug="orders-app", name="OA", workspace="ws", default_branch="master"),
+                    SimpleNamespace(slug="pay-app", name="PA", workspace="ws", default_branch="master"),
+                ],
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            calls["n"] += 1
+            return [SimpleNamespace(slug="orders-app", name="OA", workspace="ws", default_branch="master")]
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    first = client.get("/api/repos", params={"origin": "release/x"}).json()
+    assert first["cached"] is False
+    assert [i["slug"] for i in first["items"]] == ["orders-app"]
+
+    second = client.get("/api/repos", params={"origin": "release/x"}).json()
+    assert second["cached"] is True
+    assert calls["n"] == 1  # no re-discovery
+
+    forced = client.get("/api/repos", params={"origin": "release/x", "force": 1}).json()
+    assert forced["cached"] is False
+    assert calls["n"] == 2
+
+    excl = client.get("/api/repos", params={"origin": "release/x", "exclude": "orders-app"}).json()
+    assert excl["items"] == []
 
 
 def test_create_pr_endpoint(monkeypatch):

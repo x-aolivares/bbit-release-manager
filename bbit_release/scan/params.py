@@ -35,9 +35,15 @@ def build_ssm_path_re(prefixes: Iterable[str]) -> re.Pattern:
 
 
 def _match_prefix(path: str, slugs: list[str]) -> bool:
+    """¿La ruta cae bajo algún prefijo, exigiendo límite de segmento?
+
+    `/config/x` y `/config` matchean `/config`; `/configfoo/x` NO (no hay
+    barra después del prefijo). Consistente con build_ssm_path_re.
+    """
     if not slugs:
         return True
-    return any(path.lower().startswith(f"/{s}") for s in slugs)
+    p = path.lower()
+    return any(p == f"/{s}" or p.startswith(f"/{s}/") for s in slugs)
 
 
 def extract_ssm_params(lines: Iterable[str], prefixes: list[str]) -> list[tuple[str, str]]:
@@ -62,20 +68,21 @@ def extract_ssm_params(lines: Iterable[str], prefixes: list[str]) -> list[tuple[
 
 def classify_ssm(
     origin: dict[str, set[str]],
-    dest: dict[str, set[str]],
+    global_dest: set[str],
 ) -> dict[str, str]:
-    """Clasifica caminos SSM según nuevas referencias por repo.
+    """Clasifica caminos SSM según aparezcan en el master PRODUCCIÓN global.
+
+    `global_dest` es la unión de los parámetros presentes en la rama destino
+    (master) de TODOS los repos del proyecto, aunque no traigan la rama origen.
+    Esto evita que un repo totalmente nuevo que reutiliza parámetros ya
+    productivos los marque como `nuevo`.
 
     Devuelve `tipo` por path:
-    - `nuevo`: path sumado en origen de algún repo y que no existe en ninguna
-      rama destino (creado para la iniciativa).
-    - `reutilizado`: path sumado en origen de un repo que ya está en la rama
-      destino de otro/s repo/s (productivo) → revisar SSM.
+    - `nuevo`: path sumado en origen (release) de algún repo y que NO existe en
+      ningún master (creado para la iniciativa).
+    - `reutilizado`: path sumado en origen de un repo que ya está en el master
+      de otro/s repo/s (productivo) → revisar SSM.
     """
-    global_dest: set[str] = set()
-    for paths in dest.values():
-        global_dest |= paths
-
     tipo: dict[str, str] = {}
     for paths in origin.values():
         for path in paths:

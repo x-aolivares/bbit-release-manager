@@ -133,6 +133,11 @@ export class Home {
   projectPrefixes = signal<string[]>([]);
   addingProjectPrefix = signal(false);
 
+  blacklistInput = '';
+  blacklisted = signal<string[]>([]);
+  addingBlacklist = signal(false);
+  forceCache = signal(false);
+
   bbTokenUrl = 'https://id.atlassian.com/manage-profile/security/api-tokens';
   cciTokenUrl = 'https://app.circleci.com/settings/user/tokens';
 
@@ -190,8 +195,28 @@ export class Home {
     this.projectPrefixes.update((list) => list.filter((_, i) => i !== index));
   }
 
+  addBlacklist() {
+    const p = this.blacklistInput.trim().toLowerCase();
+    if (p && !this.blacklisted().includes(p)) {
+      this.blacklisted.update((list) => [...list, p]);
+    }
+    this.blacklistInput = '';
+  }
+
+  removeBlacklist(index: number) {
+    this.blacklisted.update((list) => list.filter((_, i) => i !== index));
+  }
+
   projectPrefixParam(): string {
     return this.projectPrefixes().join(',');
+  }
+
+  // Un repo se considera dentro de un proyecto si su slug empieza con alguno
+  // de los prefijos de proyecto configurados (vacío = todos).
+  private repoInProjects(slugs: string[]): boolean {
+    const prefs = this.projectPrefixes().map((p) => p.toLowerCase());
+    if (!prefs.length) return true;
+    return slugs.some((s) => prefs.some((p) => s.toLowerCase().startsWith(p)));
   }
 
   constructor() {
@@ -286,7 +311,9 @@ export class Home {
     if (!this.origin) return;
     this.projectsLoading.set(true);
     this.error.set(null);
-    this.http.get<any>(`/api/repos?origin=${encodeURIComponent(this.origin)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}`).subscribe({
+    const force = this.forceCache() ? 1 : 0;
+    const exclude = this.blacklisted().join(',');
+    this.http.get<any>(`/api/repos?origin=${encodeURIComponent(this.origin)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&force=${force}&exclude=${encodeURIComponent(exclude)}`).subscribe({
       next: (r) => {
         const items: ScanProject[] = (r.items ?? []).slice();
         items.sort((a, b) => a.slug.localeCompare(b.slug));
@@ -348,9 +375,11 @@ export class Home {
   paramRows(): { param: string; estado: string }[] {
     const rows: { param: string; estado: string }[] = [];
     for (const p of this.params()) {
+      if (!this.repoInProjects(p.repos)) continue;
       rows.push({ param: p.param, estado: p.tipo });
     }
     for (const p of this.removed()) {
+      if (!this.repoInProjects(p.repos)) continue;
       rows.push({ param: p.param, estado: 'solo destino' });
     }
     return rows.sort((a, b) => a.param.localeCompare(b.param));
@@ -359,7 +388,7 @@ export class Home {
   estadoLabel(estado: string): string {
     switch (estado) {
       case 'reutilizado':
-        return 'Reutilizado';
+        return 'Reutilizado (productivo)';
       case 'solo destino':
         return 'Solo destino';
       default:

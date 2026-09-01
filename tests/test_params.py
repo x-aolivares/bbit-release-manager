@@ -54,6 +54,36 @@ def test_extract_ignores_paths_outside_prefixes():
     assert extract_ssm_params(lines, ["/config", "/common"]) == []
 
 
+def test_extract_resolve_requires_segment_boundary():
+    lines = [
+        'a="{{resolve:ssm:/configfoo/db:1}}"',
+        'b="{{resolve:ssm:/commonwealth/x}}"',
+        'c="{{resolve:ssm:/config_1/y:2}}"',
+    ]
+    assert extract_ssm_params(lines, ["/config", "/common"]) == []
+
+
+def test_extract_bare_requires_segment_boundary():
+    lines = [
+        "a=/configfoo/db",
+        "b=/commonwealth/x",
+        "c=/config_1/y",
+    ]
+    assert extract_ssm_params(lines, ["/config", "/common"]) == []
+
+
+def test_extract_prefix_exact_slug_matches():
+    lines = ['a="{{resolve:ssm:/config:h}}"']
+    assert extract_ssm_params(lines, ["/config", "/common"]) == [
+        ("/config", "h"),
+    ]
+
+
+def test_extract_resolve_exact_slug_excluded_by_bare_rule():
+    lines = ['a="{{resolve:ssm:/configfoo/x:1}}"']
+    assert extract_ssm_params(lines, ["/config"]) == []
+
+
 def test_extract_dedup():
     lines = [
         'a="${/config/x}"',
@@ -79,11 +109,8 @@ def test_classify_nuevo_vs_reutilizado():
     origin = {
         "abc": {"/config/common/xyz/abc/mbv", "/config/new/one"},
     }
-    dest = {
-        "xyz": {"/config/common/xyz/abc/mbv"},
-        "abc": {"/config/old/two"},
-    }
-    tipo = classify_ssm(origin, dest)
+    global_dest = {"/config/common/xyz/abc/mbv", "/config/old/two"}
+    tipo = classify_ssm(origin, global_dest)
     assert tipo == {
         "/config/common/xyz/abc/mbv": "reutilizado",
         "/config/new/one": "nuevo",
@@ -92,5 +119,13 @@ def test_classify_nuevo_vs_reutilizado():
 
 def test_classify_repeated_repositivo():
     origin = {"abc": {"/config/common/xyz/abc/mbv"}, "xyz": {"/config/common/xyz/abc/mbv"}}
-    dest = {"xyz": {"/config/common/xyz/abc/mbv"}}
-    assert classify_ssm(origin, dest) == {"/config/common/xyz/abc/mbv": "reutilizado"}
+    global_dest = {"/config/common/xyz/abc/mbv"}
+    assert classify_ssm(origin, global_dest) == {"/config/common/xyz/abc/mbv": "reutilizado"}
+
+
+def test_classify_reused_from_repo_without_branch():
+    """Un param en release de 'abc' ya productivo en master de 'xyz' (sin la
+    rama origen) debe salir reutilizado, no nuevo."""
+    origin = {"abc": {"/config/shared/secret"}}
+    global_dest = {"/config/shared/secret", "/config/other"}
+    assert classify_ssm(origin, global_dest) == {"/config/shared/secret": "reutilizado"}

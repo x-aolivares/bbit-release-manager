@@ -178,10 +178,32 @@
           <small class="bb-hint">Filtra repos cuyo slug empieza con el prefijo. Vacío = todos.</small>
         </div>
         <div class="bb-field">
+          <label>Proyectos a excluir (blacklist)</label>
+          <div class="bb-chips">
+            @for (p of blacklisted(); track p; let i = $index) {
+              <span class="bb-chip-pill bb-chip-pill--danger bb-mono">{{ p }}
+                <button class="bb-chip-x" (click)="removeBlacklist(i)">×</button>
+              </span>
+            }
+            @if (!addingBlacklist()) {
+              <button class="bb-chip-add" (click)="addingBlacklist.set(true)">+ Excluir</button>
+            } @else {
+              <input class="bb-chip-input" [(ngModel)]="blacklistInput" placeholder="repo-a" (keyup.enter)="addBlacklist()" />
+              <button class="bb-chip-add" (click)="addBlacklist()">OK</button>
+              <button class="bb-chip-add" (click)="addingBlacklist.set(false)">×</button>
+            }
+          </div>
+          <small class="bb-hint">Se omite del descubrimiento. Usá el slug exacto.</small>
+        </div>
+        <div class="bb-field">
           <label>Título del PR</label>
           <input class="bb-input" [(ngModel)]="prTitle" placeholder="Release: {origin} → {destination}" />
         </div>
         <div class="bb-actions">
+          <label class="bb-force">
+            <input type="checkbox" [(ngModel)]="forceCache" />
+            Forzar consultas (ignorar caché)
+          </label>
           <button class="bb-btn" (click)="loadProjects()" [disabled]="projectsLoading() || !origin">
             @if (projectsLoading()) {
               <span class="bb-spinner-inline"></span>
