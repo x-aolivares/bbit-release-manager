@@ -8,8 +8,15 @@ y obtención de diffs.
 from __future__ import annotations
 
 import httpx
+import time
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
+
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 2.0
 
 API_BASE = "https://api.bitbucket.org/2.0"
 MAX_WORKERS = 8
@@ -89,18 +96,38 @@ class BitbucketClient:
         self._client.close()
 
     def _request(self, method: str, path: str, params: dict | None = None):
-        resp = self._client.request(method, path, params=params)
-        if resp.status_code in (401, 403):
-            raise BitbucketAuthError(
-                f"Bitbucket {resp.status_code}: token inválido o sin permisos"
-            )
-        if resp.status_code == 404:
-            return None
-        if resp.status_code >= 400:
-            raise BitbucketError(
-                f"Bitbucket {resp.status_code} en {path}: {resp.text[:300]}"
-            )
-        return resp.json()
+        last_error: Exception | None = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            resp = self._client.request(method, path, params=params)
+            if resp.status_code in (401, 403):
+                raise BitbucketAuthError(
+                    f"Bitbucket {resp.status_code}: token inválido o sin permisos"
+                )
+            if resp.status_code == 404:
+                return None
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                if retry_after:
+                    delay = float(retry_after)
+                else:
+                    delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                logger.warning(
+                    "Bitbucket 429 en %s (intento %d/%d): esperando %.1fs",
+                    path, attempt, MAX_RETRIES, delay,
+                )
+                last_error = BitbucketError(
+                    f"Bitbucket 429 en {path}: rate limit after {MAX_RETRIES} retries"
+                )
+                if attempt < MAX_RETRIES:
+                    time.sleep(delay)
+                    continue
+                break
+            if resp.status_code >= 400:
+                raise BitbucketError(
+                    f"Bitbucket {resp.status_code} en {path}: {resp.text[:300]}"
+                )
+            return resp.json()
+        raise last_error  # type: ignore[misc]
 
     def session(self) -> tuple[WorkspaceInfo, str, list[Repository]]:
         """Valida token, describe workspace y lista repos."""
