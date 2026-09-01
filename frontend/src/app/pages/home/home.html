@@ -203,6 +203,13 @@
             <ion-card-title class="bb-subtitle">
               Proyectos con '{{ origin }}' ({{ projects().length }})
             </ion-card-title>
+            <ion-button fill="clear" size="small" (click)="loadProjects()" [disabled]="projectsLoading()">
+              @if (projectsLoading()) {
+                <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
+              } @else {
+                Refrescar
+              }
+            </ion-button>
           </ion-card-header>
           <ion-card-content>
             <div class="bb-chips bb-project-list">
@@ -248,10 +255,17 @@
 
       @if (repos().length > 0) {
         <ion-card class="bb-card">
-          <ion-card-header>
+            <ion-card-header>
             <ion-card-title class="bb-subtitle">
               Repos con '{{ origin }}' ({{ repos().length }})
             </ion-card-title>
+            <ion-button fill="clear" size="small" (click)="loadTable()" [disabled]="tableLoading()">
+              @if (tableLoading()) {
+                <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
+              } @else {
+                Refrescar
+              }
+            </ion-button>
           </ion-card-header>
           <ion-card-content>
             <div class="bb-table bb-table--repos"
@@ -346,10 +360,17 @@
 
       @if (params().length > 0 || removed().length > 0) {
         <ion-card class="bb-card">
-          <ion-card-header>
+            <ion-card-header>
             <ion-card-title class="bb-subtitle">
               Parámetros SSM en '{{ origin }}' vs '{{ destination }}'
             </ion-card-title>
+            <ion-button fill="clear" size="small" (click)="loadParams()" [disabled]="paramsLoading()">
+              @if (paramsLoading()) {
+                <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
+              } @else {
+                Refrescar
+              }
+            </ion-button>
           </ion-card-header>
           <ion-card-content>
             @if (removed().length > 0) {
