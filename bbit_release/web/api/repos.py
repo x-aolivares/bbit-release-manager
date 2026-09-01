@@ -54,6 +54,31 @@ def _project_prefixes(cfg, raw: str = "") -> list[str] | None:
     return default or None
 
 
+def _exclude_repos(cfg, raw: str = "") -> set[str]:
+    """Slugs excluidos desde query param; si no, del config (blacklist).
+
+    Vacío/ausente → set vacío (no excluye).
+    """
+    vals = {s.strip().lower() for s in raw.split(",") if s.strip()}
+    if vals:
+        return vals
+    default = getattr(cfg, "exclude_repos", None) or []
+    return {s.lower() for s in default}
+
+
+def _apply_filters(repos, prefs: list[str] | None, blocked: set[str]) -> list:
+    """Filtra repos por prefijos de slug y exclusiones de blacklist."""
+    out = []
+    for r in repos:
+        slug = r.slug.lower()
+        if slug in blocked:
+            continue
+        if prefs and not any(slug.startswith(p) for p in prefs):
+            continue
+        out.append(r)
+    return out
+
+
 def _suggests_ssm(file, prefixes) -> bool:
     """¿El archivo puede aportar un parámetro SSM (añadido o quitado)? Evita
     raw_files inútiles en modo diff."""
@@ -186,6 +211,10 @@ def api_session(body: dict):
 
     try:
         cfg.save_tokens(bitbucket_token=token, circleci_token=circleci_token, workspace=workspace)
+        cfg.save_filters(
+            project_prefixes=",".join(_project_prefixes(cfg, body.get("project_prefixes", "")) or []),
+            exclude_repos=",".join(sorted(_exclude_repos(cfg, body.get("exclude_repos", "")))),
+        )
     except OSError as exc:
         return JSONResponse(
             {"ok": False, "error": f"Sesión OK pero no se pudo guardar el token en env.base: {exc}"},
@@ -208,6 +237,13 @@ def destroy(delete_credentials: bool = False):
     if sid:
         destroy_session(sid)
     deleted = False
+    try:
+        Config().clear_filters()
+    except OSError as exc:
+        return JSONResponse(
+            {"ok": False, "error": f"No se pudieron limpiar los filtros: {exc}"},
+            status_code=500,
+        )
     if delete_credentials:
         try:
             Config().remove_credentials()
@@ -229,7 +265,7 @@ def list_repos(origin: str = "", project_prefixes: str = "", force: int = 0, exc
     if not data:
         return {"items": [], "configured": False, "error": "Sesión inválida."}
     prefs = _project_prefixes(Config(), project_prefixes)
-    blocked = {s.strip().lower() for s in exclude.split(",") if s.strip()}
+    blocked = _exclude_repos(Config(), exclude)
 
     ckey = _repo_cache_key(origin, prefs)
     cached = _REPO_CACHE.get(ckey)
@@ -379,11 +415,12 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
 
 
 @router.get("/scan")
-def scan(origin: str, destination: str = "master", prefixes: str = "", project_prefixes: str = ""):
+def scan(origin: str, destination: str = "master", prefixes: str = "", project_prefixes: str = "", exclude: str = ""):
     data = _require_session()
     cfg = Config()
     clean = [p.strip() for p in prefixes.split(",") if p.strip()] or cfg.deploy_prefixes
     proj = _project_prefixes(cfg, project_prefixes)
+    blocked = _exclude_repos(cfg, exclude)
 
     ci = _circleci()
     ci_configured = ci is not None
@@ -391,7 +428,7 @@ def scan(origin: str, destination: str = "master", prefixes: str = "", project_p
     if ci is None and cfg.circleci_token == "":
         ci_error = "Sin CIRCLECI_TOKEN configurado."
 
-    repos = data.client.repos_with_branch(origin, prefixes=proj)
+    repos = _apply_filters(data.client.repos_with_branch(origin, prefixes=proj), proj, blocked)
     workers = min(MAX_WORKERS, len(repos) or 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [
@@ -448,15 +485,18 @@ def _pr_title(origin: str, destination: str, title: str) -> str:
 
 
 @router.post("/prs/create-missing")
-def create_missing_prs(origin: str, destination: str = "master", title: str = ""):
+def create_missing_prs(origin: str, destination: str = "master", title: str = "", project_prefixes: str = "", exclude: str = ""):
     """Crea PRs para los repos que aún no tienen uno, con el mismo título."""
     data = _require_session()
+    cfg = Config()
     target = _pr_title(origin, destination, title)
+    proj = _project_prefixes(cfg, project_prefixes)
+    blocked = _exclude_repos(cfg, exclude)
     created: list[str] = []
     skipped: list[str] = []
     no_changes: list[str] = []
     failed: list[dict] = []
-    for repo in data.client.repos_with_branch(origin):
+    for repo in _apply_filters(data.client.repos_with_branch(origin, prefixes=proj), proj, blocked):
         slug = repo.slug
         try:
             pr = data.client.find_pr(slug, origin, destination)
@@ -481,14 +521,17 @@ def create_missing_prs(origin: str, destination: str = "master", title: str = ""
 
 
 @router.post("/prs/update-titles")
-def update_pr_titles(origin: str, destination: str = "master", title: str = ""):
+def update_pr_titles(origin: str, destination: str = "master", title: str = "", project_prefixes: str = "", exclude: str = ""):
     """Actualiza el título de todos los PRs existentes al mismo valor."""
     data = _require_session()
+    cfg = Config()
     target = _pr_title(origin, destination, title)
+    proj = _project_prefixes(cfg, project_prefixes)
+    blocked = _exclude_repos(cfg, exclude)
     updated: list[str] = []
     skipped: list[str] = []
     failed: list[dict] = []
-    for repo in data.client.repos_with_branch(origin):
+    for repo in _apply_filters(data.client.repos_with_branch(origin, prefixes=proj), proj, blocked):
         slug = repo.slug
         try:
             pr = data.client.find_pr(slug, origin, destination)
@@ -506,7 +549,7 @@ def update_pr_titles(origin: str, destination: str = "master", title: str = ""):
 
 
 @router.post("/tags")
-def generate_tags(origin: str, prefixes: str = "", repo: str = "", destination: str = "master"):
+def generate_tags(origin: str, prefixes: str = "", repo: str = "", destination: str = "master", project_prefixes: str = "", exclude: str = ""):
     """Crea tags `{env}-{pipeline_id}` sobre el head de la rama origen,
     por ambiente elegido y reusando el mismo pipeline id por commit.
 
@@ -516,6 +559,8 @@ def generate_tags(origin: str, prefixes: str = "", repo: str = "", destination: 
     data = _require_session()
     cfg = Config()
     envs = [p.strip().lower() for p in prefixes.split(",") if p.strip()] or cfg.deploy_prefixes
+    proj = _project_prefixes(cfg, project_prefixes)
+    blocked = _exclude_repos(cfg, exclude)
     ci = _circleci()
     if ci is None:
         return JSONResponse(
@@ -524,7 +569,7 @@ def generate_tags(origin: str, prefixes: str = "", repo: str = "", destination: 
         )
 
     def _repos():
-        for r in data.client.repos_with_branch(origin):
+        for r in _apply_filters(data.client.repos_with_branch(origin, prefixes=proj), proj, blocked):
             if not repo or r.slug == repo:
                 yield r
 
@@ -567,7 +612,7 @@ def generate_tags(origin: str, prefixes: str = "", repo: str = "", destination: 
 
 
 @router.post("/circleci-config")
-def circleci_config(origin: str, prefixes: str = "", repo: str = ""):
+def circleci_config(origin: str, prefixes: str = "", repo: str = "", project_prefixes: str = "", exclude: str = ""):
     """Genera/actualiza `.circleci/config.yml` en los repos con workflows de tag.
 
     Cada workflow `{env}-deploy-on-tag` corre solo cuando se crea un tag
@@ -578,10 +623,12 @@ def circleci_config(origin: str, prefixes: str = "", repo: str = ""):
     data = _require_session()
     cfg = Config()
     envs = [p.strip().lower() for p in prefixes.split(",") if p.strip()] or cfg.deploy_prefixes
+    proj = _project_prefixes(cfg, project_prefixes)
+    blocked = _exclude_repos(cfg, exclude)
 
     client = data.client
     try:
-        repos = client.repos_with_branch(origin)
+        repos = _apply_filters(client.repos_with_branch(origin, prefixes=proj), proj, blocked)
     except bb.BitbucketError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     candidates = [r for r in repos if not repo or r.slug == repo]
@@ -621,7 +668,7 @@ def circleci_config(origin: str, prefixes: str = "", repo: str = ""):
 
 
 @router.get("/diff")
-def diff(origin: str, destination: str = "master", mode: str = "diff", project_prefixes: str = ""):
+def diff(origin: str, destination: str = "master", mode: str = "diff", project_prefixes: str = "", exclude: str = ""):
     """Parámetros SSM de la iniciativa origin → destination.
 
     `mode=diff` (default): analiza solo los archivos tocados por el diff.
@@ -639,10 +686,11 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
     cfg = Config()
     prefixes = cfg.ssm_prefixes
     proj = _project_prefixes(cfg, project_prefixes)
+    blocked = _exclude_repos(cfg, exclude)
     mode = mode if mode == "all" else "diff"
 
-    master_repos = data.client.list_repos(prefixes=proj)
-    branch_repos = data.client.repos_with_branch(origin, prefixes=proj)
+    master_repos = _apply_filters(data.client.list_repos(prefixes=proj), proj, blocked)
+    branch_repos = _apply_filters(data.client.repos_with_branch(origin, prefixes=proj), proj, blocked)
     by_slug = {r.slug: r for r in branch_repos}
 
     def _repo_refs(client, repo):

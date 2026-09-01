@@ -163,6 +163,14 @@ class Config:
         return [p.strip().lower() for p in raw.split(",") if p.strip()] if raw else []
 
     @property
+    def exclude_repos(self) -> list[str]:
+        """Slugs de repo excluidos (blacklist). Se omiten del descubrimiento.
+        Minúsculas para comparar sin casos.
+        """
+        raw = self.get("BITBUCKET_EXCLUDE_REPOS") or ""
+        return [r.strip().lower() for r in raw.split(",") if r.strip()] if raw else []
+
+    @property
     def default_branch(self) -> str:
         return self.get("BITBUCKET_DEFAULT_BRANCH") or "master"
 
@@ -251,3 +259,54 @@ class Config:
         with path.open("w", encoding="utf-8", newline="\n") as fh:
             fh.write("\n".join(out) + "\n")
         return path
+
+    def _set_env_lines(
+        self,
+        updates: dict[str, str] | None = None,
+        remove: set[str] | None = None,
+    ) -> Path:
+        """Escribe/elimina claves en env.base conservando comentarios y orden.
+
+        `updates` reemplaza el valor de la clave si existe, si no la agrega al
+        final. `remove` elimina las claves (match por prefijo `KEY=`).
+        """
+        path = self._get_config_dir() / "env.base"
+        exists = path.exists()
+        if not exists and not updates:
+            return path
+        lines = path.read_text(encoding="utf-8").splitlines() if exists else []
+
+        updates = dict(updates or {})
+        remove = remove or set()
+        out: list[str] = []
+        for line in lines:
+            m = re.match(r"^([A-Z0-9_]+)=", line)
+            key = m.group(1) if m else None
+            if key and key in remove:
+                continue
+            if key and key in updates:
+                out.append(f"{key}={updates.pop(key)}")
+            else:
+                out.append(line.rstrip("\r"))
+        for key, value in updates.items():
+            out.append(f"{key}={value}")
+
+        with path.open("w", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n".join(out) + "\n")
+        return path
+
+    def save_filters(self, project_prefixes: str = "", exclude_repos: str = "") -> Path:
+        """Persiste prefijos de proyecto y exclusiones de repos en env.base.
+
+        Solo escribe las claves cuyo valor no sea vacío.
+        """
+        updates: dict[str, str] = {}
+        if project_prefixes:
+            updates["BITBUCKET_PROJECT_PREFIXES"] = project_prefixes
+        if exclude_repos:
+            updates["BITBUCKET_EXCLUDE_REPOS"] = exclude_repos
+        return self._set_env_lines(updates=updates) if updates else self._get_config_dir() / "env.base"
+
+    def clear_filters(self) -> Path:
+        """Limpia BITBUCKET_PROJECT_PREFIXES y BITBUCKET_EXCLUDE_REPOS de env.base."""
+        return self._set_env_lines(remove={"BITBUCKET_PROJECT_PREFIXES", "BITBUCKET_EXCLUDE_REPOS"})

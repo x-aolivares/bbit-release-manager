@@ -266,6 +266,8 @@ export class Home {
     const body: Record<string, string> = {
       workspace: this.workspace,
       token: this.token,
+      project_prefixes: this.projectPrefixParam(),
+      exclude_repos: this.blacklisted().join(','),
     };
     if (this.circleciToken) {
       body['circleci_token'] = this.circleciToken;
@@ -334,7 +336,8 @@ export class Home {
     this.creatingPr.set(null);
     const dest = this.projectsDest();
     const prefixes = this.prefixes().join(',');
-    const base = `/api/scan?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}`;
+    const exclude = this.blacklisted().join(',');
+    const base = `/api/scan?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}`;
 
     this.http.get<any>(base).subscribe({
       next: (r) => {
@@ -356,7 +359,8 @@ export class Home {
     this.paramsLoading.set(true);
     this.error.set(null);
     const dest = this.projectsDest();
-    this.http.get<DiffResponse>(`/api/diff?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&mode=${this.scanMode}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}`)
+    const exclude = this.blacklisted().join(',');
+    this.http.get<DiffResponse>(`/api/diff?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&mode=${this.scanMode}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}`)
       .subscribe({
         next: (r) => {
           this.params.set(r.params ?? []);
@@ -480,7 +484,8 @@ export class Home {
     const dest = this.destination || 'master';
     const title = encodeURIComponent(this.prTitle || `Release: ${this.origin} → ${dest}`);
     const action = target === 'create' ? 'create-missing' : 'update-titles';
-    this.http.post<any>(`/api/prs/${action}?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&title=${title}`, {})
+    const filters = `&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(this.blacklisted().join(','))}`;
+    this.http.post<any>(`/api/prs/${action}?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&title=${title}${filters}`, {})
       .subscribe({
         next: (r) => {
           if (r.ok) {
@@ -592,7 +597,7 @@ export class Home {
     if (!this.origin) return;
     const dest = this.destination || 'master';
     const prefixes = prefix ? prefix : this.prefixes().join(',');
-    let url = `/api/tags?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}`;
+    let url = `/api/tags?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(this.blacklisted().join(','))}`;
     if (repo) {
       url += `&repo=${encodeURIComponent(repo.slug)}`;
       this.taggingRepo.set(repo.slug);

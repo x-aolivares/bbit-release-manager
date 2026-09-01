@@ -20,11 +20,19 @@ class FakeConfig:
     circleci_org = ""
     deploy_prefixes = ["uat", "stgp", "prod"]
     ssm_prefixes = ["/config", "/common"]
+    project_prefixes: list[str] = []
+    exclude_repos: list[str] = []
 
     def save_tokens(self, **kw):
         return None
 
     def remove_credentials(self):
+        return None
+
+    def save_filters(self, project_prefixes: str = "", exclude_repos: str = ""):
+        return None
+
+    def clear_filters(self):
         return None
 
 
@@ -916,6 +924,195 @@ def test_session_reuse_without_stored(monkeypatch):
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", lambda ws, tok, **kw: (_ for _ in ()).throw(AssertionError("no debe instanciar")))
     resp = client.post("/api/session/reuse", json={})
     assert resp.status_code in (400, 401)
+
+
+def test_session_persists_filters(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(FakeConfig, "save_filters",
+                        lambda self, project_prefixes="", exclude_repos="": saved.update(
+                            project_prefixes=project_prefixes, exclude_repos=exclude_repos))
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [],
+            )
+        def close(self):
+            pass
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    resp = client.post("/api/session", json={
+        "workspace": "ws", "token": "tok",
+        "project_prefixes": "trans,orders", "exclude_repos": "orders-legacy,billing",
+    })
+    assert resp.status_code == 200
+    assert saved["project_prefixes"] == "trans,orders"
+    assert set(saved["exclude_repos"].split(",")) == {"orders-legacy", "billing"}
+
+
+def test_destroy_session_clears_filters(monkeypatch):
+    cleared = []
+
+    def fake_clear(self):
+        cleared.append(1)
+        return None
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [],
+            )
+        def close(self):
+            pass
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr(FakeConfig, "clear_filters", fake_clear)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    resp = client.delete("/api/session")
+    assert resp.status_code == 200
+    assert cleared == [1]
+
+
+def test_scan_respects_exclude(monkeypatch):
+    seen_prefixes = []
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [
+                    SimpleNamespace(slug="trans-a", name="TA", workspace="ws", default_branch="master"),
+                    SimpleNamespace(slug="trans-b", name="TB", workspace="ws", default_branch="master"),
+                ],
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            seen_prefixes.append(prefixes)
+            return [
+                SimpleNamespace(slug="trans-a", name="TA", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="trans-b", name="TB", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="core-app", name="CA", workspace="ws", default_branch="master"),
+            ]
+        def commit_for_branch(self, repo, branch):
+            return "abc123"
+        def commits_behind(self, repo, branch, base):
+            return 0
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return "u"
+        def has_commits_ahead(self, repo, branch, base):
+            return True
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def raw_file(self, repo, ref, path):
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/scan", params={
+        "origin": "release/x", "project_prefixes": "trans", "exclude": "trans-b",
+    }).json()
+    slugs = [r["slug"] for r in body["repos"]]
+    assert slugs == ["trans-a"]
+    assert seen_prefixes == [["trans"]]
+
+
+def test_create_missing_prs_filters_prefixes(monkeypatch):
+    seen = []
+
+    class PClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [],
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return [
+                SimpleNamespace(slug="trans-a", name="TA", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="core-b", name="CB", workspace="ws", default_branch="master"),
+            ]
+        def find_pr(self, repo, origin, dest):
+            return None
+        def has_commits_ahead(self, repo, origin, dest):
+            return True
+        def create_pr(self, repo, origin, dest, title=None):
+            seen.append(repo)
+            return {"url": "u", "title": title, "state": "OPEN", "id": 1}
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", PClient)
+    client.post("/api/session", json={"workspace": "ws6", "token": "tok"})
+
+    resp = client.post("/api/prs/create-missing", params={
+        "origin": "release/x", "project_prefixes": "trans", "exclude": "trans-a",
+    })
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["created"] == []
+    assert seen == []
+
+
+def test_tags_respect_exclude(monkeypatch):
+    created = []
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+                [],
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return [
+                SimpleNamespace(slug="trans-a", name="TA", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="trans-b", name="TB", workspace="ws", default_branch="master"),
+            ]
+        def commit_for_branch(self, repo, branch):
+            return "abc123"
+        def tag_exists(self, slug, name):
+            return False
+        def create_tag(self, slug, name, commit):
+            created.append(slug)
+
+    class StubCi:
+        def pipeline_id_for_commit(self, repo, branch, commit):
+            return 7
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: StubCi())
+    client.post("/api/session", json={"workspace": "ws7", "token": "tok"})
+
+    body = client.post("/api/tags", params={
+        "origin": "release/x", "prefixes": "uat", "project_prefixes": "trans", "exclude": "trans-b",
+    }).json()
+    assert body["ok"] is True
+    assert created == ["trans-a"]
 
 
 def test_spa_serves_build_when_present():

@@ -91,6 +91,9 @@ def session():
 
     with BitbucketClient(cfg.workspace, cfg.bitbucket_token) as client:
         repos = client.list_repos(filter_names=cfg.repos or None, prefixes=cfg.project_prefixes or None)
+        if cfg.exclude_repos:
+            blocked = {s.lower() for s in cfg.exclude_repos}
+            repos = [r for r in repos if r.slug.lower() not in blocked]
 
     from rich.table import Table
     from rich import box
@@ -113,10 +116,12 @@ def repos(
     if not cfg.is_configured:
         die("Bitbucket no configurado. Configurá BITBUCKET_WORKSPACE y BITBUCKET_TOKEN.")
     with BitbucketClient(cfg.workspace, cfg.bitbucket_token) as client:
-        found = client.repos_with_branch(origin)
+        found = client.repos_with_branch(origin, prefixes=cfg.project_prefixes or None)
     if not found:
         warn(f"Ningún repo contiene la rama '{origin}'.")
         return
+    if cfg.exclude_repos:
+        found = [r for r in found if r.slug.lower() not in {s.lower() for s in cfg.exclude_repos}]
     success(f"Repos con '{origin}': {len(found)}")
     from rich.table import Table
     from rich import box
@@ -139,10 +144,13 @@ def diff(
     if not cfg.is_configured:
         die("Bitbucket no configurado.")
     with BitbucketClient(cfg.workspace, cfg.bitbucket_token) as client:
-        found = client.repos_with_branch(origin)
+        found = client.repos_with_branch(origin, prefixes=cfg.project_prefixes or None)
         if not found:
             warn(f"Ningún repo contiene la rama '{origin}'.")
             return
+        if cfg.exclude_repos:
+            blocked = {s.lower() for s in cfg.exclude_repos}
+            found = [r for r in found if r.slug.lower() not in blocked]
         from rich.table import Table
         from rich import box
         for repo in sorted(found, key=lambda r: r.slug):
