@@ -1,6 +1,6 @@
 import pytest
 
-from src.circleci.configyml import ensure_tag_workflows
+from bbit_release.circleci.configyml import ensure_tag_workflows
 
 
 def test_genera_config_desde_cero():

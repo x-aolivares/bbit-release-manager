@@ -26,7 +26,7 @@ Configurá `config/env.base`: `BITBUCKET_WORKSPACE` (ej. `my_org_web_dev`),
 `BITBUCKET_USERNAME`. Después corré `bbit session`.
 
 `bbit web --dev` levanta el backend con recarga automática y el frontend con
-compilación en caliente: editás una línea en `src/` o en `frontend/src/` y se
+compilación en caliente: editás una línea en `bbit_release/` o en `frontend/src/` y se
 refleja al instante, sin reinstalar el paquete.
 
 ### Requisitos
@@ -37,7 +37,7 @@ refleja al instante, sin reinstalar el paquete.
 ## Estructura
 
 ```
-src/
+bbit_release/
 ├── cli.py               # Typer raíz: web, setup, session, version, home
 ├── config.py            # Config por entorno (dotenv, mirror yappy)
 ├── logger.py            # Consola Rich

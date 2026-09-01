@@ -80,11 +80,11 @@ idéntico al secuencial y el tiempo de pared baja sustancialmente.
 
 | Archivo | Cambio |
 |---|---|
-| `src/bitbucket/client.py` | `find_pr` devuelve `source.commit.hash`; (3) cache en `list_repos` |
-| `src/web/api/repos.py` | orden PR→commit en `scan` (1); filtro de archivos en `diff` (2); `ThreadPoolExecutor` en fases 2 y 3 (4) |
+| `bbit_release/bitbucket/client.py` | `find_pr` devuelve `source.commit.hash`; (3) cache en `list_repos` |
+| `bbit_release/web/api/repos.py` | orden PR→commit en `scan` (1); filtro de archivos en `diff` (2); `ThreadPoolExecutor` en fases 2 y 3 (4) |
 | `tests/test_bitbucket_client.py` | `find_pr` devuelve el hash; cache |
 | `tests/test_web_api.py` | asserts de que no se llama `commit_for_branch` con PR; diffs sin SSM no piden raw; concurrencia |
-| `src/circleci/client.py` | sin cambios (ya es por repo e independiente) |
+| `bbit_release/circleci/client.py` | sin cambios (ya es por repo e independiente) |
 
 ## Orden de implementación
 

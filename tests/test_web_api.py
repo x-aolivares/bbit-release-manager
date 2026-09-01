@@ -3,10 +3,10 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from src._version import read_version
-from src.web import session as session_mod
-from src.web.main import FRONTEND_DIST, app
-from src.web.session import destroy_session
+from bbit_release._version import read_version
+from bbit_release.web import session as session_mod
+from bbit_release.web.main import FRONTEND_DIST, app
+from bbit_release.web.session import destroy_session
 
 client = TestClient(app)
 
@@ -29,7 +29,7 @@ class FakeConfig:
 
 @pytest.fixture(autouse=True)
 def _fake_config(monkeypatch):
-    monkeypatch.setattr("src.web.api.repos.Config", FakeConfig)
+    monkeypatch.setattr("bbit_release.web.api.repos.Config", FakeConfig)
 
 
 @pytest.fixture(autouse=True)
@@ -68,12 +68,12 @@ def test_session_rejects_bad_token(monkeypatch):
         def __init__(self, ws, tok, **kw):
             pass
         def session(self):
-            from src.bitbucket.client import BitbucketAuthError
+            from bbit_release.bitbucket.client import BitbucketAuthError
             raise BitbucketAuthError("bad")
         def close(self):
             pass
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", BadClient)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", BadClient)
     resp = client.post("/api/session", json={"workspace": "ws", "token": "bad"})
     assert resp.status_code == 401
 
@@ -100,7 +100,7 @@ def test_session_create_with_stub(monkeypatch):
     saved = {}
     monkeypatch.setattr(FakeConfig, "save_tokens",
                         lambda self, **kw: saved.update(kw))
-    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     resp = client.post("/api/session", json={"workspace": "ws", "token": "tok"})
     body = resp.json()
     assert body["ok"] is True
@@ -120,12 +120,12 @@ def test_session_rejects_bad_circleci_token(monkeypatch):
         def __init__(self, *a, **k):
             pass
         def me(self):
-            from src.circleci.client import CircleCiAuthError
+            from bbit_release.circleci.client import CircleCiAuthError
             raise CircleCiAuthError("no")
         def close(self):
             pass
 
-    monkeypatch.setattr("src.web.api.repos.CircleCiClient", BadCi)
+    monkeypatch.setattr("bbit_release.web.api.repos.CircleCiClient", BadCi)
     resp = client.post("/api/session", json={"workspace": "ws", "token": "t", "circleci_token": "bad"})
     assert resp.status_code == 401
     assert "CircleCI" in resp.json()["error"]
@@ -172,8 +172,8 @@ def test_scan_returns_repos_with_pr_and_params(monkeypatch):
         def raw_file(self, repo, ref, path):
             return None
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
-    monkeypatch.setattr("src.web.api.repos._circleci", lambda: None)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
 
     ok = client.post("/api/session", json={"workspace": "ws", "token": "tok"})
     assert ok.status_code == 200
@@ -228,8 +228,8 @@ def test_scan_reuses_pr_hash(monkeypatch):
         def branch_url(self, repo, branch):
             return "http://atlassian/branch"
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
-    monkeypatch.setattr("src.web.api.repos._circleci", lambda: None)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.get("/api/scan", params={"origin": "release/x", "prefixes": "uat"}).json()
@@ -278,8 +278,8 @@ def test_scan_deploys_from_tag(monkeypatch):
         def project_id(self, repo):
             return "9beb07c8-cc3b-4da1-8bc4-e9121667fbb7"
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
-    monkeypatch.setattr("src.web.api.repos._circleci", lambda: StubCi())
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: StubCi())
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.get("/api/scan", params={"origin": "release/x", "prefixes": "uat,stgp"}).json()
@@ -330,8 +330,8 @@ def test_scan_resolves_full_hash_with_pr(monkeypatch):
         def project_id(self, repo):
             return None
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
-    monkeypatch.setattr("src.web.api.repos._circleci", lambda: StubCi())
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: StubCi())
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.get("/api/scan", params={"origin": "release/x", "prefixes": "uat"}).json()
@@ -367,8 +367,8 @@ def test_generate_tags(monkeypatch):
             return 7
 
     created = []
-    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
-    monkeypatch.setattr("src.web.api.repos._circleci", lambda: StubCi())
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: StubCi())
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.post("/api/tags", params={"origin": "release/x", "prefixes": "uat,stgp"}).json()
@@ -404,7 +404,7 @@ def test_circleci_config_creates(monkeypatch):
             calls.append((branch, path, "uat-deploy-on-tag" in content, message))
             return {"hash": "h1", "subject": "x"}
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.post("/api/circleci-config", params={"origin": "release/x", "prefixes": "uat"}).json()
@@ -463,7 +463,7 @@ def test_circleci_config_skips_when_present(monkeypatch):
         def upsert_file(self, *a, **k):
             raise AssertionError("no debería escribir cuando ya existe")
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.post("/api/circleci-config", params={"origin": "release/x", "prefixes": "uat"}).json()
@@ -505,7 +505,7 @@ def test_circleci_config_remigra_forma_triggers_invalida(monkeypatch):
             calls.append((branch, path, content, message))
             return {"hash": "h2", "subject": "x"}
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.post("/api/circleci-config", params={"origin": "release/x", "prefixes": "uat"}).json()
@@ -562,8 +562,8 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
                 return "k: {{resolve:ssm:config/app/key}}"
             return "no ssm"
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
-    monkeypatch.setattr("src.web.api.repos._circleci", lambda: None)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
@@ -606,8 +606,8 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
         def commit_for_branch(self, repo, branch):
             return "headOrigin" if branch == "release/x" else "headDest"
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", StubClient)
-    monkeypatch.setattr("src.web.api.repos._circleci", lambda: None)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.get("/api/diff", params={"origin": "release/x", "mode": "all"}).json()
@@ -640,7 +640,7 @@ def test_create_pr_endpoint(monkeypatch):
             seen["repo"], seen["title"] = repo, title
             return {"url": "http://pr/1", "title": title or "T", "state": "OPEN", "id": 1}
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", PClient)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", PClient)
     ok = client.post("/api/session", json={"workspace": "ws2", "token": "tok"})
     assert ok.status_code == 200
     resp = client.post("/api/pr", params={"repo": "r1", "origin": "release/x", "destination": "master", "title": "Titulo comun"})
@@ -671,7 +671,7 @@ def test_create_missing_prs(monkeypatch):
         def create_pr(self, repo, origin, dest, title=None):
             return {"url": "u", "title": title, "state": "OPEN", "id": 1}
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", PClient)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", PClient)
     client.post("/api/session", json={"workspace": "ws3", "token": "tok"})
     resp = client.post("/api/prs/create-missing", params={"origin": "release/x", "destination": "master", "title": "Titulo comun"})
     body = resp.json()
@@ -700,7 +700,7 @@ def test_create_pr_none_when_no_changes(monkeypatch):
             calls.append(repo)
             return {"url": "u", "title": title, "state": "OPEN", "id": 1}
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", PClient)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", PClient)
     client.post("/api/session", json={"workspace": "ws4", "token": "tok"})
     resp = client.post("/api/pr", params={"repo": "r1", "origin": "release/x", "destination": "master", "title": "T"})
     assert resp.status_code == 400
@@ -735,7 +735,7 @@ def test_create_missing_skips_no_changes(monkeypatch):
             calls.append(repo)
             return {"url": "u", "title": title, "state": "OPEN", "id": 1}
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", PClient)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", PClient)
     client.post("/api/session", json={"workspace": "ws5", "token": "tok"})
     resp = client.post("/api/prs/create-missing", params={"origin": "release/x", "destination": "master", "title": "T"})
     body = resp.json()
@@ -765,7 +765,7 @@ def test_update_pr_titles(monkeypatch):
         def update_pr_title(self, repo, pr_id, title):
             return {"id": pr_id, "title": title, "url": "u", "state": "OPEN"}
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", PClient)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", PClient)
     client.post("/api/session", json={"workspace": "ws4", "token": "tok"})
     resp = client.post("/api/prs/update-titles", params={"origin": "release/x", "destination": "master", "title": "Nuevo titulo"})
     body = resp.json()
@@ -793,7 +793,7 @@ def test_destroy_session_with_delete_credentials(monkeypatch):
         calls.append(1)
         return None
 
-    monkeypatch.setattr("src.web.session.BitbucketClient", PClient)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", PClient)
     monkeypatch.setattr(FakeConfig, "remove_credentials", fake_remove)
     client.post("/api/session", json={"workspace": "ws5", "token": "tok"})
     resp = client.delete("/api/session", params={"delete_credentials": "1"})
@@ -806,7 +806,7 @@ def test_destroy_session_with_delete_credentials(monkeypatch):
 
 
 def test_session_reuse_without_stored(monkeypatch):
-    monkeypatch.setattr("src.web.session.BitbucketClient", lambda ws, tok, **kw: (_ for _ in ()).throw(AssertionError("no debe instanciar")))
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", lambda ws, tok, **kw: (_ for _ in ()).throw(AssertionError("no debe instanciar")))
     resp = client.post("/api/session/reuse", json={})
     assert resp.status_code in (400, 401)
 

@@ -82,7 +82,7 @@ def run_dev(
     backend = subprocess.Popen(
         [
             python, "-m", "uvicorn",
-            "src.web.main:app",
+            "bbit_release.web.main:app",
             "--host", host,
             "--port", str(port),
             "--reload",

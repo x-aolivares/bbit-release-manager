@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bbit-release-manager"
-version = "0.12.1"
+version = "0.13.0"
 description = "BBit Release Manager - CLI y web para revisar ramas y parametros SSM contra Bitbucket"
 requires-python = ">=3.12"
 dynamic = ["dependencies", "optional-dependencies"]
@@ -14,10 +14,10 @@ dependencies = {file = ["docs/requirements.txt"]}
 optional-dependencies = {dev = {file = ["docs/requirements-dev.txt"]}}
 
 [project.scripts]
-bbit = "src.cli:app"
+bbit = "bbit_release.cli:app"
 
 [tool.setuptools.packages.find]
-include = ["src*"]
+include = ["bbit_release*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

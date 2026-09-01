@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from src.circleci.client import CircleCiAuthError, CircleCiClient, CircleCiError
+from bbit_release.circleci.client import CircleCiAuthError, CircleCiClient, CircleCiError
 
 
 def _transport(routes: dict) -> httpx.BaseTransport:

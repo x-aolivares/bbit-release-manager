@@ -1,4 +1,4 @@
-from src.scan.params import classify_ssm, extract_ssm_params
+from bbit_release.scan.params import classify_ssm, extract_ssm_params
 
 
 def test_extract_bare_path_in_interpolation():

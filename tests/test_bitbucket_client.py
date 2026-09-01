@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from src.bitbucket.client import (
+from bbit_release.bitbucket.client import (
     BitbucketAuthError,
     BitbucketClient,
     BitbucketError,

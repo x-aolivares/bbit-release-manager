@@ -1,4 +1,4 @@
-from src.config import Config
+from bbit_release.config import Config
 
 
 def test_save_tokens_updates_existing(tmp_path, monkeypatch):
