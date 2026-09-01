@@ -69,6 +69,18 @@ Files under `config/env.*` (without `.example`) are gitignored.
 Never commit real credentials or environment-specific values.
 Always update the `.example` templates when the config shape changes.
 
+## Dependencias compartidas (sync con yappy-cli-manager)
+
+Este paquete y `yappy-cli-manager` viven en el mismo entorno editable y
+comparten convenciones. Mantené el **stack común** alineado en `docs/requirements.txt`:
+
+- `typer`, `rich`, `python-dotenv` (runtime)
+- `pytest`, `coverage` (`docs/requirements-dev.txt`)
+
+El runtime distintivo (Bitbucket/CircleCI/SSM en este repo; AWS/Kafka/DB en
+yappy) puede y debe diferir — son dominios distintos. Al tocar una dep común,
+actualizala en AMBOS repos y commitealos juntos para no generar drift.
+
 ## Fase 2 (pendiente)
 
 Pipeline completo contra la API REST de Bitbucket Cloud (`api.bitbucket.org/2.0`):
