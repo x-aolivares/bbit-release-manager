@@ -26,21 +26,16 @@ def test_session_ok():
     def workspace(request):
         return httpx.Response(200, json={"slug": "ws", "is_private": True, "name": "WS"})
 
-    def repos(request):
-        return httpx.Response(200, json={"values": [{"slug": "a", "name": "A", "workspace": {"slug": "ws"}}]})
-
     client = BitbucketClient("ws", "tok", transport=_transport({
         ("GET", "/2.0/user"): user,
         ("GET", "/2.0/workspaces/ws"): workspace,
-        ("GET", "/2.0/repositories/ws"): repos,
     }))
     try:
-        info, identity, found = client.session()
+        info, identity = client.session()
     finally:
         client.close()
     assert identity == "Jane (@jane)"
     assert info.slug == "ws"
-    assert [r.slug for r in found] == ["a"]
 
 
 def test_has_branch_true():

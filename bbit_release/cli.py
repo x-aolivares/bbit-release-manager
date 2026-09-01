@@ -61,11 +61,11 @@ def _probe_bitbucket(cfg) -> tuple[bool, str, str, int]:
 
     with BitbucketClient(cfg.workspace, cfg.bitbucket_token) as client:
         try:
-            info, identity, repos = client.session()
+            info, identity = client.session()
         except (BitbucketAuthError, BitbucketError) as exc:
             return False, "", str(exc), 0
     detail = f"{identity} · {info.name} {'(privado)' if info.is_private else ''}"
-    return True, detail, "", len(repos)
+    return True, detail, "", 0
 
 
 @app.command()

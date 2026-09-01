@@ -130,8 +130,8 @@ class BitbucketClient:
             return resp.json()
         raise last_error  # type: ignore[misc]
 
-    def session(self) -> tuple[WorkspaceInfo, str, list[Repository]]:
-        """Valida token, describe workspace y lista repos."""
+    def session(self) -> tuple[WorkspaceInfo, str]:
+        """Valida token y describe workspace."""
         data = self._request("GET", "/user")
         if not data:
             raise BitbucketAuthError("Token inválido: /user no respondió")
@@ -149,8 +149,7 @@ class BitbucketClient:
             )
         else:
             info = WorkspaceInfo(uuid="", name=self.workspace, slug=self.workspace, is_private=True)
-        repos = self.list_repos()
-        return info, identity, repos
+        return info, identity
 
     def list_repos(
         self,

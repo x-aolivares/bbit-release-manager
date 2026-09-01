@@ -27,7 +27,7 @@ _sessions: dict[str, SessionData] = {}
 def create_session(workspace: str, token: str, url: str = "") -> SessionData:
     client = BitbucketClient(workspace, token, url=url)
     try:
-        info, identity, repos = client.session()
+        info, identity = client.session()
     except (BitbucketAuthError, BitbucketError):
         client.close()
         raise
@@ -37,7 +37,7 @@ def create_session(workspace: str, token: str, url: str = "") -> SessionData:
         client=client,
         workspace=info.slug,
         identity=identity,
-        repo_count=len(repos),
+        repo_count=0,
     )
     _sessions[sid] = data
     return data

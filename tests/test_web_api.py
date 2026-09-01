@@ -107,7 +107,6 @@ def test_session_create_with_stub(monkeypatch):
             return (
                 SimpleNamespace(uuid="a1b2", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [SimpleNamespace(slug="a", name="A", workspace="ws", default_branch="master")],
             )
         def close(self):
             pass
@@ -120,7 +119,7 @@ def test_session_create_with_stub(monkeypatch):
     body = resp.json()
     assert body["ok"] is True
     assert body["identity"] == "Jane (@jane)"
-    assert body["repo_count"] == 1
+    assert body["repo_count"] == 0
     assert body["stored"] is True
     assert saved["bitbucket_token"] == "tok"
     assert saved["workspace"] == "ws"
@@ -164,7 +163,6 @@ def test_scan_returns_repos_with_pr_and_params(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
             )
         def close(self):
             pass
@@ -225,7 +223,6 @@ def test_scan_reuses_pr_hash(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
             )
         def close(self):
             pass
@@ -263,7 +260,6 @@ def test_scan_deploys_from_tag(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
             )
         def close(self):
             pass
@@ -317,7 +313,6 @@ def test_scan_resolves_full_hash_with_pr(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
             )
         def close(self):
             pass
@@ -362,7 +357,6 @@ def test_generate_tags(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
             )
         def close(self):
             pass
@@ -405,7 +399,6 @@ def test_circleci_config_creates(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
             )
         def close(self):
             pass
@@ -439,7 +432,6 @@ def test_circleci_config_skips_when_present(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
             )
         def close(self):
             pass
@@ -495,7 +487,6 @@ def test_circleci_config_remigra_forma_triggers_invalida(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
             )
         def close(self):
             pass
@@ -557,7 +548,6 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
             )
         def close(self):
             pass
@@ -606,7 +596,6 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")],
             )
         def close(self):
             pass
@@ -652,10 +641,6 @@ def test_diff_reclassifies_productivo_from_repo_without_branch(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [
-                    SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
-                    SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master"),
-                ],
             )
         def close(self):
             pass
@@ -705,10 +690,6 @@ def test_repos_cache_force_exclude(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [
-                    SimpleNamespace(slug="orders-app", name="OA", workspace="ws", default_branch="master"),
-                    SimpleNamespace(slug="pay-app", name="PA", workspace="ws", default_branch="master"),
-                ],
             )
         def close(self):
             pass
@@ -745,7 +726,6 @@ def test_create_pr_endpoint(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [],
             )
         def close(self):
             pass
@@ -773,7 +753,6 @@ def test_create_missing_prs(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [],
             )
         def close(self):
             pass
@@ -805,7 +784,6 @@ def test_create_pr_none_when_no_changes(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [],
             )
         def close(self):
             pass
@@ -836,7 +814,6 @@ def test_create_missing_skips_no_changes(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [],
             )
         def close(self):
             pass
@@ -868,7 +845,6 @@ def test_update_pr_titles(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [],
             )
         def close(self):
             pass
@@ -899,7 +875,6 @@ def test_destroy_session_with_delete_credentials(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [],
             )
         def close(self):
             pass
@@ -939,7 +914,6 @@ def test_session_persists_filters(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [],
             )
         def close(self):
             pass
@@ -968,7 +942,6 @@ def test_destroy_session_clears_filters(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [],
             )
         def close(self):
             pass
@@ -992,10 +965,6 @@ def test_scan_respects_exclude(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [
-                    SimpleNamespace(slug="trans-a", name="TA", workspace="ws", default_branch="master"),
-                    SimpleNamespace(slug="trans-b", name="TB", workspace="ws", default_branch="master"),
-                ],
             )
         def close(self):
             pass
@@ -1045,7 +1014,6 @@ def test_create_missing_prs_filters_prefixes(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [],
             )
         def close(self):
             pass
@@ -1084,7 +1052,6 @@ def test_tags_respect_exclude(monkeypatch):
             return (
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
-                [],
             )
         def close(self):
             pass
