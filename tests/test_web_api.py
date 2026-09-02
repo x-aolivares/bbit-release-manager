@@ -39,6 +39,9 @@ class FakeConfig:
 
 @pytest.fixture(autouse=True)
 def _fake_config(monkeypatch):
+    FakeConfig.ssm_prefixes = ["/config", "/common"]
+    FakeConfig.project_prefixes = []
+    FakeConfig.exclude_repos = []
     monkeypatch.setattr("bbit_release.web.api.repos.Config", FakeConfig)
 
 
@@ -584,7 +587,7 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
     assert "app.py" not in [c[2] for c in raw_calls]
     assert body["mode"] == "diff"
     assert body["params"] == [
-        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"]},
+        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"], "count": 1},
     ]
     assert body["removed"] == [{"param": "/config/gone", "repos": ["r1"]}]
     assert body["repos"][0]["added"] == ["/config/app/key"]
@@ -630,7 +633,7 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
     assert seen["list"] == [("r1", "headOrigin"), ("r1", "headDest")]
     assert ("r1", "headOrigin", "logo.png") not in seen["raw"]
     assert body["params"] == [
-        {"param": "/config/a/b", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"]},
+        {"param": "/config/a/b", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"], "count": 1},
     ]
     assert body["repos"][0]["added"] == ["/config/a/b"]
 
@@ -689,7 +692,7 @@ def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
     assert list_calls == [True]
     # r1 master no tiene params → el param se considera 'nuevo' (r2 quedó fuera)
     assert body["params"] == [
-        {"param": "/config/shared/secret", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"]},
+        {"param": "/config/shared/secret", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"], "count": 1},
     ]
 
     # 2da consulta con la misma rama: cache hits, no vuelve a list_repos
@@ -737,7 +740,7 @@ def test_diff_cache_key_incluye_ssm_prefixes(monkeypatch):
     FakeConfig.ssm_prefixes = ["/config"]
     first = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
     assert first["params"] == [
-        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"]},
+        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"], "count": 1},
     ]
 
     FakeConfig.ssm_prefixes = ["/config", "/extra"]
@@ -747,6 +750,148 @@ def test_diff_cache_key_incluye_ssm_prefixes(monkeypatch):
     FakeConfig.ssm_prefixes = ["/other"]
     changed = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
     assert changed["params"] != first["params"]  # sin prefijo que matchee, difiere (no cache stale)
+
+
+def test_diff_reutilizado_cuando_path_esta_en_master_del_mismo_repo(monkeypatch):
+    """Un path presente en release Y en master del MISMO repo pasa a 'reutilizado'
+    (antes se descartaba por origin - dest por-repo)."""
+    FakeConfig.ssm_prefixes = ["/config", "/common"]
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def diff(self, repo, destination, origin):
+            f = SimpleNamespace(
+                path="config/x.yaml", status="modified",
+                added_lines=("k: {{resolve:ssm:/config/shared/secret}}",),
+                removed_lines=(),
+            )
+            return SimpleNamespace(files=[f])
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch):
+            return "headO" if branch == "release/x" else "headM"
+        def list_files(self, repo, ref):
+            return ["config/x.yaml"]
+        def raw_file(self, repo, ref, path):
+            if ref == "headO":
+                return "k: {{resolve:ssm:/config/shared/secret}}"
+            return "k: {{resolve:ssm:/config/shared/secret}}"
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    # el path está en release y master → reutilizado (no 'nuevo', ni desaparecido)
+    assert body["params"] == [
+        {"param": "/config/shared/secret", "arn": "", "tipo": "reutilizado", "qa_value": None, "repos": ["r1"], "count": 1},
+    ]
+
+
+def test_diff_reutilizado_y_count_multirepo(monkeypatch):
+    """Un path en release de 2 repos (ambos con la rama) y también en master
+    global → 'reutilizado' con count=2 y repos=[r1, r2]."""
+    FakeConfig.ssm_prefixes = ["/config", "/common"]
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [
+                SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master"),
+            ]
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            return [
+                SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master"),
+            ]
+        def diff(self, repo, destination, origin):
+            f = SimpleNamespace(
+                path="config/x.yaml", status="modified",
+                added_lines=("k: {{resolve:ssm:/config/dup}}",),
+                removed_lines=(),
+            )
+            return SimpleNamespace(files=[f])
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch):
+            return "headO" if branch == "release/x" else "headM"
+        def list_files(self, repo, ref):
+            return ["config/x.yaml"]
+        def raw_file(self, repo, ref, path):
+            # en ambos repos el path está tanto en release como en master
+            return "k: {{resolve:ssm:/config/dup}}"
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    assert body["params"] == [
+        {"param": "/config/dup", "arn": "", "tipo": "reutilizado", "qa_value": None, "repos": ["r1", "r2"], "count": 2},
+    ]
+
+
+def test_diff_repos_only_master_no_aparecen(monkeypatch):
+    """Un path que SOLO existe en master (ya productivo) no aparece en params."""
+    FakeConfig.ssm_prefixes = ["/config", "/common"]
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def diff(self, repo, destination, origin):
+            f = SimpleNamespace(
+                path="config/x.yaml", status="modified",
+                added_lines=(),
+                removed_lines=(),
+            )
+            return SimpleNamespace(files=[f])
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch):
+            return "headO" if branch == "release/x" else "headM"
+        def list_files(self, repo, ref):
+            return ["config/x.yaml"]
+        def raw_file(self, repo, ref, path):
+            # solo en master (destino) hay el param SSM
+            if ref == "headM":
+                return "k: {{resolve:ssm:/config/productivo}}"
+            return "sin ssm"
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    assert body["params"] == []  # master-only queda fuera
 
 
 def test_repos_cache_force_exclude(monkeypatch):

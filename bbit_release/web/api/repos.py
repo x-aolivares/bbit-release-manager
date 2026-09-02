@@ -767,8 +767,9 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
             cache.set_master(repo.slug, destination, params)
         return params
 
-    added_by_repo: dict[str, set] = {}
-    removed_by_repo: dict[str, set] = {}
+    # release_by_repo[slug] = paths en release (origen) del repo
+    # dest_by_repo[slug] = paths en master (destino) del repo (solo paths, sin ARN)
+    release_by_repo: dict[str, set] = {}
     dest_by_repo: dict[str, set] = {}
 
     if mode == "all":
@@ -787,10 +788,9 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
             futures = {ex.submit(_scan_all, data.client, r): r for r in master_repos}
             for fut, repo in futures.items():
                 slug, origin_params, dest_params = fut.result()
-                dest_by_repo[slug] = dest_params
+                dest_by_repo[slug] = {p for p, _ in dest_params}
                 if slug in by_slug:
-                    added_by_repo[slug] = origin_params - dest_params
-                    removed_by_repo[slug] = dest_params - origin_params
+                    release_by_repo[slug] = {p for p, _ in origin_params}
     else:
         def _run_repo_diff(client, repo):
             return repo.slug, client.diff(repo.slug, destination, origin)
@@ -799,7 +799,7 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(master_repos) or 1)) as ex:
             futures = {ex.submit(_resolve_master, data.client, r): r.slug for r in master_repos}
             for fut, slug in futures.items():
-                dest_by_repo[slug] = set(fut.result())
+                dest_by_repo[slug] = {p for p, _ in fut.result()}
 
         # Etapa A: diffs y selección de archivos con indicio SSM (solo branch repos).
         candidates: list[tuple[str, str, str, str]] = []
@@ -820,43 +820,44 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
             raw_origin = client.raw_file(slug, origin_ref, path)
             raw_dest = client.raw_file(slug, dest_ref, path)
             origin_params = set(extract_ssm_params([raw_origin], prefixes)) if raw_origin else set()
-            dest_params = set(extract_ssm_params([raw_dest], prefixes)) if raw_dest else set()
-            return origin_params, dest_params
+            return origin_params
 
         if candidates:
             with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(candidates) or 1)) as ex:
                 results = [ex.submit(_file_params, data.client, c).result() for c in candidates]
-            for (slug, _path, _o, _d), (origin_params, dest_params) in zip(candidates, results):
-                added_by_repo.setdefault(slug, set()).update(origin_params - dest_params)
-                removed_by_repo.setdefault(slug, set()).update(dest_params - origin_params)
+            for (slug, _path, _o, _d), origin_params in zip(candidates, results):
+                release_by_repo.setdefault(slug, set()).update({p for p, _ in origin_params})
 
+    # Master global (union de paths en master de los repos del alcance).
     global_dest: set[str] = set()
-    for params in dest_by_repo.values():
-        global_dest |= {p for p, _ in params}
+    for paths in dest_by_repo.values():
+        global_dest |= paths
 
-    origin_paths = {slug: {p for p, _ in v} for slug, v in added_by_repo.items()}
-    tipo = classify_ssm(origin_paths, global_dest)
+    # Clasificacion global por path: reutilizado si ya existe en master global, si no nuevo.
+    tipo = classify_ssm(release_by_repo, global_dest)
 
-    merged: dict[str, dict] = {}
-    for slug, added in added_by_repo.items():
-        for path, arn in added:
-            entry = merged.setdefault(path, {"arns": set(), "repos": set()})
-            entry["arns"].add(arn)
-            entry["repos"].add(slug)
+    # Release global: un path que aparece en N repos se agrega en una sola entrada
+    # con el set de repos y la cantidad (count). Los master-only no aparecen.
+    merged: dict[str, set[str]] = {}
+    for slug, paths in release_by_repo.items():
+        for path in paths:
+            merged.setdefault(path, set()).add(slug)
     params = [
         {
             "param": path,
-            "arn": ", ".join(sorted(entry["arns"] - {""})),
+            "arn": "",
             "tipo": tipo.get(path, "nuevo"),
             "qa_value": None,
-            "repos": sorted(entry["repos"]),
+            "repos": sorted(entry),
+            "count": len(entry),
         }
         for path, entry in sorted(merged.items())
     ]
 
+    # Info de debug por repo: remover = paths en master del repo que no estan en su release.
     removed_merged: dict[str, set[str]] = {}
-    for slug, paths in removed_by_repo.items():
-        for path, _arn in paths:
+    for slug, dest_paths in dest_by_repo.items():
+        for path in dest_paths - release_by_repo.get(slug, set()):
             removed_merged.setdefault(path, set()).add(slug)
     removed = [
         {"param": path, "repos": sorted(slugs)}
@@ -866,8 +867,8 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
     repos_out = [
         {
             "repo": slug,
-            "added": sorted({p for p, _ in added_by_repo.get(slug, set())}),
-            "removed": sorted({p for p, _ in removed_by_repo.get(slug, set())}),
+            "added": sorted(release_by_repo.get(slug, set())),
+            "removed": sorted(dest_by_repo.get(slug, set()) - release_by_repo.get(slug, set())),
         }
         for slug in sorted(by_slug)
     ]
