@@ -558,7 +558,7 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
             pass
         def list_repos(self, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
-        def repos_with_branch(self, origin, prefixes=None):
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def diff(self, repo, destination, origin):
             return SimpleNamespace(files=[plain_file, ssm_file, deleted_ssm])
@@ -606,7 +606,7 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
             pass
         def list_repos(self, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
-        def repos_with_branch(self, origin, prefixes=None):
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def list_files(self, repo, ref):
             seen["list"].append((repo, ref))
@@ -658,7 +658,7 @@ def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
                 SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
                 SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master"),
             ]
-        def repos_with_branch(self, origin, prefixes=None):
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def diff(self, repo, destination, origin):
             f = SimpleNamespace(
@@ -684,11 +684,69 @@ def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
-    assert list_calls == []  # no barrió todo el workspace
+    # La 1era consulta hace UN list_repos de discovery (cacheable), no vuelve a
+    # barrer el workspace en consultas posteriores con la misma rama.
+    assert list_calls == [True]
     # r1 master no tiene params → el param se considera 'nuevo' (r2 quedó fuera)
     assert body["params"] == [
         {"param": "/config/shared/secret", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"]},
     ]
+
+    # 2da consulta con la misma rama: cache hits, no vuelve a list_repos
+    client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    assert list_calls == [True]
+
+
+def test_diff_cache_key_incluye_ssm_prefixes(monkeypatch):
+    """Cambiar SSM_PREFIXES produce otra key de cache: el diff cacheado con
+    otros prefixes NO se reutiliza (evita resultado stale)."""
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def diff(self, repo, destination, origin):
+            f = SimpleNamespace(
+                path="config/x.yaml", status="modified",
+                added_lines=("k: {{resolve:ssm:/config/app/key}}",),
+                removed_lines=(),
+            )
+            return SimpleNamespace(files=[f])
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch):
+            return "headO" if branch == "release/x" else "headM"
+        def list_files(self, repo, ref):
+            return ["config/x.yaml"]
+        def raw_file(self, repo, ref, path):
+            return "k: {{resolve:ssm:/config/app/key}}" if ref == "headO" else "no ssm"
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    FakeConfig.ssm_prefixes = ["/config"]
+    first = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    assert first["params"] == [
+        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"]},
+    ]
+
+    FakeConfig.ssm_prefixes = ["/config", "/extra"]
+    after = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    assert after["params"] == first["params"]  # ambos extraen el param que matchea con /config y /extra
+
+    FakeConfig.ssm_prefixes = ["/other"]
+    changed = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    assert changed["params"] != first["params"]  # sin prefijo que matchee, difiere (no cache stale)
 
 
 def test_repos_cache_force_exclude(monkeypatch):

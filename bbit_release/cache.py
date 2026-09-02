@@ -211,8 +211,11 @@ class ReleaseCache:
         destination: str,
         prefixes: list[str] | None = None,
         exclude: set[str] | None = None,
+        ssm_prefixes: list[str] | None = None,
     ) -> dict | None:
         key = _cache_key(origin, destination, prefixes, exclude)
+        if ssm_prefixes:
+            key = f"{key}|{','.join(sorted(ssm_prefixes))}"
         row = self._fetchone(
             "SELECT data_json FROM diff_cache WHERE cache_key = ?", (key,)
         )
@@ -228,8 +231,11 @@ class ReleaseCache:
         prefixes: list[str] | None,
         exclude: set[str] | None,
         data: dict,
+        ssm_prefixes: list[str] | None = None,
     ) -> None:
         key = _cache_key(origin, destination, prefixes, exclude)
+        if ssm_prefixes:
+            key = f"{key}|{','.join(sorted(ssm_prefixes))}"
         self._execute(
             "INSERT OR REPLACE INTO diff_cache (cache_key, origin, destination, data_json, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -264,17 +270,22 @@ class ReleaseCache:
         destination: str,
         prefixes: list[str] | None = None,
         exclude: set[str] | None = None,
+        ssm_prefixes: list[str] | None = None,
     ) -> None:
-        key = _cache_key(origin, destination, prefixes, exclude)
+        base = _cache_key(origin, destination, prefixes, exclude)
+        keys = {base}
+        if ssm_prefixes:
+            keys.add(f"{base}|{','.join(sorted(ssm_prefixes))}")
         with self._lock:
             for table in ("repo_cache", "scan_cache", "diff_cache", "branch_repos"):
                 cur = self._conn.cursor()
                 try:
-                    cur.execute(f"DELETE FROM {table} WHERE cache_key = ?", (key,))
+                    for key in keys:
+                        cur.execute(f"DELETE FROM {table} WHERE cache_key = ?", (key,))
                 finally:
                     cur.close()
             self._conn.commit()
-        log.debug("invalidated cache: %s", key)
+        log.debug("invalidated cache: %s", sorted(keys))
 
     def invalidate_all(self) -> None:
         with self._lock:

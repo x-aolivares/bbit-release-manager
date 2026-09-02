@@ -59,14 +59,46 @@ def _apply_filters(repos, prefs: list[str] | None, blocked: set[str]) -> list:
     return out
 
 
+def _all_repos_cached(client, prefs: list[str] | None, exclude: set[str]) -> list | None:
+    """Todos los repos del workspace (lista completa), con caché SQLite.
+
+    Key por prefijos/exclusión (sin origin → todo el workspace). Comparte la
+    misma cache que /api/repos sin origin, así el barrido paginado de
+    `list_repos` no se repite entre endpoints.
+
+    Si el cliente no expone `list_repos` (stubs de test), devuelve None y el
+    llamador cae en `repos_with_branch` sin base.
+    """
+    if not hasattr(client, "list_repos"):
+        return None
+    cache = get_cache()
+    cached = cache.get_repos("", "all", prefs, exclude)
+    if cached is not None:
+        from types import SimpleNamespace
+        return [SimpleNamespace(**r) for r in cached]
+    repos = client.list_repos(prefixes=prefs)
+    items = [{"slug": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch} for r in repos]
+    cache.set_repos("", "all", prefs, exclude, items)
+    return repos
+
+
 def _branch_repos_cached(client, origin: str, destination: str, prefs: list[str] | None, exclude: set[str]) -> list:
-    """Repos con la rama, con caché SQLite (tabla branch_repos)."""
+    """Repos con la rama, con caché SQLite (tabla branch_repos).
+
+    En el primer llamado usa la lista completa cacheada como base para evitar
+    re-barrer el workspace (el `list_repos` paginado). Si la lista completa
+    tampoco está disponible/cacheada, cae en `repos_with_branch` que la obtiene.
+    """
     cache = get_cache()
     cached = cache.get_branch_repos(origin, destination, prefs, exclude)
     if cached is not None:
         from types import SimpleNamespace
         return [SimpleNamespace(**{**r, "slug": r["repo_name"]}) for r in cached]
-    repos = client.repos_with_branch(origin, prefixes=prefs)
+    base = _all_repos_cached(client, prefs, exclude)
+    if base is not None:
+        repos = client.repos_with_branch(origin, prefixes=prefs, repos=base)
+    else:
+        repos = client.repos_with_branch(origin, prefixes=prefs)
     items = [{"repo_name": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch} for r in repos]
     cache.set_branch_repos(origin, destination, prefs, exclude, items)
     return repos
@@ -271,9 +303,13 @@ def list_repos(origin: str = "", project_prefixes: str = "", force: int = 0, exc
             }
 
     if origin:
-        repos = data.client.repos_with_branch(origin, prefixes=prefs)
+        base = _all_repos_cached(data.client, prefs, blocked)
+        if base is not None:
+            repos = data.client.repos_with_branch(origin, prefixes=prefs, repos=base)
+        else:
+            repos = data.client.repos_with_branch(origin, prefixes=prefs)
     else:
-        repos = data.client.list_repos(prefixes=prefs)
+        repos = _all_repos_cached(data.client, prefs, blocked) or data.client.list_repos(prefixes=prefs)
     items = [
         {"slug": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch}
         for r in repos
@@ -697,9 +733,9 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
     cache = get_cache()
 
     if force:
-        cache.invalidate(origin, destination, proj, blocked)
-    elif cache.get_diff(origin, destination, proj, blocked) is not None:
-        return cache.get_diff(origin, destination, proj, blocked)
+        cache.invalidate(origin, destination, proj, blocked, ssm_prefixes=prefixes)
+    elif cache.get_diff(origin, destination, proj, blocked, ssm_prefixes=prefixes) is not None:
+        return cache.get_diff(origin, destination, proj, blocked, ssm_prefixes=prefixes)
 
     master_repos = _apply_filters(_branch_repos_cached(data.client, origin, destination, proj, blocked), proj, blocked)
     branch_repos = master_repos
@@ -844,5 +880,5 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
         "params": params,
         "removed": removed,
     }
-    cache.set_diff(origin, destination, proj, blocked, result)
+    cache.set_diff(origin, destination, proj, blocked, result, ssm_prefixes=prefixes)
     return result

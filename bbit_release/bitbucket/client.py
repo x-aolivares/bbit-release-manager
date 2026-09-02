@@ -289,6 +289,7 @@ class BitbucketClient:
         self,
         branch: str,
         prefixes: list[str] | None = None,
+        repos: list["Repository"] | None = None,
     ) -> list[Repository]:
         """Repos (filtrados por prefijo si se pasa) que contienen la rama.
 
@@ -298,8 +299,11 @@ class BitbucketClient:
 
         El chequeo de existencia es un request por repo; se corre en paralelo
         (ThreadPoolExecutor) para no serializar llamadas a la API.
+
+        `repos` es opcional: si ya tenés la lista completa del workspace
+        cacheada, pasala para evitar el `list_repos` paginado interno.
         """
-        repos = self.list_repos(prefixes=prefixes)
+        repos = repos if repos is not None else self.list_repos(prefixes=prefixes)
         if not repos:
             return []
         workers = min(MAX_WORKERS, len(repos) or 1)
