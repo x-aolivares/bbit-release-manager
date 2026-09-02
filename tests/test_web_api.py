@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from bbit_release._version import read_version
+from bbit_release.cache import reset_cache
 from bbit_release.web import session as session_mod
 from bbit_release.web.api import repos as repos_mod
 from bbit_release.web.main import FRONTEND_DIST, app
@@ -51,9 +52,13 @@ def _clean_sessions():
 
 
 @pytest.fixture(autouse=True)
-def _clean_master_cache():
-    repos_mod._MASTER_CACHE.clear()
-    repos_mod._REPO_CACHE.clear()
+def _clean_cache(tmp_path):
+    from bbit_release.cache import get_cache
+    reset_cache()
+    cache = get_cache(tmp_path / f"cache_{id(tmp_path)}.db")
+    yield cache
+    cache.invalidate_all()
+    reset_cache()
 
 
 def test_health_ok():

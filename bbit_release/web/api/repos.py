@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
 from ...bitbucket import client as bb
+from ...cache import get_cache
 from ...config import Config
 from ...circleci.client import CircleCiClient, CircleCiError
 from ...circleci.configyml import ensure_tag_workflows
@@ -19,68 +20,6 @@ router = APIRouter(prefix="/api", tags=["repos"])
 
 MAX_WORKERS = 4
 _SUBMIT_DELAY = 0.1
-_CACHE_TTL = 300  # 5 minutos
-
-# Cache en memoria de parámetros de master por sesión. Llave "session|slug" ->
-# (set de (path, arn), timestamp). Evita releer los masters (costosos) entre consultas.
-_MASTER_CACHE: dict[str, tuple[set, float]] = {}
-
-# Cache en memoria del descubrimiento de repos/proyectos por sesión. Llave
-# "session|origin|prefixes" -> (lista de repos, timestamp). Evita repetir las N
-# llamadas en consultas sucesivas del mismo release.
-_REPO_CACHE: dict[str, tuple[list, float]] = {}
-
-# Cache en memoria de repos con branch específico por sesión. Llave
-# "session|branch|origin|prefixes" -> (lista de repos, timestamp).
-_BRANCH_REPOS_CACHE: dict[str, tuple[list, float]] = {}
-
-
-def _cache_key(slug: str) -> str:
-    return f"{active_session_id()}|{slug}"
-
-
-def _repo_cache_key(origin: str, prefs: list[str] | None) -> str:
-    p = ",".join(prefs or [])
-    return f"{active_session_id()}|{origin}|{p}"
-
-
-def _branch_cache_key(branch: str, origin: str, prefs: list[str] | None) -> str:
-    p = ",".join(prefs or [])
-    return f"{active_session_id()}|{branch}|{origin}|{p}"
-
-
-def _is_cache_valid(entry: tuple | None) -> bool:
-    if not entry:
-        return False
-    _, ts = entry
-    return (time.monotonic() - ts) < _CACHE_TTL
-
-
-def _cache_master(slug: str, params: set) -> None:
-    if params:
-        _MASTER_CACHE[_cache_key(slug)] = (set(params), time.monotonic())
-
-
-def _branch_repos(client, origin: str, prefs: list[str] | None) -> list:
-    """Repos con la rama, con caché por (sesión, rama, prefijos)."""
-    key = _branch_cache_key(origin, "", prefs)
-    entry = _BRANCH_REPOS_CACHE.get(key)
-    if entry and _is_cache_valid(entry):
-        return list(entry[0])
-    repos = client.repos_with_branch(origin, prefixes=prefs)
-    _BRANCH_REPOS_CACHE[key] = (list(repos), time.monotonic())
-    return repos
-
-
-def _all_repos(client, prefs: list[str] | None) -> list:
-    """Todos los repos (filtrados por prefijo), con caché por (sesión, prefijos)."""
-    key = _repo_cache_key("", prefs)
-    entry = _REPO_CACHE.get(key)
-    if entry and _is_cache_valid(entry):
-        return list(entry[0])
-    repos = client.list_repos(prefixes=prefs)
-    _REPO_CACHE[key] = (list(repos), time.monotonic())
-    return repos
 
 
 def _project_prefixes(cfg, raw: str = "") -> list[str] | None:
@@ -118,6 +57,32 @@ def _apply_filters(repos, prefs: list[str] | None, blocked: set[str]) -> list:
             continue
         out.append(r)
     return out
+
+
+def _branch_repos_cached(client, origin: str, prefs: list[str] | None, exclude: set[str]) -> list:
+    """Repos con la rama, con caché SQLite."""
+    cache = get_cache()
+    cached = cache.get_repos(origin, "", prefs, exclude)
+    if cached is not None:
+        from types import SimpleNamespace
+        return [SimpleNamespace(**r) for r in cached]
+    repos = client.repos_with_branch(origin, prefixes=prefs)
+    items = [{"slug": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch} for r in repos]
+    cache.set_repos(origin, "", prefs, exclude, items)
+    return repos
+
+
+def _all_repos_cached(client, prefs: list[str] | None, exclude: set[str]) -> list:
+    """Todos los repos (filtrados por prefijo), con caché SQLite."""
+    cache = get_cache()
+    cached = cache.get_repos("", "", prefs, exclude)
+    if cached is not None:
+        from types import SimpleNamespace
+        return [SimpleNamespace(**r) for r in cached]
+    repos = client.list_repos(prefixes=prefs)
+    items = [{"slug": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch} for r in repos]
+    cache.set_repos("", "", prefs, exclude, items)
+    return repos
 
 
 def _suggests_ssm(file, prefixes) -> bool:
@@ -307,23 +272,26 @@ def list_repos(origin: str = "", project_prefixes: str = "", force: int = 0, exc
         return {"items": [], "configured": False, "error": "Sesión inválida."}
     prefs = _project_prefixes(Config(), project_prefixes)
     blocked = _exclude_repos(Config(), exclude)
+    cache = get_cache()
 
-    ckey = _repo_cache_key(origin, prefs)
-    entry = _REPO_CACHE.get(ckey)
-    if entry and _is_cache_valid(entry) and not force:
-        cached = entry[0]
-        repos = [r for r in cached if r.slug.lower() not in blocked]
-        return {
-            "items": [{"slug": r.slug, "name": r.name, "workspace": r.workspace,
-                       "default_branch": r.default_branch} for r in repos],
-            "configured": True, "error": None, "cached": True,
-        }
+    if not force:
+        cached = cache.get_repos(origin, "all", prefs, blocked)
+        if cached is not None:
+            repos = [r for r in cached if r["slug"] not in blocked]
+            return {
+                "items": repos,
+                "configured": True, "error": None, "cached": True,
+            }
 
     if origin:
         repos = data.client.repos_with_branch(origin, prefixes=prefs)
     else:
         repos = data.client.list_repos(prefixes=prefs)
-    _REPO_CACHE[ckey] = (list(repos), time.monotonic())
+    items = [
+        {"slug": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch}
+        for r in repos
+    ]
+    cache.set_repos(origin, "all", prefs, blocked, items)
     repos = [r for r in repos if r.slug.lower() not in blocked]
     return {
         "items": [
@@ -457,12 +425,18 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
 
 
 @router.get("/scan")
-def scan(origin: str, destination: str = "master", prefixes: str = "", project_prefixes: str = "", exclude: str = ""):
+def scan(origin: str, destination: str = "master", prefixes: str = "", project_prefixes: str = "", exclude: str = "", force: int = 0):
     data = _require_session()
     cfg = Config()
     clean = [p.strip() for p in prefixes.split(",") if p.strip()] or cfg.deploy_prefixes
     proj = _project_prefixes(cfg, project_prefixes)
     blocked = _exclude_repos(cfg, exclude)
+    cache = get_cache()
+
+    if not force:
+        cached = cache.get_scan(origin, destination, proj, blocked, clean)
+        if cached is not None:
+            return cached
 
     ci = _circleci()
     ci_configured = ci is not None
@@ -470,7 +444,7 @@ def scan(origin: str, destination: str = "master", prefixes: str = "", project_p
     if ci is None and cfg.circleci_token == "":
         ci_error = "Sin CIRCLECI_TOKEN configurado."
 
-    repos = _apply_filters(_branch_repos(data.client, origin, proj), proj, blocked)
+    repos = _apply_filters(_branch_repos_cached(data.client, origin, proj, blocked), proj, blocked)
     workers = min(MAX_WORKERS, len(repos) or 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = []
@@ -496,7 +470,7 @@ def scan(origin: str, destination: str = "master", prefixes: str = "", project_p
         "prod": prod,
     }
 
-    return {
+    result = {
         "origin": origin,
         "destination": destination,
         "prefixes": clean,
@@ -505,6 +479,8 @@ def scan(origin: str, destination: str = "master", prefixes: str = "", project_p
         "stats": stats,
         "repos": items,
     }
+    cache.set_scan(origin, destination, proj, blocked, result, clean)
+    return result
 
 
 @router.post("/pr")
@@ -539,7 +515,7 @@ def create_missing_prs(origin: str, destination: str = "master", title: str = ""
     skipped: list[str] = []
     no_changes: list[str] = []
     failed: list[dict] = []
-    for repo in _apply_filters(_branch_repos(data.client, origin, proj), proj, blocked):
+    for repo in _apply_filters(_branch_repos_cached(data.client, origin, proj, blocked), proj, blocked):
         slug = repo.slug
         try:
             pr = data.client.find_pr(slug, origin, destination)
@@ -574,7 +550,7 @@ def update_pr_titles(origin: str, destination: str = "master", title: str = "", 
     updated: list[str] = []
     skipped: list[str] = []
     failed: list[dict] = []
-    for repo in _apply_filters(_branch_repos(data.client, origin, proj), proj, blocked):
+    for repo in _apply_filters(_branch_repos_cached(data.client, origin, proj, blocked), proj, blocked):
         slug = repo.slug
         try:
             pr = data.client.find_pr(slug, origin, destination)
@@ -612,7 +588,7 @@ def generate_tags(origin: str, prefixes: str = "", repo: str = "", destination: 
         )
 
     def _repos():
-        for r in _apply_filters(_branch_repos(data.client, origin, proj), proj, blocked):
+        for r in _apply_filters(_branch_repos_cached(data.client, origin, proj, blocked), proj, blocked):
             if not repo or r.slug == repo:
                 yield r
 
@@ -671,7 +647,7 @@ def circleci_config(origin: str, prefixes: str = "", repo: str = "", project_pre
 
     client = data.client
     try:
-        repos = _apply_filters(_branch_repos(client, origin, proj), proj, blocked)
+        repos = _apply_filters(_branch_repos_cached(client, origin, proj, blocked), proj, blocked)
     except bb.BitbucketError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     candidates = [r for r in repos if not repo or r.slug == repo]
@@ -711,7 +687,7 @@ def circleci_config(origin: str, prefixes: str = "", repo: str = "", project_pre
 
 
 @router.get("/diff")
-def diff(origin: str, destination: str = "master", mode: str = "diff", project_prefixes: str = "", exclude: str = ""):
+def diff(origin: str, destination: str = "master", mode: str = "diff", project_prefixes: str = "", exclude: str = "", force: int = 0):
     """Parámetros SSM de la iniciativa origin → destination.
 
     `mode=diff` (default): analiza solo los archivos tocados por el diff.
@@ -731,9 +707,15 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
     proj = _project_prefixes(cfg, project_prefixes)
     blocked = _exclude_repos(cfg, exclude)
     mode = mode if mode == "all" else "diff"
+    cache = get_cache()
 
-    master_repos = _apply_filters(_all_repos(data.client, proj), proj, blocked)
-    branch_repos = _apply_filters(_branch_repos(data.client, origin, proj), proj, blocked)
+    if not force:
+        cached = cache.get_diff(origin, destination, proj, blocked)
+        if cached is not None:
+            return cached
+
+    master_repos = _apply_filters(_all_repos_cached(data.client, proj, blocked), proj, blocked)
+    branch_repos = _apply_filters(_branch_repos_cached(data.client, origin, proj, blocked), proj, blocked)
     by_slug = {r.slug: r for r in branch_repos}
 
     def _repo_refs(client, repo):
@@ -752,14 +734,14 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
 
     def _resolve_master(client, repo) -> set:
         """Master params de un repo (cache o lectura completa)."""
-        key = _cache_key(repo.slug)
-        entry = _MASTER_CACHE.get(key)
-        if entry and _is_cache_valid(entry):
-            return set(entry[0])
+        cached_params = cache.get_master(repo.slug, destination)
+        if cached_params is not None:
+            return cached_params
         dest_ref = client.commit_for_branch(repo.slug, destination) or destination
         params = _read_files_params(client, repo.slug, dest_ref,
                                     client.list_files(repo.slug, dest_ref), prefixes)
-        _cache_master(repo.slug, params)
+        if params:
+            cache.set_master(repo.slug, destination, params)
         return params
 
     added_by_repo: dict[str, set] = {}
@@ -774,7 +756,8 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
                                                client.list_files(slug, origin_ref), prefixes)
             dest_params = _read_files_params(client, slug, dest_ref,
                                              client.list_files(slug, dest_ref), prefixes)
-            _cache_master(slug, dest_params)
+            if dest_params:
+                cache.set_master(slug, destination, dest_params)
             return slug, origin_params, dest_params
 
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(master_repos) or 1)) as ex:
@@ -865,7 +848,7 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
         }
         for slug in sorted(by_slug)
     ]
-    return {
+    result = {
         "origin": origin,
         "destination": destination,
         "prefixes": [p.rstrip("/") for p in prefixes],
@@ -874,3 +857,5 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
         "params": params,
         "removed": removed,
     }
+    cache.set_diff(origin, destination, proj, blocked, result)
+    return result
