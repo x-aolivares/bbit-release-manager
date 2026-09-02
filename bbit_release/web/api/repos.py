@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import logging
 import re
+import time
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
@@ -16,7 +17,8 @@ log = logging.getLogger("bbit.scan")
 
 router = APIRouter(prefix="/api", tags=["repos"])
 
-MAX_WORKERS = 8
+MAX_WORKERS = 4
+_SUBMIT_DELAY = 0.1
 
 # Cache en memoria de parámetros de master por sesión. Llave "session|slug" ->
 # set de (path, arn). Evita releer los masters (costosos) entre consultas.
@@ -431,10 +433,11 @@ def scan(origin: str, destination: str = "master", prefixes: str = "", project_p
     repos = _apply_filters(data.client.repos_with_branch(origin, prefixes=proj), proj, blocked)
     workers = min(MAX_WORKERS, len(repos) or 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [
-            ex.submit(_repo_scan, data.client, ci, repo, origin, destination, clean)
-            for repo in repos
-        ]
+        futures = []
+        for i, repo in enumerate(repos):
+            futures.append(ex.submit(_repo_scan, data.client, ci, repo, origin, destination, clean))
+            if i < len(repos) - 1:
+                time.sleep(_SUBMIT_DELAY)
         results = [f.result() for f in futures]
 
     items = [r[0] for r in results]

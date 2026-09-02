@@ -11,16 +11,43 @@ import httpx
 import re
 import time
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRIES = 3
-RETRY_BASE_DELAY = 2.0
+MAX_RETRIES = 5
+RETRY_BASE_DELAY = 1.0
 
 API_BASE = "https://api.bitbucket.org/2.0"
-MAX_WORKERS = 8
+MAX_WORKERS = 4
+
+
+class _RateLimiter:
+    """Token bucket simple para limitar requests concurrentes a Bitbucket."""
+
+    def __init__(self, max_concurrent: int = 4, min_interval: float = 0.25):
+        self._semaphore = threading.Semaphore(max_concurrent)
+        self._min_interval = min_interval
+        self._last_request_time = 0.0
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        self._semaphore.acquire()
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last_request_time
+            if elapsed < self._min_interval:
+                time.sleep(self._min_interval - elapsed)
+            self._last_request_time = time.monotonic()
+
+    def release(self) -> None:
+        self._semaphore.release()
+
+
+# Rate limiter global para todas las instancias de BitbucketClient
+_rate_limiter = _RateLimiter(max_concurrent=4, min_interval=0.25)
 
 
 class BitbucketError(Exception):
@@ -99,7 +126,11 @@ class BitbucketClient:
     def _request(self, method: str, path: str, params: dict | None = None):
         last_error: Exception | None = None
         for attempt in range(1, MAX_RETRIES + 1):
-            resp = self._client.request(method, path, params=params)
+            _rate_limiter.acquire()
+            try:
+                resp = self._client.request(method, path, params=params)
+            finally:
+                _rate_limiter.release()
             if resp.status_code in (401, 403):
                 raise BitbucketAuthError(
                     f"Bitbucket {resp.status_code}: token inválido o sin permisos"
