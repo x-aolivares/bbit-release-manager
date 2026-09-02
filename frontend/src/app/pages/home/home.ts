@@ -337,7 +337,8 @@ export class Home {
     const dest = this.projectsDest();
     const prefixes = this.prefixes().join(',');
     const exclude = this.blacklisted().join(',');
-    const base = `/api/scan?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}`;
+    const force = this.forceCache() ? 1 : 0;
+    const base = `/api/scan?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&force=${force}`;
 
     this.http.get<any>(base).subscribe({
       next: (r) => {
@@ -360,7 +361,8 @@ export class Home {
     this.error.set(null);
     const dest = this.projectsDest();
     const exclude = this.blacklisted().join(',');
-    this.http.get<DiffResponse>(`/api/diff?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&mode=${this.scanMode}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}`)
+    const force = this.forceCache() ? 1 : 0;
+    this.http.get<DiffResponse>(`/api/diff?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&mode=${this.scanMode}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&force=${force}`)
       .subscribe({
         next: (r) => {
           this.params.set(r.params ?? []);
