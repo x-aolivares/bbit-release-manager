@@ -61,6 +61,15 @@ class ReleaseCache:
                 created_at REAL NOT NULL
             )"""
         )
+        self._conn.execute(
+            """CREATE TABLE IF NOT EXISTS branch_repos (
+                cache_key TEXT PRIMARY KEY,
+                origin_branch TEXT NOT NULL,
+                destination_branch TEXT NOT NULL,
+                repos_json TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )"""
+        )
         self._conn.commit()
 
     # -- repos ----------------------------------------------------------------
@@ -92,6 +101,40 @@ class ReleaseCache:
         key = _cache_key(origin, destination, prefixes, exclude)
         self._conn.execute(
             "INSERT OR REPLACE INTO repo_cache (cache_key, origin, destination, data_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (key, origin, destination, json.dumps(repos), time.time()),
+        )
+        self._conn.commit()
+
+    # -- branch repos ---------------------------------------------------------
+
+    def get_branch_repos(
+        self,
+        origin: str,
+        destination: str,
+        prefixes: list[str] | None = None,
+        exclude: set[str] | None = None,
+    ) -> list[dict] | None:
+        key = _cache_key(origin, destination, prefixes, exclude)
+        row = self._conn.execute(
+            "SELECT repos_json FROM branch_repos WHERE cache_key = ?", (key,)
+        ).fetchone()
+        if row is None:
+            return None
+        log.debug("cache hit branch_repos: %s", key)
+        return json.loads(row[0])
+
+    def set_branch_repos(
+        self,
+        origin: str,
+        destination: str,
+        prefixes: list[str] | None,
+        exclude: set[str] | None,
+        repos: list[dict],
+    ) -> None:
+        key = _cache_key(origin, destination, prefixes, exclude)
+        self._conn.execute(
+            "INSERT OR REPLACE INTO branch_repos (cache_key, origin_branch, destination_branch, repos_json, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
             (key, origin, destination, json.dumps(repos), time.time()),
         )
@@ -202,13 +245,13 @@ class ReleaseCache:
         exclude: set[str] | None = None,
     ) -> None:
         key = _cache_key(origin, destination, prefixes, exclude)
-        for table in ("repo_cache", "scan_cache", "diff_cache"):
+        for table in ("repo_cache", "scan_cache", "diff_cache", "branch_repos"):
             self._conn.execute(f"DELETE FROM {table} WHERE cache_key = ?", (key,))
         self._conn.commit()
         log.debug("invalidated cache: %s", key)
 
     def invalidate_all(self) -> None:
-        for table in ("repo_cache", "scan_cache", "diff_cache", "master_cache"):
+        for table in ("repo_cache", "scan_cache", "diff_cache", "master_cache", "branch_repos"):
             self._conn.execute(f"DELETE FROM {table}")
         self._conn.commit()
         log.debug("invalidated all cache")

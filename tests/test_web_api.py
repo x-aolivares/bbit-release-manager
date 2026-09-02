@@ -635,9 +635,12 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
     assert body["repos"][0]["added"] == ["/config/a/b"]
 
 
-def test_diff_reclassifies_productivo_from_repo_without_branch(monkeypatch):
-    """Un param en el release de r1 pero que ya es productivo en master de r2
-    (que NO trae la rama origen) debe clasificarse `reutilizado`, no `nuevo`."""
+def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
+    """El diff NO barre todos los repos del workspace: solo resuelve master
+    params contra los repos que traen la rama origen (branch_repos).
+    Un repo que NO trae la rama ya no influye en la clasificación."""
+
+    list_calls = []
 
     class StubClient:
         def __init__(self, ws, tok, **kw):
@@ -650,6 +653,7 @@ def test_diff_reclassifies_productivo_from_repo_without_branch(monkeypatch):
         def close(self):
             pass
         def list_repos(self, prefixes=None):
+            list_calls.append(True)
             return [
                 SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
                 SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master"),
@@ -680,8 +684,10 @@ def test_diff_reclassifies_productivo_from_repo_without_branch(monkeypatch):
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    assert list_calls == []  # no barrió todo el workspace
+    # r1 master no tiene params → el param se considera 'nuevo' (r2 quedó fuera)
     assert body["params"] == [
-        {"param": "/config/shared/secret", "arn": "", "tipo": "reutilizado", "qa_value": None, "repos": ["r1"]},
+        {"param": "/config/shared/secret", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"]},
     ]
 
 
@@ -1085,6 +1091,102 @@ def test_tags_respect_exclude(monkeypatch):
     }).json()
     assert body["ok"] is True
     assert created == ["trans-a"]
+
+
+def test_scan_cache_hit_on_second_call(monkeypatch):
+    """El segundo scan con la misma rama origen/destino NO vuelve a consultar
+    la API (usa branch_repos + scan_cache de SQLite)."""
+    calls = {"branch": 0, "scan": 0}
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            calls["branch"] += 1
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch):
+            return "abc123"
+        def commits_behind(self, repo, branch, base):
+            return 1
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return "u"
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def raw_file(self, repo, ref, path):
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    params = {"origin": "release/x", "destination": "master", "prefixes": "uat"}
+    first = client.get("/api/scan", params=params).json()
+    assert first["repos"][0]["slug"] == "r1"
+    assert calls["branch"] == 1
+
+    second = client.get("/api/scan", params=params).json()
+    assert second["repos"][0]["slug"] == "r1"
+    assert calls["branch"] == 1  # no re-discovery en el segundo scan
+
+
+def test_scan_force_refreshes(monkeypatch):
+    """force=1 vuelve a consultar la API y sobreescribe el scan_cache."""
+    calls = {"branch": 0}
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            calls["branch"] += 1
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch):
+            return "abc123"
+        def commits_behind(self, repo, branch, base):
+            return 1
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return "u"
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def raw_file(self, repo, ref, path):
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    params = {"origin": "release/x", "destination": "master", "prefixes": "uat"}
+    client.get("/api/scan", params=params)
+    client.get("/api/scan", params=params)
+    assert calls["branch"] == 1  # cache hit en 2do
+
+    client.get("/api/scan", params={**params, "force": 1})
+    assert calls["branch"] == 2  # force consulta de nuevo
 
 
 def test_spa_serves_build_when_present():

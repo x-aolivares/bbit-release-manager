@@ -59,29 +59,16 @@ def _apply_filters(repos, prefs: list[str] | None, blocked: set[str]) -> list:
     return out
 
 
-def _branch_repos_cached(client, origin: str, prefs: list[str] | None, exclude: set[str]) -> list:
-    """Repos con la rama, con caché SQLite."""
+def _branch_repos_cached(client, origin: str, destination: str, prefs: list[str] | None, exclude: set[str]) -> list:
+    """Repos con la rama, con caché SQLite (tabla branch_repos)."""
     cache = get_cache()
-    cached = cache.get_repos(origin, "", prefs, exclude)
+    cached = cache.get_branch_repos(origin, destination, prefs, exclude)
     if cached is not None:
         from types import SimpleNamespace
-        return [SimpleNamespace(**r) for r in cached]
+        return [SimpleNamespace(**{**r, "slug": r["repo_name"]}) for r in cached]
     repos = client.repos_with_branch(origin, prefixes=prefs)
-    items = [{"slug": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch} for r in repos]
-    cache.set_repos(origin, "", prefs, exclude, items)
-    return repos
-
-
-def _all_repos_cached(client, prefs: list[str] | None, exclude: set[str]) -> list:
-    """Todos los repos (filtrados por prefijo), con caché SQLite."""
-    cache = get_cache()
-    cached = cache.get_repos("", "", prefs, exclude)
-    if cached is not None:
-        from types import SimpleNamespace
-        return [SimpleNamespace(**r) for r in cached]
-    repos = client.list_repos(prefixes=prefs)
-    items = [{"slug": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch} for r in repos]
-    cache.set_repos("", "", prefs, exclude, items)
+    items = [{"repo_name": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch} for r in repos]
+    cache.set_branch_repos(origin, destination, prefs, exclude, items)
     return repos
 
 
@@ -433,10 +420,10 @@ def scan(origin: str, destination: str = "master", prefixes: str = "", project_p
     blocked = _exclude_repos(cfg, exclude)
     cache = get_cache()
 
-    if not force:
-        cached = cache.get_scan(origin, destination, proj, blocked, clean)
-        if cached is not None:
-            return cached
+    if force:
+        cache.invalidate(origin, destination, proj, blocked)
+    elif cache.get_scan(origin, destination, proj, blocked, clean) is not None:
+        return cache.get_scan(origin, destination, proj, blocked, clean)
 
     ci = _circleci()
     ci_configured = ci is not None
@@ -444,7 +431,7 @@ def scan(origin: str, destination: str = "master", prefixes: str = "", project_p
     if ci is None and cfg.circleci_token == "":
         ci_error = "Sin CIRCLECI_TOKEN configurado."
 
-    repos = _apply_filters(_branch_repos_cached(data.client, origin, proj, blocked), proj, blocked)
+    repos = _apply_filters(_branch_repos_cached(data.client, origin, destination, proj, blocked), proj, blocked)
     workers = min(MAX_WORKERS, len(repos) or 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = []
@@ -515,7 +502,7 @@ def create_missing_prs(origin: str, destination: str = "master", title: str = ""
     skipped: list[str] = []
     no_changes: list[str] = []
     failed: list[dict] = []
-    for repo in _apply_filters(_branch_repos_cached(data.client, origin, proj, blocked), proj, blocked):
+    for repo in _apply_filters(_branch_repos_cached(data.client, origin, destination, proj, blocked), proj, blocked):
         slug = repo.slug
         try:
             pr = data.client.find_pr(slug, origin, destination)
@@ -550,7 +537,7 @@ def update_pr_titles(origin: str, destination: str = "master", title: str = "", 
     updated: list[str] = []
     skipped: list[str] = []
     failed: list[dict] = []
-    for repo in _apply_filters(_branch_repos_cached(data.client, origin, proj, blocked), proj, blocked):
+    for repo in _apply_filters(_branch_repos_cached(data.client, origin, destination, proj, blocked), proj, blocked):
         slug = repo.slug
         try:
             pr = data.client.find_pr(slug, origin, destination)
@@ -588,7 +575,7 @@ def generate_tags(origin: str, prefixes: str = "", repo: str = "", destination: 
         )
 
     def _repos():
-        for r in _apply_filters(_branch_repos_cached(data.client, origin, proj, blocked), proj, blocked):
+        for r in _apply_filters(_branch_repos_cached(data.client, origin, destination, proj, blocked), proj, blocked):
             if not repo or r.slug == repo:
                 yield r
 
@@ -647,7 +634,7 @@ def circleci_config(origin: str, prefixes: str = "", repo: str = "", project_pre
 
     client = data.client
     try:
-        repos = _apply_filters(_branch_repos_cached(client, origin, proj, blocked), proj, blocked)
+        repos = _apply_filters(_branch_repos_cached(client, origin, "", proj, blocked), proj, blocked)
     except bb.BitbucketError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     candidates = [r for r in repos if not repo or r.slug == repo]
@@ -709,13 +696,13 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
     mode = mode if mode == "all" else "diff"
     cache = get_cache()
 
-    if not force:
-        cached = cache.get_diff(origin, destination, proj, blocked)
-        if cached is not None:
-            return cached
+    if force:
+        cache.invalidate(origin, destination, proj, blocked)
+    elif cache.get_diff(origin, destination, proj, blocked) is not None:
+        return cache.get_diff(origin, destination, proj, blocked)
 
-    master_repos = _apply_filters(_all_repos_cached(data.client, proj, blocked), proj, blocked)
-    branch_repos = _apply_filters(_branch_repos_cached(data.client, origin, proj, blocked), proj, blocked)
+    master_repos = _apply_filters(_branch_repos_cached(data.client, origin, destination, proj, blocked), proj, blocked)
+    branch_repos = master_repos
     by_slug = {r.slug: r for r in branch_repos}
 
     def _repo_refs(client, repo):

@@ -160,3 +160,46 @@ def test_master_not_overwritten_by_different_slug(tmp_path):
     cache.set_master("r2", "master", {("/config/b", "")})
     assert cache.get_master("r1", "master") == {("/config/a", "")}
     assert cache.get_master("r2", "master") == {("/config/b", "")}
+
+
+def test_branch_repos_roundtrip(tmp_path):
+    cache = _make_cache(tmp_path)
+    repos = [{"repo_name": "r1", "name": "R1", "workspace": "ws", "default_branch": "master"}]
+    cache.set_branch_repos("release/x", "master", ["trans"], {"billing"}, repos)
+    got = cache.get_branch_repos("release/x", "master", ["trans"], {"billing"})
+    assert got == repos
+
+
+def test_branch_repos_miss(tmp_path):
+    cache = _make_cache(tmp_path)
+    assert cache.get_branch_repos("release/x", "master", None, None) is None
+
+
+def test_branch_repos_distinct_by_destination(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_branch_repos("release/x", "master", None, None, [{"repo_name": "a"}])
+    cache.set_branch_repos("release/x", "staging", None, None, [{"repo_name": "b"}])
+    assert cache.get_branch_repos("release/x", "master", None, None) == [{"repo_name": "a"}]
+    assert cache.get_branch_repos("release/x", "staging", None, None) == [{"repo_name": "b"}]
+
+
+def test_branch_repos_overwrite(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_branch_repos("release/x", "master", None, None, [{"repo_name": "old"}])
+    cache.set_branch_repos("release/x", "master", None, None, [{"repo_name": "new"}])
+    assert cache.get_branch_repos("release/x", "master", None, None) == [{"repo_name": "new"}]
+
+
+def test_invalidate_clears_branch_repos(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_branch_repos("release/x", "master", None, None, [{"repo_name": "a"}])
+    cache.invalidate("release/x", "master", None, None)
+    assert cache.get_branch_repos("release/x", "master", None, None) is None
+
+
+def test_invalidate_all_clears_branch_repos(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_branch_repos("release/x", "master", None, None, [{"repo_name": "a"}])
+    cache.invalidate_all()
+    assert cache.get_branch_repos("release/x", "master", None, None) is None
+
