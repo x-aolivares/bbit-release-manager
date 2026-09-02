@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 
 import pytest
+from concurrent.futures import ThreadPoolExecutor
 
 from bbit_release.cache import ReleaseCache, _cache_key, reset_cache
 
@@ -202,4 +203,24 @@ def test_invalidate_all_clears_branch_repos(tmp_path):
     cache.set_branch_repos("release/x", "master", None, None, [{"repo_name": "a"}])
     cache.invalidate_all()
     assert cache.get_branch_repos("release/x", "master", None, None) is None
+
+
+def test_thread_safe_concurrent_access(tmp_path):
+    """Muchos hilos leen y escriben la misma conexión sin InterfaceError."""
+    cache = _make_cache(tmp_path)
+    n = 32
+
+    def worker(i: int) -> None:
+        slug = f"r{i}"
+        cache.set_master(slug, "master", {(f"/config/{i}", "")})
+        got = cache.get_master(slug, "master")
+        assert got == {(f"/config/{i}", "")}
+        cache.set_branch_repos(slug, "master", None, None, [{"repo_name": slug}])
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        list(ex.map(worker, range(n)))
+
+    for i in range(n):
+        assert cache.get_master(f"r{i}", "master") == {(f"/config/{i}", "")}
+
 
