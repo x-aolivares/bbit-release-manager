@@ -310,6 +310,14 @@ export class Home {
     return this.destination || 'master';
   }
 
+  identityInitials(): string {
+    const id = this.identity().trim();
+    if (!id) return '';
+    const parts = id.split(/\s+/);
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+
   loadRepos() {
     if (!this.origin) return;
     this.reposLoading.set(true);

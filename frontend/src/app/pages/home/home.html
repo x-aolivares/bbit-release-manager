@@ -1,53 +1,54 @@
 <ion-header class="bb-nav">
   <ion-toolbar>
-    <ion-title>
-      <span class="bb-mark">BBit</span>
-      <span class="bb-mark-sep">/</span>
-      <span class="bb-app">Release Manager</span>
-    </ion-title>
-    <ion-buttons slot="end">
-      @if (connected()) {
-      <ion-chip class="bb-chip">
-        <ion-label class="bb-mono">{{ identity() }}</ion-label>
-      </ion-chip>
-      @if (!askDisconnect()) {
-      <ion-button fill="clear" size="small" (click)="askDisconnect.set(true)">Desconectar</ion-button>
-      } @else {
-      <span class="bb-muted bb-xs">¿Eliminar credenciales guardadas?</span>
-      <ion-button fill="outline" size="small" color="danger" (click)="disconnect(true)">Sí, eliminar</ion-button>
-      <ion-button fill="clear" size="small" (click)="disconnect(false)">No, conservar</ion-button>
-      <ion-button fill="clear" size="small" (click)="askDisconnect.set(false)">Cancelar</ion-button>
-      }
-      }
-    </ion-buttons>
+    <div class="bb-topbar">
+      <div class="bb-topbar-left">
+        <div class="bb-topbar-title">
+          <span class="bb-mark">BBit</span>
+          <span class="bb-mark-sep">/</span>
+          <span class="bb-app">Release Manager</span>
+        </div>
+        <span class="bb-topbar-divider"></span>
+        <span class="bb-topbar-badge"
+              [class.bb-topbar-badge--ok]="health()"
+              [class.bb-topbar-badge--neutral]="!health()">
+          <span class="bb-dot" [class.bb-dot--ok]="health()" [class.bb-dot--pending]="!health()"></span>
+          @if (health()) {
+            API online
+          } @else {
+            API checking…
+          }
+        </span>
+        <span class="bb-topbar-meta">
+          @if (connected()) {
+            {{ repoCount() }} repos
+          } @else {
+            sin sesión
+          }
+          · v{{ health()?.version ?? '…' }}
+        </span>
+      </div>
+
+      <div class="bb-topbar-right">
+        @if (connected()) {
+        <div class="bb-topbar-user">
+          <span class="bb-topbar-avatar">{{ identityInitials() }}</span>
+          <span class="bb-topbar-username">{{ identity() }}</span>
+        </div>
+        @if (!askDisconnect()) {
+        <button class="bb-btn-secondary" (click)="askDisconnect.set(true)">Desconectar</button>
+        } @else {
+        <span class="bb-muted bb-xs">¿Eliminar credenciales guardadas?</span>
+        <button class="bb-btn-danger" (click)="disconnect(true)">Sí, eliminar</button>
+        <button class="bb-btn-secondary" (click)="disconnect(false)">No, conservar</button>
+        <button class="bb-btn-secondary" (click)="askDisconnect.set(false)">Cancelar</button>
+        }
+        }
+      </div>
+    </div>
   </ion-toolbar>
 </ion-header>
 
 <ion-content>
-  <div class="bb-status bb-surface">
-    <span class="bb-status-item">
-      API
-      @if (health()) {
-        <span class="bb-dot bb-dot--ok"></span>
-        <span class="bb-muted">online</span>
-      } @else {
-        <span class="bb-dot bb-dot--pending"></span>
-        <span class="bb-muted">checking…</span>
-      }
-    </span>
-
-    <span class="bb-status-item">
-      Sesión
-      @if (connected()) {
-        <span class="bb-badge bb-badge--ok">{{ repoCount() }} repos</span>
-      } @else {
-        <span class="bb-badge bb-badge--neutral">sin sesión</span>
-      }
-    </span>
-
-    <span class="bb-status-item bb-muted">v{{ health()?.version ?? '…' }}</span>
-  </div>
-
   <div class="bb-page">
     @if (error()) {
     <ion-card class="bb-card">
