@@ -348,6 +348,9 @@
             }
             Cargar parámetros
           </button>
+          <button class="bb-btn-secondary" (click)="openParams()" [disabled]="params().length === 0 && removed().length === 0">
+            Ver parámetros
+          </button>
         </div>
         <div class="bb-muted bb-hint">
           "Solo el diff" analiza los archivos tocados por la rama (rápido);
@@ -404,7 +407,7 @@
     @if (reportOpen()) {
     <div class="bb-modal-mask" (click)="reportOpen.set(false)">
       <div class="bb-modal" (click)="$event.stopPropagation()">
-        <div class="bb-modal-title">Listado de proyectos — {{ origin }}</div>
+        <div class="bb-modal-title">{{ reportMode === 'params' ? 'Parámetros SSM' : 'Listado de proyectos — ' + origin }}</div>
         <div class="bb-modal-row">
           <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'branch'"
                   (click)="selectReportMode('branch')">URLs rama origen

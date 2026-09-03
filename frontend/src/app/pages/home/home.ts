@@ -420,6 +420,13 @@ export class Home {
     this.reportOpen.set(true);
   }
 
+  openParams() {
+    this.reportMode = 'params';
+    this.reportEnv.set(0);
+    this.reportCopied.set(false);
+    this.reportOpen.set(true);
+  }
+
   selectReportMode(mode: 'branch' | 'pr' | 'tag' | 'params') {
     this.reportMode = mode;
     this.reportCopied.set(false);
