@@ -476,6 +476,16 @@
   justify-content: flex-end;
 }
 
+.bb-modal--small {
+  max-width: 420px;
+}
+
+.bb-confirm-text {
+  font-size: var(--bb-font-base);
+  color: var(--bb-text-secondary);
+  margin: 0;
+}
+
 .bb-btn-sm {
   font-size: var(--bb-font-sm);
   height: var(--bb-control-h);

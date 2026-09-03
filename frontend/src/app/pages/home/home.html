@@ -34,14 +34,7 @@
           <span class="bb-topbar-avatar">{{ identityInitials() }}</span>
           <span class="bb-topbar-username">{{ identity() }}</span>
         </div>
-        @if (!askDisconnect()) {
         <button class="bb-btn-secondary" (click)="askDisconnect.set(true)">Desconectar</button>
-        } @else {
-        <span class="bb-muted bb-xs">¿Eliminar credenciales guardadas?</span>
-        <button class="bb-btn-danger" (click)="disconnect(true)">Sí, eliminar</button>
-        <button class="bb-btn-secondary" (click)="disconnect(false)">No, conservar</button>
-        <button class="bb-btn-secondary" (click)="askDisconnect.set(false)">Cancelar</button>
-        }
         }
       </div>
     </div>
@@ -58,25 +51,6 @@
 
     @if (!connected()) {
     <div class="bb-auth">
-      @if (storedCreds()) {
-      <div class="bb-auth-card">
-        <p class="bb-auth-title">Ya hay credenciales guardadas</p>
-        <p class="bb-auth-text">
-          Las credenciales de <code class="bb-auth-code">config/env.base</code> siguen funcionando.
-        </p>
-        <div class="bb-auth-actions">
-          <button class="bb-btn-primary" (click)="reuseSession()" [disabled]="loading()">
-            @if (loading()) {
-            <span class="bb-spinner-inline"></span>
-            } @else {
-            Volver a iniciar sesión
-            }
-          </button>
-          <button class="bb-auth-plain" (click)="storedCreds.set(false)">Usar otro token</button>
-        </div>
-      </div>
-      }
-
       <div class="bb-auth-block">
         <p class="bb-auth-title">Conectar a Bitbucket</p>
         <div class="bb-auth-form">
@@ -110,6 +84,26 @@
           </p>
         </div>
       </div>
+      @if (storedCreds()) {
+      <div class="bb-auth-card">
+        <p class="bb-auth-title">Ya hay credenciales guardadas</p>
+        <p class="bb-auth-text">
+          Las credenciales de <code class="bb-auth-code">config/env.base</code> siguen funcionando.
+        </p>
+        <div class="bb-auth-actions">
+          <button class="bb-btn-primary" (click)="reuseSession()" [disabled]="loading()">
+            @if (loading()) {
+            <span class="bb-spinner-inline"></span>
+            } @else {
+            Volver a iniciar sesión
+            }
+          </button>
+          <button class="bb-auth-plain" (click)="storedCreds.set(false)">Usar otro token</button>
+        </div>
+      </div>
+      }
+
+
     </div>
     }
 
@@ -335,7 +329,8 @@
             }
             Cargar parámetros
           </button>
-          <button class="bb-btn-secondary" (click)="openParams()" [disabled]="params().length === 0 && removed().length === 0">
+          <button class="bb-btn-secondary" (click)="openParams()"
+                  [disabled]="params().length === 0 && removed().length === 0">
             Ver parámetros
           </button>
         </div>
@@ -381,7 +376,9 @@
     @if (reportOpen()) {
     <div class="bb-modal-mask" (click)="reportOpen.set(false)">
       <div class="bb-modal" (click)="$event.stopPropagation()">
-        <div class="bb-modal-title">{{ reportMode === 'params' ? 'Parámetros SSM' : 'Listado de proyectos — ' + origin }}</div>
+        <div class="bb-modal-title">{{ reportMode === 'params' ? 'Parámetros SSM' : 'Listado de proyectos — ' + origin
+          }}
+        </div>
         <div class="bb-modal-row">
           <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'branch'"
                   (click)="selectReportMode('branch')">URLs rama origen
@@ -412,6 +409,21 @@
             {{ reportCopied() ? '¡Copiado!' : 'Copiar' }}
           </button>
           <button class="bb-btn-secondary bb-btn-sm" (click)="reportOpen.set(false)">Cerrar</button>
+        </div>
+      </div>
+    </div>
+    }
+    @if (askDisconnect()) {
+    <div class="bb-modal-mask" (click)="askDisconnect.set(false)">
+      <div class="bb-modal bb-modal--small" (click)="$event.stopPropagation()">
+        <div class="bb-modal-title">Desconectar</div>
+        <p class="bb-confirm-text">
+          ¿Querés cerrar la sesión y conservar o eliminar las credenciales guardadas?
+        </p>
+        <div class="bb-modal-row bb-modal-actions">
+          <button class="bb-btn-danger bb-btn-sm" (click)="disconnect(true)">Sí, eliminar credenciales</button>
+          <button class="bb-btn-secondary bb-btn-sm" (click)="disconnect(false)">Conservar</button>
+          <button class="bb-btn-secondary bb-btn-sm" (click)="askDisconnect.set(false)">Cancelar</button>
         </div>
       </div>
     </div>
