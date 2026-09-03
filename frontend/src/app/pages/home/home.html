@@ -7,17 +7,17 @@
     </ion-title>
     <ion-buttons slot="end">
       @if (connected()) {
-        <ion-chip class="bb-chip">
-          <ion-label class="bb-mono">{{ identity() }}</ion-label>
-        </ion-chip>
-        @if (!askDisconnect()) {
-          <ion-button fill="clear" size="small" (click)="askDisconnect.set(true)">Desconectar</ion-button>
-        } @else {
-          <span class="bb-muted bb-xs">¿Eliminar credenciales guardadas?</span>
-          <ion-button fill="outline" size="small" color="danger" (click)="disconnect(true)">Sí, eliminar</ion-button>
-          <ion-button fill="clear" size="small" (click)="disconnect(false)">No, conservar</ion-button>
-          <ion-button fill="clear" size="small" (click)="askDisconnect.set(false)">Cancelar</ion-button>
-        }
+      <ion-chip class="bb-chip">
+        <ion-label class="bb-mono">{{ identity() }}</ion-label>
+      </ion-chip>
+      @if (!askDisconnect()) {
+      <ion-button fill="clear" size="small" (click)="askDisconnect.set(true)">Desconectar</ion-button>
+      } @else {
+      <span class="bb-muted bb-xs">¿Eliminar credenciales guardadas?</span>
+      <ion-button fill="outline" size="small" color="danger" (click)="disconnect(true)">Sí, eliminar</ion-button>
+      <ion-button fill="clear" size="small" (click)="disconnect(false)">No, conservar</ion-button>
+      <ion-button fill="clear" size="small" (click)="askDisconnect.set(false)">Cancelar</ion-button>
+      }
       }
     </ion-buttons>
   </ion-toolbar>
@@ -50,300 +50,208 @@
 
   <div class="bb-page">
     @if (error()) {
-      <ion-card class="bb-card">
-        <ion-card-content class="bb-error">{{ error() }}</ion-card-content>
-      </ion-card>
+    <ion-card class="bb-card">
+      <ion-card-content class="bb-error">{{ error() }}</ion-card-content>
+    </ion-card>
     }
 
     @if (storedCreds() && !connected()) {
-      <ion-card class="bb-card">
-        <ion-card-header>
-          <ion-card-title class="bb-subtitle">Ya hay credenciales guardadas</ion-card-title>
-        </ion-card-header>
-        <ion-card-content>
-          <div class="bb-muted bb-hint">
-            Las credenciales de <span class="bb-mono">config/env.base</span> siguen funcionando.
-          </div>
-          <ion-button expand="block" class="bb-btn" (click)="reuseSession()" [disabled]="loading()">
-            @if (loading()) {
-              <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
-            } @else {
-              Volver a iniciar sesión
-            }
-          </ion-button>
-          <ion-button expand="block" fill="clear" size="small" (click)="storedCreds.set(false)">
-            Usar otro token
-          </ion-button>
-        </ion-card-content>
-      </ion-card>
+    <ion-card class="bb-card">
+      <ion-card-header>
+        <ion-card-title class="bb-subtitle">Ya hay credenciales guardadas</ion-card-title>
+      </ion-card-header>
+      <ion-card-content>
+        <div class="bb-muted bb-hint">
+          Las credenciales de <span class="bb-mono">config/env.base</span> siguen funcionando.
+        </div>
+        <ion-button expand="block" class="bb-btn" (click)="reuseSession()" [disabled]="loading()">
+          @if (loading()) {
+          <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
+          } @else {
+          Volver a iniciar sesión
+          }
+        </ion-button>
+        <ion-button expand="block" fill="clear" size="small" (click)="storedCreds.set(false)">
+          Usar otro token
+        </ion-button>
+      </ion-card-content>
+    </ion-card>
     }
 
     @if (!connected()) {
-      <ion-card class="bb-card">
-        <ion-card-header>
-          <ion-card-title class="bb-subtitle">Conectar a Bitbucket</ion-card-title>
-        </ion-card-header>
-        <ion-card-content>
-          <ion-item>
-            <ion-label position="stacked">Workspace</ion-label>
-            <ion-input [(ngModel)]="workspace" placeholder="my_org_web_dev"></ion-input>
-          </ion-item>
-          <ion-item>
+    <ion-card class="bb-card">
+      <ion-card-header>
+        <ion-card-title class="bb-subtitle">Conectar a Bitbucket</ion-card-title>
+      </ion-card-header>
+      <ion-card-content>
+        <ion-item>
+          <ion-label position="stacked">Workspace</ion-label>
+          <ion-input [(ngModel)]="workspace" placeholder="my_org_web_dev"></ion-input>
+        </ion-item>
+        <ion-item>
             <span class="bb-field-label">
               <ion-label position="stacked">Token de Bitbucket</ion-label>
               <a class="bb-token-link" [href]="bbTokenUrl" target="_blank">Generar token</a>
             </span>
-            <ion-input class="bb-token-input" [(ngModel)]="token" type="password" placeholder="ATATT..."></ion-input>
-          </ion-item>
-          <ion-item>
+          <ion-input class="bb-token-input" [(ngModel)]="token" type="password" placeholder="ATATT..."></ion-input>
+        </ion-item>
+        <ion-item>
             <span class="bb-field-label">
               <ion-label position="stacked">Token de CircleCI (para deploys y tags)</ion-label>
               <a class="bb-token-link" [href]="cciTokenUrl" target="_blank">Generar token</a>
             </span>
-            <ion-input class="bb-token-input" [(ngModel)]="circleciToken" type="password" placeholder="CCIPAT..."></ion-input>
-          </ion-item>
-          <ion-button expand="block" class="bb-btn" (click)="connect()" [disabled]="loading() || !token">
-            @if (loading()) {
-              <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
-            } @else {
-              Conectar y guardar token
-            }
-          </ion-button>
-          <div class="bb-muted bb-hint">
-            Los tokens se guardan en <span class="bb-mono">config/env.base</span> y se reutilizan hasta que vencen.
-          </div>
-        </ion-card-content>
-      </ion-card>
+          <ion-input class="bb-token-input" [(ngModel)]="circleciToken" type="password"
+                     placeholder="CCIPAT..."></ion-input>
+        </ion-item>
+        <ion-button expand="block" class="bb-btn" (click)="connect()" [disabled]="loading() || !token">
+          @if (loading()) {
+          <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
+          } @else {
+          Conectar y guardar token
+          }
+        </ion-button>
+        <div class="bb-muted bb-hint">
+          Los tokens se guardan en <span class="bb-mono">config/env.base</span> y se reutilizan hasta que vencen.
+        </div>
+      </ion-card-content>
+    </ion-card>
     }
 
     @if (connected()) {
-      <div class="bb-panel">
-        <div class="bb-section">
-          <div class="bb-section-header">Resolver ramas</div>
-          <div class="bb-grid2">
-            <div class="bb-field">
-              <label>Rama origen</label>
-              <input class="bb-input bb-mono" [(ngModel)]="origin" placeholder="release/REP-325073" />
-            </div>
-            <div class="bb-field">
-              <label>Rama destino</label>
-              <input class="bb-input bb-mono" [(ngModel)]="destination" placeholder="master" />
-            </div>
+    <div class="bb-panel">
+      <div class="bb-section">
+        <div class="bb-section-header">Resolver ramas</div>
+        <div class="bb-row-top">
+          <div class="bb-field">
+            <input class="bb-input bb-mono" [(ngModel)]="origin" placeholder="Ingrese rama origen"/>
           </div>
           <div class="bb-field">
-            <label>Prefijos de proyectos</label>
-            <div class="bb-chips">
-              @for (p of projectPrefixes(); track p; let i = $index) {
-                <span class="bb-chip-pill bb-mono">{{ p }}
-                  <button class="bb-chip-x" (click)="removeProjectPrefix(i)">×</button>
-                </span>
-              }
-              @if (!addingProjectPrefix()) {
-                <button class="bb-chip-add" (click)="addingProjectPrefix.set(true)">+ Agregar</button>
-              } @else {
-                <input class="bb-chip-input" [(ngModel)]="projectPrefixInput" placeholder="orders" (keyup.enter)="addProjectPrefix()" />
-                <button class="bb-chip-add" (click)="addProjectPrefix()">OK</button>
-                <button class="bb-chip-add" (click)="addingProjectPrefix.set(false)">×</button>
-              }
-            </div>
-            <small class="bb-hint">Filtra repos cuyo slug empieza con el prefijo. Vacío = todos.</small>
+            <input class="bb-input bb-mono" [(ngModel)]="destination" placeholder="Ingrese rama destino"/>
           </div>
-          <div class="bb-field">
-            <label>Proyectos a excluir (blacklist)</label>
+          <label class="bb-force">
+            <input type="checkbox" [(ngModel)]="forceCache"/>
+            Forzar consultas (ignorar caché)
+          </label>
+          <button class="bb-btn-secondary" (click)="loadProjects()" [disabled]="projectsLoading() || !origin">
+            @if (projectsLoading()) {
+            <span class="bb-spinner-inline"></span>
+            }
+            Obtener proyectos
+          </button>
+          <button class="bb-btn-primary" (click)="loadTable()" [disabled]="tableLoading() || !origin">
+            @if (tableLoading()) {
+            <span class="bb-spinner-inline"></span>
+            }
+            Cargar Tabla
+          </button>
+        </div>
+        <div class="bb-row-top">
+          <div class="bb-field" style="flex: 1;">
+            <label>Proyectos a Excluir (Blacklist)</label>
             <div class="bb-chips">
               @for (p of blacklisted(); track p; let i = $index) {
-                <span class="bb-chip-pill bb-chip-pill--danger bb-mono">{{ p }}
-                  <button class="bb-chip-x" (click)="removeBlacklist(i)">×</button>
-                </span>
+              <span class="bb-chip-pill bb-chip-pill--danger bb-mono">{{ p }}
+                    <button class="bb-chip-x" (click)="removeBlacklist(i)">×</button>
+                  </span>
               }
               @if (!addingBlacklist()) {
-                <button class="bb-chip-add" (click)="addingBlacklist.set(true)">+ Excluir</button>
+              <button class="bb-chip-add" (click)="addingBlacklist.set(true)">+ Excluir</button>
               } @else {
-                <input class="bb-chip-input" [(ngModel)]="blacklistInput" placeholder="repo-a" (keyup.enter)="addBlacklist()" />
-                <button class="bb-chip-add" (click)="addBlacklist()">OK</button>
-                <button class="bb-chip-add" (click)="addingBlacklist.set(false)">×</button>
+              <input class="bb-chip-input" [(ngModel)]="blacklistInput" placeholder="repo-a"
+                     (keyup.enter)="addBlacklist()"/>
+              <button class="bb-chip-add" (click)="addBlacklist()">OK</button>
+              <button class="bb-chip-add" (click)="addingBlacklist.set(false)">×</button>
               }
             </div>
-            <small class="bb-hint">Se omite del descubrimiento. Usá el slug exacto.</small>
           </div>
-          <div class="bb-actions">
-            <label class="bb-force">
-              <input type="checkbox" [(ngModel)]="forceCache" />
-              Forzar consultas (ignorar caché)
-            </label>
-            <button class="bb-btn" (click)="loadProjects()" [disabled]="projectsLoading() || !origin">
-              @if (projectsLoading()) {
-                <span class="bb-spinner-inline"></span>
-              }
-              Obtener proyectos
-            </button>
-            <button class="bb-btn-primary" (click)="loadTable()" [disabled]="tableLoading() || !origin">
-              @if (tableLoading()) {
-                <span class="bb-spinner-inline"></span>
-              }
-              Cargar tabla
-            </button>
-          </div>
-        </div>
-
-        <div class="bb-section-divider"></div>
-
-        <div class="bb-section">
-          <div class="bb-section-header">Pull Request</div>
-          <div class="bb-grid2">
-            <div class="bb-field">
-              <label>Rama origen</label>
-              <input class="bb-input bb-mono" [value]="origin" readonly placeholder="Ingrese rama origen" />
-            </div>
-          </div>
-          <div class="bb-field">
-            <label>Ambientes de deploy</label>
+          <div class="bb-field" style="flex: 1;">
+            <label>Prefijos de Proyectos</label>
             <div class="bb-chips">
+              @for (p of projectPrefixes(); track p; let i = $index) {
+              <span class="bb-chip-pill bb-mono">{{ p }}
+                    <button class="bb-chip-x" (click)="removeProjectPrefix(i)">×</button>
+                  </span>
+              }
+              @if (!addingProjectPrefix()) {
+              <button class="bb-chip-add" (click)="addingProjectPrefix.set(true)">+ Agregar</button>
+              } @else {
+              <input class="bb-chip-input" [(ngModel)]="projectPrefixInput" placeholder="orders"
+                     (keyup.enter)="addProjectPrefix()"/>
+              <button class="bb-chip-add" (click)="addProjectPrefix()">OK</button>
+              <button class="bb-chip-add" (click)="addingProjectPrefix.set(false)">×</button>
+              }
+            </div>
+          </div>
+          <div class="bb-field" style="flex: 1;">
+            <label>Ambientes de Deploy</label>
+            <div class="bb-chips" style="flex: 1;">
               @for (p of prefixes(); track p; let i = $index) {
-                <span class="bb-chip-pill bb-mono">{{ p }}
-                  <button class="bb-chip-x" (click)="removePrefix(i)">×</button>
-                </span>
+              <span class="bb-chip-pill bb-mono">{{ p }}
+                    <button class="bb-chip-x" (click)="removePrefix(i)">×</button>
+                  </span>
               }
               @if (!addingPrefix()) {
-                <button class="bb-chip-add" (click)="addingPrefix.set(true)">+ Agregar</button>
+              <button class="bb-chip-add" (click)="addingPrefix.set(true)">+ Agregar</button>
               } @else {
-                <input class="bb-chip-input" [(ngModel)]="prefixInput" placeholder="uat" (keyup.enter)="addPrefix()" />
-                <button class="bb-chip-add" (click)="addPrefix()">OK</button>
-                <button class="bb-chip-add" (click)="addingPrefix.set(false)">×</button>
+              <input class="bb-chip-input" [(ngModel)]="prefixInput" placeholder="uat" (keyup.enter)="addPrefix()"/>
+              <button class="bb-chip-add" (click)="addPrefix()">OK</button>
+              <button class="bb-chip-add" (click)="addingPrefix.set(false)">×</button>
               }
             </div>
-          </div>
-          <div class="bb-field">
-            <label>Título del PR</label>
-            <input class="bb-input" [(ngModel)]="prTitle" placeholder="Release: {origin} → {destination}" />
-          </div>
-          <div class="bb-actions">
-            @if (repos().length > 0) {
-              <button class="bb-btn-secondary" (click)="syncPrs('create')" [disabled]="syncingPrs()">Crear PRs faltantes</button>
-              <button class="bb-btn-secondary" (click)="syncPrs('update')" [disabled]="syncingPrs()">Actualizar títulos</button>
-              <button class="bb-btn-secondary" (click)="generateTags()"
-                      [disabled]="tagging() || !ciConfigured()">
-                @if (tagging()) {
-                  <span class="bb-spinner-inline"></span>
-                }
-                Generar tags faltantes
-              </button>
-            }
-          </div>
-        </div>
-
-        <div class="bb-section-divider"></div>
-
-        <div class="bb-section">
-          <div class="bb-section-header">Parámetros SSM</div>
-          <div class="bb-field">
-            <label>Modo de análisis de SSM</label>
-            <div class="bb-seg">
-              <button class="bb-seg-btn" [class.bb-seg-btn--active]="scanMode === 'diff'"
-                      (click)="scanMode = 'diff'">Solo el diff</button>
-              <button class="bb-seg-btn" [class.bb-seg-btn--active]="scanMode === 'all'"
-                      (click)="scanMode = 'all'">Todos los archivos</button>
-            </div>
-            <div class="bb-muted bb-hint">
-              "Solo el diff" analiza los archivos tocados por la rama (rápido);
-              "Todos los archivos" recorre el repo completo por ref (más lento).
-            </div>
-          </div>
-          <div class="bb-actions">
-            <button class="bb-btn" (click)="loadParams()" [disabled]="paramsLoading() || !origin">
-              @if (paramsLoading()) {
-                <span class="bb-spinner-inline"></span>
-              }
-              Cargar parámetros
-            </button>
           </div>
         </div>
       </div>
+    </div>
+    }
 
-      @if (projects().length > 0) {
-        <ion-card class="bb-card">
-          <ion-card-header>
-            <ion-card-title class="bb-subtitle">
-              Proyectos con '{{ origin }}' ({{ projects().length }})
-            </ion-card-title>
-            <ion-button fill="clear" size="small" (click)="loadProjects()" [disabled]="projectsLoading()">
-              @if (projectsLoading()) {
-                <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
-              } @else {
-                Refrescar
-              }
-            </ion-button>
-          </ion-card-header>
-          <ion-card-content>
-            <div class="bb-chips bb-project-list">
-              @for (p of projects(); track p.slug) {
-                <a class="bb-chip-pill bb-mono" [href]="'https://bitbucket.org/' + p.workspace + '/' + p.slug"
-                   target="_blank">{{ p.slug }}</a>
-              }
-            </div>
-          </ion-card-content>
-        </ion-card>
-      }
+    @if (ciError()) {
+    <ion-card class="bb-card">
+      <ion-card-content class="bb-error">{{ ciError() }}</ion-card-content>
+    </ion-card>
+    }
 
-      @if (stats()) {
-        <div class="bb-stats">
-          <div class="bb-stat">
-            <p class="bb-stat-label">Repos</p>
-            <p class="bb-stat-value">{{ stats()!.repos }}</p>
-          </div>
-          <div class="bb-stat">
-            <p class="bb-stat-label">Con PR</p>
-            <p class="bb-stat-value bb-stat--ok">{{ stats()!.with_pr }}/{{ stats()!.repos }}</p>
-          </div>
-          <div class="bb-stat">
-            <p class="bb-stat-label">Sincronizados</p>
-            <p class="bb-stat-value bb-stat--warn">{{ stats()!.synced }}/{{ stats()!.repos }}</p>
-          </div>
-          <div class="bb-stat" [title]="missingTooltip()">
-            <p class="bb-stat-label">Por taguear</p>
-            <p class="bb-stat-value bb-stat--danger">{{ reposNeedingTags().length }}/{{ stats()!.repos }}</p>
-          </div>
-          <div class="bb-stat">
-            <p class="bb-stat-label">Con deploy en prod</p>
-            <p class="bb-stat-value bb-stat--danger">{{ stats()!.prod }}/{{ stats()!.repos }}</p>
-          </div>
+    @if (repos().length > 0) {
+    <ion-card class="bb-card">
+      <ion-card-header>
+        <div style="display: flex; gap: 8px;">
+
+          <input class="" [(ngModel)]="prTitle" placeholder="Título del PR"/>
+          <button class="bb-btn-secondary" (click)="syncPrs('create')" [disabled]="syncingPrs()">Crear PRs faltantes
+          </button>
+          <button class="bb-btn-secondary" (click)="syncPrs('update')" [disabled]="syncingPrs()">Actualizar</button>
+          <button class="bb-btn-secondary" (click)="generateTags()"
+                  [disabled]="tagging() || !ciConfigured()">
+            @if (tagging()) {
+            <span class="bb-spinner-inline"></span>
+            }
+            Generar tags faltantes
+          </button>
+          <button class="bb-btn-secondary bb-btn-sm" (click)="reportOpen.set(true)">Previsualizar información del
+            Reporte
+          </button>
+          <button class="bb-btn-secondary bb-btn-sm" (click)="loadTable()" [disabled]="tableLoading()">
+            @if (tableLoading()) {
+            <span class="bb-spinner-inline"></span>
+            } @else {
+            Refrescar
+            }
+          </button>
         </div>
-      }
-
-      @if (ciError()) {
-        <ion-card class="bb-card">
-          <ion-card-content class="bb-error">{{ ciError() }}</ion-card-content>
-        </ion-card>
-      }
-
-      @if (repos().length > 0) {
-        <ion-card class="bb-card">
-            <ion-card-header>
-            <ion-card-title class="bb-subtitle">
-              Repos con '{{ origin }}' ({{ repos().length }})
-            </ion-card-title>
-            <ion-button fill="clear" size="small" (click)="loadTable()" [disabled]="tableLoading()">
-              @if (tableLoading()) {
-                <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
-              } @else {
-                Refrescar
-              }
-            </ion-button>
-          </ion-card-header>
-          <ion-card-content>
-            <div class="bb-table bb-table--repos"
-                 [style.--bb-cols]="'1.4fr 1fr 1fr 1.4fr' + prefixCols()">
-              <div class="bb-repos-head">
-                <span>Repositorio</span>
-                <span>Sync</span>
-                <span>PR</span>
-                <span>Tagged Commit</span>
-                @for (p of prefixes(); track p) {
-                  <span class="bb-deploy-col bb-mono">{{ p }}</span>
-                }
-              </div>
-              @for (repo of repos(); track repo.slug) {
-                <div class="bb-repos-row">
+      </ion-card-header>
+      <ion-card-content>
+        <div class="bb-table bb-table--repos"
+             [style.--bb-cols]="'1.4fr 1fr 1fr 1.4fr' + prefixCols()">
+          <div class="bb-repos-head">
+            <span>Repositorio</span>
+            <span>Sync</span>
+            <span>PR</span>
+            <span>Tagged Commit</span>
+            @for (p of prefixes(); track p) {
+            <span class="bb-deploy-col bb-mono">{{ p }}</span>
+            }
+          </div>
+          @for (repo of repos(); track repo.slug) {
+          <div class="bb-repos-row">
                   <span>
                     <a class="bb-link bb-repo-name" [href]="repoUrl(repo)" target="_blank"
                        [title]="repo.name">{{ repo.name }}</a>
@@ -354,12 +262,12 @@
                       </span>
                     }
                   </span>
-                  <span>
+            <span>
                     @let sync = syncInfo(repo.behind);
                     <span class="bb-dot {{ syncDot(sync.cls) }}"></span>
                     <span class="bb-sync {{ sync.cls }}">{{ sync.label }}</span>
                   </span>
-                  <span>
+            <span>
                     @if (repo.pr.exists && repo.pr.url) {
                       <a class="bb-link" [href]="repo.pr.url" target="_blank"
                          [title]="repo.pr.title">
@@ -385,12 +293,12 @@
                       </span>
                     }
                   </span>
-                  <span>
+            <span>
                     <a class="bb-link bb-mono" [href]="repo.branch_url" target="_blank"
                        [title]="'Rama ' + origin">{{ repo.commit.slice(0, 8) }}</a>
                   </span>
-                  @for (p of prefixes(); track p) {
-                    <span class="bb-deploy-col">
+            @for (p of prefixes(); track p) {
+            <span class="bb-deploy-col">
                       @let badge = envTagBadge(repo, p);
                       @if (badge) {
                         <a class="bb-link bb-mono bb-deploy-badge {{ badge.cls }}"
@@ -413,104 +321,125 @@
                         <span class="bb-muted">—</span>
                       }
                     </span>
-                  }
-                </div>
-              }
-            </div>
-          </ion-card-content>
-        </ion-card>
-
-        <div class="bb-preview-panel">
-          <div class="bb-preview-title">Previsualización del reporte</div>
-          <div class="bb-actions" style="margin-bottom: 12px;">
-            <button class="bb-btn-secondary bb-btn-sm" (click)="openReport()">Generar listado de proyectos</button>
-          </div>
-          <div class="bb-preview-content">
-@for (repo of repos(); track repo.slug) {
-<span class="bb-mono">{{ repo.name }}</span> | Sync: {{ syncInfo(repo.behind).label }} | PR: {{ repo.pr.exists ? 'Sí' : 'No' }} | Tagged: {{ repo.commit.slice(0, 8) }}
-}
-          </div>
-        </div>
-      }
-
-      @if (params().length > 0 || removed().length > 0) {
-        <ion-card class="bb-card">
-            <ion-card-header>
-            <ion-card-title class="bb-subtitle">
-              Parámetros SSM en '{{ origin }}' vs '{{ destination }}'
-            </ion-card-title>
-            <ion-button fill="clear" size="small" (click)="loadParams()" [disabled]="paramsLoading()">
-              @if (paramsLoading()) {
-                <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
-              } @else {
-                Refrescar
-              }
-            </ion-button>
-          </ion-card-header>
-          <ion-card-content>
-            @if (removed().length > 0) {
-              <p class="bb-muted bb-hint bb-params-hint">
-                "Solo destino" = existe en '{{ destination }}' pero ya no se referencias en '{{ origin }}'.
-                No implica que el parámetro haya que borrarlo.
-              </p>
             }
-            <div class="bb-table bb-table--params">
-              <div class="bb-repos-head">
-                <span>Parámetro</span>
-                <span>Estado</span>
-                <span>Valor en QA</span>
-              </div>
-              @for (p of paramRows(); track p.param) {
-                <div class="bb-repos-row">
-                  <span class="bb-mono">{{ p.param }}</span>
-                  <span>
-                    <span class="bb-badge {{ tipoClass(p.estado) }}">{{ estadoLabel(p.estado) }}</span>
-                  </span>
-                  <span class="bb-mono bb-qa-val">------</span>
-                </div>
-              }
-            </div>
-          </ion-card-content>
-        </ion-card>
-      } @else if (repos().length > 0) {
-        <ion-card class="bb-card">
-          <ion-card-content class="bb-muted">Sin parámetros SSM.</ion-card-content>
-        </ion-card>
-      }
-
-      @if (reportOpen()) {
-        <div class="bb-modal-mask" (click)="reportOpen.set(false)">
-          <div class="bb-modal" (click)="$event.stopPropagation()">
-            <div class="bb-modal-title">Listado de proyectos — {{ origin }}</div>
-            <div class="bb-modal-row">
-              <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'branch'"
-                      (click)="selectReportMode('branch')">URLs rama origen</button>
-              <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'pr'"
-                      (click)="selectReportMode('pr')">URLs de PRs</button>
-              <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'tag'"
-                      (click)="selectReportMode('tag')">URLs de tags</button>
-              <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'params'"
-                      (click)="selectReportMode('params')">Parámetros SSM</button>
-            </div>
-            @if (reportMode === 'tag' && prefixes().length > 1) {
-              <div class="bb-modal-row">
-                <span class="bb-muted">Ambiente:</span>
-                @for (p of prefixes(); track p; let i = $index) {
-                  <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportEnv() === i"
-                          (click)="reportEnv.set(i); reportCopied.set(false)">{{ p }}</button>
-                }
-              </div>
-            }
-            <textarea class="bb-report-area" readonly [value]="reportText()"></textarea>
-            <div class="bb-modal-row bb-modal-actions">
-              <button class="bb-btn-primary bb-btn-sm" (click)="copyReport()">
-                {{ reportCopied() ? '¡Copiado!' : 'Copiar' }}
-              </button>
-              <button class="bb-btn-secondary bb-btn-sm" (click)="reportOpen.set(false)">Cerrar</button>
-            </div>
           </div>
+          }
         </div>
-      }
+      </ion-card-content>
+    </ion-card>
     }
+
+    @if (connected()) {
+    <div class="bb-panel">
+      <div class="bb-section">
+        <div class="bb-section-header">Parámetros SSM</div>
+        <div class="bb-row-top">
+          <div class="bb-seg">
+            <button class="bb-seg-btn" [class.bb-seg-btn--active]="scanMode === 'diff'"
+                    (click)="scanMode = 'diff'">Solo el diff
+            </button>
+            <button class="bb-seg-btn" [class.bb-seg-btn--active]="scanMode === 'all'"
+                    (click)="scanMode = 'all'">Todos los archivos
+            </button>
+          </div>
+          <button class="bb-btn-secondary" (click)="loadParams()" [disabled]="paramsLoading() || !origin">
+            @if (paramsLoading()) {
+            <span class="bb-spinner-inline"></span>
+            }
+            Cargar parámetros
+          </button>
+        </div>
+        <div class="bb-muted bb-hint">
+          "Solo el diff" analiza los archivos tocados por la rama (rápido);
+          "Todos los archivos" recorre el repo completo por ref (más lento).
+        </div>
+      </div>
+    </div>
+    }
+
+    @if (params().length > 0 || removed().length > 0) {
+    <ion-card class="bb-card">
+      <ion-card-header>
+        <div style="display: flex; gap: 8px;">
+          <button class="bb-btn-secondary bb-btn-sm" (click)="loadParams()" [disabled]="paramsLoading()">
+            @if (paramsLoading()) {
+            <span class="bb-spinner-inline"></span>
+            } @else {
+            Refrescar
+            }
+          </button>
+        </div>
+      </ion-card-header>
+      <ion-card-content>
+        @if (removed().length > 0) {
+        <p class="bb-muted bb-hint bb-params-hint">
+          "Solo destino" = existe en '{{ destination }}' pero ya no se referencias en '{{ origin }}'.
+          No implica que el parámetro haya que borrarlo.
+        </p>
+        }
+        <div class="bb-table bb-table--params">
+          <div class="bb-repos-head">
+            <span>Parámetro</span>
+            <span>Estado</span>
+            <span>Valor en QA</span>
+          </div>
+          @for (p of paramRows(); track p.param) {
+          <div class="bb-repos-row">
+            <span class="bb-mono">{{ p.param }}</span>
+            <span class="bb-badge {{ tipoClass(p.estado) }}">{{ estadoLabel(p.estado) }}</span>
+            <span class="bb-mono bb-qa-val">------</span>
+          </div>
+          }
+        </div>
+
+      </ion-card-content>
+    </ion-card>
+    } @else if (repos().length > 0) {
+    <ion-card class="bb-card">
+      <ion-card-content class="bb-muted">Sin parámetros SSM.</ion-card-content>
+    </ion-card>
+    }
+
+
+    @if (reportOpen()) {
+    <div class="bb-modal-mask" (click)="reportOpen.set(false)">
+      <div class="bb-modal" (click)="$event.stopPropagation()">
+        <div class="bb-modal-title">Listado de proyectos — {{ origin }}</div>
+        <div class="bb-modal-row">
+          <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'branch'"
+                  (click)="selectReportMode('branch')">URLs rama origen
+          </button>
+          <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'pr'"
+                  (click)="selectReportMode('pr')">URLs de PRs
+          </button>
+          <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'tag'"
+                  (click)="selectReportMode('tag')">URLs de tags
+          </button>
+          <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'params'"
+                  (click)="selectReportMode('params')">Parámetros SSM
+          </button>
+        </div>
+        @if (reportMode === 'tag' && prefixes().length > 1) {
+        <div class="bb-modal-row">
+          <span class="bb-muted">Ambiente:</span>
+          @for (p of prefixes(); track p; let i = $index) {
+          <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportEnv() === i"
+                  (click)="reportEnv.set(i); reportCopied.set(false)">{{ p }}
+          </button>
+          }
+        </div>
+        }
+        <textarea class="bb-report-area" readonly [value]="reportText()"></textarea>
+        <div class="bb-modal-row bb-modal-actions">
+          <button class="bb-btn-primary bb-btn-sm" (click)="copyReport()">
+            {{ reportCopied() ? '¡Copiado!' : 'Copiar' }}
+          </button>
+          <button class="bb-btn-secondary bb-btn-sm" (click)="reportOpen.set(false)">Cerrar</button>
+        </div>
+      </div>
+    </div>
+    }
+
+
   </div>
 </ion-content>

@@ -393,10 +393,10 @@
 
 .bb-btn-primary,
 .bb-btn-secondary {
-  font-size: 13.5px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
   border-radius: 6px;
-  padding: 9px 18px;
+  padding: 8px 16px;
   cursor: pointer;
   border: 1px solid transparent;
 }
@@ -413,7 +413,7 @@
 }
 
 .bb-btn-secondary {
-  background: transparent;
+  background: var(--bb-elevated, #fff);
   color: var(--bb-blue);
   border-color: var(--bb-blue);
 }
@@ -574,7 +574,6 @@ button.bb-link {
 
 .bb-btn {
   --background: var(--bb-blue);
-  --color: white;
   margin-top: 8px;
 }
 
@@ -616,6 +615,13 @@ button.bb-link {
   display: flex;
   gap: 8px;
   margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.bb-row-top {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
   flex-wrap: wrap;
 }
 
@@ -692,33 +698,3 @@ button.bb-link {
   gap: 12px;
 }
 
-.bb-preview-panel {
-  background: var(--bb-surface);
-  border: 1px solid var(--bb-border);
-  border-radius: var(--bb-border-radius);
-  padding: 14px;
-  margin-top: 8px;
-}
-
-.bb-preview-title {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--bb-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  margin-bottom: 10px;
-}
-
-.bb-preview-content {
-  font-family: var(--bb-font-mono);
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 300px;
-  overflow-y: auto;
-  background: var(--bb-elevated, #fafbfc);
-  border: 1px solid var(--bb-border);
-  border-radius: 6px;
-  padding: 12px;
-}
