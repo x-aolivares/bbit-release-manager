@@ -13,6 +13,21 @@
   --bb-text: #172b4d;
   --bb-text-secondary: #5e6c84;
   --bb-border-radius: 3px;
+
+  /* Semantic status tokens */
+  --bb-success: #36b37e;
+  --bb-success-bg: #e3fcef;
+  --bb-success-border: #b3f5d0;
+
+  --bb-warning: #ff991f;
+  --bb-warning-bg: #fff3cd;
+  --bb-warning-border: #ffc107;
+
+  --bb-danger: #d93025;
+  --bb-danger-bg: #f8d7da;
+  --bb-danger-border: #ffbdad;
+
+  --bb-elevated: #fff;
 }
 
 body {
@@ -52,15 +67,15 @@ body {
 }
 
 .bb-badge--ok {
-  background: #e3fcef;
-  color: #006644;
-  border-color: #b3f5d0;
+  background: var(--bb-success-bg);
+  color: var(--bb-success);
+  border-color: var(--bb-success-border);
 }
 
 .bb-badge--warn {
-  background: #ffebe6;
-  color: #d93025;
-  border-color: #ffbdad;
+  background: var(--bb-warning-bg);
+  color: var(--bb-warning);
+  border-color: var(--bb-warning-border);
 }
 
 .bb-badge--neutral {

@@ -48,15 +48,15 @@
 }
 
 .bb-dot--ok {
-  background: #36b37e;
+  background: var(--bb-success);
 }
 
 .bb-dot--fail {
-  background: var(--bb-color-danger, #d93025);
+  background: var(--bb-danger);
 }
 
 .bb-dot--pending {
-  background: var(--bb-color-warning, #ff991f);
+  background: var(--bb-warning);
 }
 
 .bb-muted {
@@ -86,7 +86,7 @@
 }
 
 .bb-error {
-  color: var(--bb-color-danger, #d93025);
+  color: var(--bb-danger);
 }
 
 .bb-loading {
@@ -162,7 +162,7 @@
 }
 
 .bb-tagwarn {
-  color: #b26a00;
+  color: var(--bb-warning);
   cursor: help;
 }
 
@@ -213,7 +213,7 @@
 .bb-input {
   font-size: 14px;
   color: var(--bb-text);
-  background: var(--bb-elevated, #fff);
+  background: var(--bb-elevated);
   border: 1px solid var(--bb-border);
   border-radius: 6px;
   padding: 8px 10px;
@@ -245,8 +245,8 @@
 }
 
 .bb-chip-pill--danger {
-  border-color: var(--bb-color-danger, #d93025);
-  color: var(--bb-color-danger, #d93025);
+  border-color: var(--bb-danger);
+  color: var(--bb-danger);
 }
 
 .bb-force {
@@ -269,7 +269,7 @@
 }
 
 .bb-chip-x:hover {
-  color: var(--bb-color-danger, #d93025);
+  color: var(--bb-danger);
 }
 
 .bb-chip-add {
@@ -289,7 +289,7 @@
   border-radius: 999px;
   padding: 4px 12px;
   width: 90px;
-  background: var(--bb-elevated, #fff);
+  background: var(--bb-elevated);
 }
 
 .bb-seg {
@@ -337,7 +337,7 @@
 }
 
 .bb-modal {
-  background: var(--bb-elevated, #fff);
+  background: var(--bb-elevated);
   border: 1px solid var(--bb-border);
   border-radius: 8px;
   max-width: 720px;
@@ -375,7 +375,7 @@
   width: 100%;
   min-height: 260px;
   resize: vertical;
-  font-family: var(--bb-font-mono);
+  font-family: var(--bb-mono);
   font-size: 12.5px;
   line-height: 1.5;
   border: 1px solid var(--bb-border);
@@ -413,7 +413,7 @@
 }
 
 .bb-btn-secondary {
-  background: var(--bb-elevated, #fff);
+  background: var(--bb-elevated);
   color: var(--bb-blue);
   border-color: var(--bb-blue);
 }
@@ -466,15 +466,15 @@
 }
 
 .bb-stat--ok {
-  color: #36b37e;
+  color: var(--bb-success);
 }
 
 .bb-stat--warn {
-  color: #ff991f;
+  color: var(--bb-warning);
 }
 
 .bb-stat--danger {
-  color: #d93025;
+  color: var(--bb-danger);
 }
 
 .bb-sync {
@@ -486,18 +486,18 @@
 }
 
 .bb-sync--ok {
-  background: #e3f6ec;
-  color: #1f7a4d;
+  background: var(--bb-success-bg);
+  color: var(--bb-success);
 }
 
 .bb-sync--warn {
-  background: #fff3cd;
-  color: #856404;
+  background: var(--bb-warning-bg);
+  color: var(--bb-warning);
 }
 
 .bb-sync--danger {
-  background: #f8d7da;
-  color: #721c24;
+  background: var(--bb-danger-bg);
+  color: var(--bb-danger);
 }
 
 .bb-link {
@@ -526,7 +526,7 @@ button.bb-link {
 }
 
 .bb-taggen-link {
-  color: #b26a00;
+  color: var(--bb-warning);
 }
 
 .bb-repo-name {
@@ -552,18 +552,18 @@ button.bb-link {
 }
 
 .bb-deploy--ok {
-  background: #e3f6ec;
-  color: #1f7a4d;
+  background: var(--bb-success-bg);
+  color: var(--bb-success);
 }
 
 .bb-deploy--danger {
-  background: #f8d7da;
-  color: #721c24;
+  background: var(--bb-danger-bg);
+  color: var(--bb-danger);
 }
 
 .bb-deploy--pending {
-  background: #fff3cd;
-  color: #856404;
+  background: var(--bb-warning-bg);
+  color: var(--bb-warning);
 }
 
 .bb-xs {
@@ -607,10 +607,6 @@ button.bb-link {
   margin-top: 2px;
 }
 
-.bb-mono {
-  font-family: var(--bb-font-mono);
-}
-
 .bb-row {
   display: flex;
   gap: 8px;
@@ -634,29 +630,24 @@ button.bb-link {
 }
 
 .bb-green {
-  color: #36b37e;
-  font-family: var(--bb-font-mono);
+  color: var(--bb-success);
+  font-family: var(--bb-mono);
 }
 
 .bb-red {
-  color: #d93025;
-  font-family: var(--bb-font-mono);
-}
-
-.bb-badge--warn {
-  background: #fff3cd;
-  color: #856404;
+  color: var(--bb-danger);
+  font-family: var(--bb-mono);
 }
 
 .bb-badge--danger {
-  background: #f8d7da;
-  color: #721c24;
+  background: var(--bb-danger-bg);
+  color: var(--bb-danger);
 }
 
 .bb-retaag {
   display: inline-block;
-  background: #fff3cd;
-  color: #856404;
+  background: var(--bb-warning-bg);
+  color: var(--bb-warning);
   font-size: 11px;
   font-weight: 600;
   border-radius: 3px;
