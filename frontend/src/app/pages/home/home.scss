@@ -663,3 +663,62 @@ button.bb-link {
   width: 18px;
   height: 18px;
 }
+
+.bb-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bb-section-header {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--bb-text);
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--bb-border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bb-section-divider {
+  border-top: 1px solid var(--bb-border);
+  margin: 4px 0;
+}
+
+.bb-grid3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.bb-preview-panel {
+  background: var(--bb-surface);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-border-radius);
+  padding: 14px;
+  margin-top: 8px;
+}
+
+.bb-preview-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--bb-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 10px;
+}
+
+.bb-preview-content {
+  font-family: var(--bb-font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--bb-elevated, #fafbfc);
+  border: 1px solid var(--bb-border);
+  border-radius: 6px;
+  padding: 12px;
+}

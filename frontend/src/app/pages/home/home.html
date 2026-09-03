@@ -118,122 +118,145 @@
 
     @if (connected()) {
       <div class="bb-panel">
-        <div class="bb-panel-title">Resolver ramas</div>
-        <div class="bb-grid2">
-          <div class="bb-field">
-            <label>Rama origen</label>
-            <input class="bb-input bb-mono" [(ngModel)]="origin" placeholder="release/REP-325073" />
+        <div class="bb-section">
+          <div class="bb-section-header">Resolver ramas</div>
+          <div class="bb-grid2">
+            <div class="bb-field">
+              <label>Rama origen</label>
+              <input class="bb-input bb-mono" [(ngModel)]="origin" placeholder="release/REP-325073" />
+            </div>
+            <div class="bb-field">
+              <label>Rama destino</label>
+              <input class="bb-input bb-mono" [(ngModel)]="destination" placeholder="master" />
+            </div>
           </div>
           <div class="bb-field">
-            <label>Rama destino</label>
-            <input class="bb-input bb-mono" [(ngModel)]="destination" placeholder="master" />
+            <label>Prefijos de proyectos</label>
+            <div class="bb-chips">
+              @for (p of projectPrefixes(); track p; let i = $index) {
+                <span class="bb-chip-pill bb-mono">{{ p }}
+                  <button class="bb-chip-x" (click)="removeProjectPrefix(i)">×</button>
+                </span>
+              }
+              @if (!addingProjectPrefix()) {
+                <button class="bb-chip-add" (click)="addingProjectPrefix.set(true)">+ Agregar</button>
+              } @else {
+                <input class="bb-chip-input" [(ngModel)]="projectPrefixInput" placeholder="orders" (keyup.enter)="addProjectPrefix()" />
+                <button class="bb-chip-add" (click)="addProjectPrefix()">OK</button>
+                <button class="bb-chip-add" (click)="addingProjectPrefix.set(false)">×</button>
+              }
+            </div>
+            <small class="bb-hint">Filtra repos cuyo slug empieza con el prefijo. Vacío = todos.</small>
           </div>
-        </div>
-        <div class="bb-field">
-          <label>Modo de análisis de SSM</label>
-          <div class="bb-seg">
-            <button class="bb-seg-btn" [class.bb-seg-btn--active]="scanMode === 'diff'"
-                    (click)="scanMode = 'diff'">Solo el diff</button>
-            <button class="bb-seg-btn" [class.bb-seg-btn--active]="scanMode === 'all'"
-                    (click)="scanMode = 'all'">Todos los archivos</button>
+          <div class="bb-field">
+            <label>Proyectos a excluir (blacklist)</label>
+            <div class="bb-chips">
+              @for (p of blacklisted(); track p; let i = $index) {
+                <span class="bb-chip-pill bb-chip-pill--danger bb-mono">{{ p }}
+                  <button class="bb-chip-x" (click)="removeBlacklist(i)">×</button>
+                </span>
+              }
+              @if (!addingBlacklist()) {
+                <button class="bb-chip-add" (click)="addingBlacklist.set(true)">+ Excluir</button>
+              } @else {
+                <input class="bb-chip-input" [(ngModel)]="blacklistInput" placeholder="repo-a" (keyup.enter)="addBlacklist()" />
+                <button class="bb-chip-add" (click)="addBlacklist()">OK</button>
+                <button class="bb-chip-add" (click)="addingBlacklist.set(false)">×</button>
+              }
+            </div>
+            <small class="bb-hint">Se omite del descubrimiento. Usá el slug exacto.</small>
           </div>
-          <div class="bb-muted bb-hint">
-            "Solo el diff" analiza los archivos tocados por la rama (rápido);
-            "Todos los archivos" recorre el repo completo por ref (más lento).
-          </div>
-        </div>
-        <div class="bb-field">
-          <label>Ambientes de deploy</label>
-          <div class="bb-chips">
-            @for (p of prefixes(); track p; let i = $index) {
-              <span class="bb-chip-pill bb-mono">{{ p }}
-                <button class="bb-chip-x" (click)="removePrefix(i)">×</button>
-              </span>
-            }
-            @if (!addingPrefix()) {
-              <button class="bb-chip-add" (click)="addingPrefix.set(true)">+ Agregar</button>
-            } @else {
-              <input class="bb-chip-input" [(ngModel)]="prefixInput" placeholder="uat" (keyup.enter)="addPrefix()" />
-              <button class="bb-chip-add" (click)="addPrefix()">OK</button>
-              <button class="bb-chip-add" (click)="addingPrefix.set(false)">×</button>
-            }
-          </div>
-        </div>
-        <div class="bb-field">
-          <label>Prefijos de proyectos</label>
-          <div class="bb-chips">
-            @for (p of projectPrefixes(); track p; let i = $index) {
-              <span class="bb-chip-pill bb-mono">{{ p }}
-                <button class="bb-chip-x" (click)="removeProjectPrefix(i)">×</button>
-              </span>
-            }
-            @if (!addingProjectPrefix()) {
-              <button class="bb-chip-add" (click)="addingProjectPrefix.set(true)">+ Agregar</button>
-            } @else {
-              <input class="bb-chip-input" [(ngModel)]="projectPrefixInput" placeholder="orders" (keyup.enter)="addProjectPrefix()" />
-              <button class="bb-chip-add" (click)="addProjectPrefix()">OK</button>
-              <button class="bb-chip-add" (click)="addingProjectPrefix.set(false)">×</button>
-            }
-          </div>
-          <small class="bb-hint">Filtra repos cuyo slug empieza con el prefijo. Vacío = todos.</small>
-        </div>
-        <div class="bb-field">
-          <label>Proyectos a excluir (blacklist)</label>
-          <div class="bb-chips">
-            @for (p of blacklisted(); track p; let i = $index) {
-              <span class="bb-chip-pill bb-chip-pill--danger bb-mono">{{ p }}
-                <button class="bb-chip-x" (click)="removeBlacklist(i)">×</button>
-              </span>
-            }
-            @if (!addingBlacklist()) {
-              <button class="bb-chip-add" (click)="addingBlacklist.set(true)">+ Excluir</button>
-            } @else {
-              <input class="bb-chip-input" [(ngModel)]="blacklistInput" placeholder="repo-a" (keyup.enter)="addBlacklist()" />
-              <button class="bb-chip-add" (click)="addBlacklist()">OK</button>
-              <button class="bb-chip-add" (click)="addingBlacklist.set(false)">×</button>
-            }
-          </div>
-          <small class="bb-hint">Se omite del descubrimiento. Usá el slug exacto.</small>
-        </div>
-        <div class="bb-field">
-          <label>Título del PR</label>
-          <input class="bb-input" [(ngModel)]="prTitle" placeholder="Release: {origin} → {destination}" />
-        </div>
-        <div class="bb-actions">
-          <label class="bb-force">
-            <input type="checkbox" [(ngModel)]="forceCache" />
-            Forzar consultas (ignorar caché)
-          </label>
-          <button class="bb-btn" (click)="loadProjects()" [disabled]="projectsLoading() || !origin">
-            @if (projectsLoading()) {
-              <span class="bb-spinner-inline"></span>
-            }
-            Obtener proyectos
-          </button>
-          <button class="bb-btn-primary" (click)="loadTable()" [disabled]="tableLoading() || !origin">
-            @if (tableLoading()) {
-              <span class="bb-spinner-inline"></span>
-            }
-            Cargar tabla
-          </button>
-          <button class="bb-btn" (click)="loadParams()" [disabled]="paramsLoading() || !origin">
-            @if (paramsLoading()) {
-              <span class="bb-spinner-inline"></span>
-            }
-            Cargar parámetros
-          </button>
-          @if (repos().length > 0) {
-            <button class="bb-btn-secondary" (click)="syncPrs('create')" [disabled]="syncingPrs()">Crear PRs faltantes</button>
-            <button class="bb-btn-secondary" (click)="syncPrs('update')" [disabled]="syncingPrs()">Actualizar títulos</button>
-            <button class="bb-btn-secondary" (click)="generateTags()"
-                    [disabled]="tagging() || !ciConfigured()">
-              @if (tagging()) {
+          <div class="bb-actions">
+            <label class="bb-force">
+              <input type="checkbox" [(ngModel)]="forceCache" />
+              Forzar consultas (ignorar caché)
+            </label>
+            <button class="bb-btn" (click)="loadProjects()" [disabled]="projectsLoading() || !origin">
+              @if (projectsLoading()) {
                 <span class="bb-spinner-inline"></span>
               }
-              Generar tags faltantes
+              Obtener proyectos
             </button>
-            <button class="bb-btn-secondary" (click)="openReport()">Generar listado de proyectos</button>
-          }
+            <button class="bb-btn-primary" (click)="loadTable()" [disabled]="tableLoading() || !origin">
+              @if (tableLoading()) {
+                <span class="bb-spinner-inline"></span>
+              }
+              Cargar tabla
+            </button>
+          </div>
+        </div>
+
+        <div class="bb-section-divider"></div>
+
+        <div class="bb-section">
+          <div class="bb-section-header">Pull Request</div>
+          <div class="bb-grid2">
+            <div class="bb-field">
+              <label>Rama origen</label>
+              <input class="bb-input bb-mono" [value]="origin" readonly placeholder="Ingrese rama origen" />
+            </div>
+          </div>
+          <div class="bb-field">
+            <label>Ambientes de deploy</label>
+            <div class="bb-chips">
+              @for (p of prefixes(); track p; let i = $index) {
+                <span class="bb-chip-pill bb-mono">{{ p }}
+                  <button class="bb-chip-x" (click)="removePrefix(i)">×</button>
+                </span>
+              }
+              @if (!addingPrefix()) {
+                <button class="bb-chip-add" (click)="addingPrefix.set(true)">+ Agregar</button>
+              } @else {
+                <input class="bb-chip-input" [(ngModel)]="prefixInput" placeholder="uat" (keyup.enter)="addPrefix()" />
+                <button class="bb-chip-add" (click)="addPrefix()">OK</button>
+                <button class="bb-chip-add" (click)="addingPrefix.set(false)">×</button>
+              }
+            </div>
+          </div>
+          <div class="bb-field">
+            <label>Título del PR</label>
+            <input class="bb-input" [(ngModel)]="prTitle" placeholder="Release: {origin} → {destination}" />
+          </div>
+          <div class="bb-actions">
+            @if (repos().length > 0) {
+              <button class="bb-btn-secondary" (click)="syncPrs('create')" [disabled]="syncingPrs()">Crear PRs faltantes</button>
+              <button class="bb-btn-secondary" (click)="syncPrs('update')" [disabled]="syncingPrs()">Actualizar títulos</button>
+              <button class="bb-btn-secondary" (click)="generateTags()"
+                      [disabled]="tagging() || !ciConfigured()">
+                @if (tagging()) {
+                  <span class="bb-spinner-inline"></span>
+                }
+                Generar tags faltantes
+              </button>
+            }
+          </div>
+        </div>
+
+        <div class="bb-section-divider"></div>
+
+        <div class="bb-section">
+          <div class="bb-section-header">Parámetros SSM</div>
+          <div class="bb-field">
+            <label>Modo de análisis de SSM</label>
+            <div class="bb-seg">
+              <button class="bb-seg-btn" [class.bb-seg-btn--active]="scanMode === 'diff'"
+                      (click)="scanMode = 'diff'">Solo el diff</button>
+              <button class="bb-seg-btn" [class.bb-seg-btn--active]="scanMode === 'all'"
+                      (click)="scanMode = 'all'">Todos los archivos</button>
+            </div>
+            <div class="bb-muted bb-hint">
+              "Solo el diff" analiza los archivos tocados por la rama (rápido);
+              "Todos los archivos" recorre el repo completo por ref (más lento).
+            </div>
+          </div>
+          <div class="bb-actions">
+            <button class="bb-btn" (click)="loadParams()" [disabled]="paramsLoading() || !origin">
+              @if (paramsLoading()) {
+                <span class="bb-spinner-inline"></span>
+              }
+              Cargar parámetros
+            </button>
+          </div>
         </div>
       </div>
 
@@ -396,6 +419,18 @@
             </div>
           </ion-card-content>
         </ion-card>
+
+        <div class="bb-preview-panel">
+          <div class="bb-preview-title">Previsualización del reporte</div>
+          <div class="bb-actions" style="margin-bottom: 12px;">
+            <button class="bb-btn-secondary bb-btn-sm" (click)="openReport()">Generar listado de proyectos</button>
+          </div>
+          <div class="bb-preview-content">
+@for (repo of repos(); track repo.slug) {
+<span class="bb-mono">{{ repo.name }}</span> | Sync: {{ syncInfo(repo.behind).label }} | PR: {{ repo.pr.exists ? 'Sí' : 'No' }} | Tagged: {{ repo.commit.slice(0, 8) }}
+}
+          </div>
+        </div>
       }
 
       @if (params().length > 0 || removed().length > 0) {
