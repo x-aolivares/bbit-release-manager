@@ -8,6 +8,9 @@
           <span class="bb-app">Release Manager</span>
         </div>
         <span class="bb-topbar-divider"></span>
+        <button class="bb-btn-icon" (click)="sidebarOpen.set(true)" aria-label="Abrir historial">
+          <ion-icon name="time-outline"></ion-icon>
+        </button>
         <span class="bb-topbar-badge"
               [class.bb-topbar-badge--ok]="health()"
               [class.bb-topbar-badge--neutral]="!health()">
@@ -42,12 +45,27 @@
 </ion-header>
 
 <ion-content>
-  <div class="bb-page">
-    @if (error()) {
-    <ion-card class="bb-card">
-      <ion-card-content class="bb-error">{{ error() }}</ion-card-content>
-    </ion-card>
-    }
+  <div class="bb-page-wrapper">
+    <!-- Mobile sidebar mask -->
+    <div class="bb-sidebar-mask" [class.bb-sidebar-mask--visible]="sidebarOpen()" (click)="sidebarOpen.set(false)"></div>
+
+    <!-- Sidebar -->
+    <app-session-sidebar
+      class="bb-sidebar-host"
+      [class.bb-sidebar--open]="sidebarOpen()"
+      [sessions]="sessions()"
+      [currentSessionId]="currentSessionId()"
+      (sessionSelected)="onSessionSelected($event)"
+      (sessionDeleted)="onSessionDeleted($event)"
+      (historyCleared)="onHistoryCleared()">
+    </app-session-sidebar>
+
+    <div class="bb-page">
+      @if (error()) {
+      <ion-card class="bb-card">
+        <ion-card-content class="bb-error">{{ error() }}</ion-card-content>
+      </ion-card>
+      }
 
     @if (!connected()) {
     <div class="bb-auth">
@@ -429,6 +447,6 @@
     </div>
     }
 
-
   </div>
+</div>
 </ion-content>

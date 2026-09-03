@@ -1,0 +1,54 @@
+<div class="bb-sidebar">
+  <div class="bb-sidebar-header">
+    <h3 class="bb-sidebar-title">Historial de sesiones</h3>
+    @if (sessions().length > 0) {
+      <ion-button class="bb-clear-btn" fill="clear" size="small" (click)="onClear()">
+        <ion-icon slot="start" name="trash-outline"></ion-icon>
+        Limpiar
+      </ion-button>
+    }
+  </div>
+
+  @if (sessions().length === 0) {
+    <div class="bb-sidebar-empty">
+      <ion-icon name="time-outline" class="bb-empty-icon"></ion-icon>
+      <p>Sin sesiones guardadas</p>
+      <span class="bb-empty-hint">Se guardan automáticamente al consultar repos</span>
+    </div>
+  } @else {
+    <ion-list class="bb-session-list" lines="none">
+      @for (session of sessions(); track trackById($index, session)) {
+        <ion-item
+          class="bb-session-item"
+          [class.bb-session-item--active]="session.id === currentSessionId()"
+          (click)="onSelect(session)"
+          button
+          detail="false">
+          
+          <div class="bb-session-main">
+            <div class="bb-session-name bb-mono">{{ session.name }}</div>
+            <div class="bb-session-meta">
+              <span class="bb-session-updated">{{ formatRelativeTime(session.updatedAt) }}</span>
+              @if (session.forceCache) {
+                <span class="bb-session-badge bb-session-badge--force">force</span>
+              }
+              @if (session.prefixes.length > 0) {
+                <span class="bb-session-badge">{{ session.prefixes.join(', ') }}</span>
+              }
+            </div>
+          </div>
+
+          <ion-button
+            slot="end"
+            fill="clear"
+            size="small"
+            class="bb-delete-btn"
+            (click)="onDelete($event, session.id)"
+            aria-label="Eliminar sesión">
+            <ion-icon name="trash-outline"></ion-icon>
+          </ion-button>
+        </ion-item>
+      }
+    </ion-list>
+  }
+</div>

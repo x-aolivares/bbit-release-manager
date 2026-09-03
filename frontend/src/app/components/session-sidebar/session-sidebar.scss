@@ -1,0 +1,182 @@
+.bb-sidebar {
+  width: 280px;
+  min-width: 280px;
+  max-width: 320px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bb-surface);
+  border-right: 1px solid var(--bb-border);
+  overflow: hidden;
+}
+
+.bb-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--bb-border);
+  flex-shrink: 0;
+}
+
+.bb-sidebar-title {
+  font-size: var(--bb-font-base);
+  font-weight: 700;
+  color: var(--bb-text);
+  margin: 0;
+}
+
+.bb-clear-btn {
+  --color: var(--bb-text-secondary);
+  --color-hover: var(--bb-danger);
+  --background-hover: var(--bb-danger-bg);
+}
+
+.bb-sidebar-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--bb-text-secondary);
+}
+
+.bb-empty-icon {
+  font-size: 32px;
+  opacity: 0.4;
+}
+
+.bb-empty-hint {
+  font-size: var(--bb-font-xs);
+  opacity: 0.6;
+}
+
+.bb-session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 4px;
+  --background: transparent;
+}
+
+.bb-session-item {
+  --padding-start: 12px;
+  --padding-end: 4px;
+  --inner-padding-start: 12px;
+  --inner-padding-end: 8px;
+  --border-radius: var(--bb-radius-md);
+  margin: 4px 8px;
+  transition: background 0.15s ease;
+}
+
+.bb-session-item:hover {
+  background: var(--bb-surface-hover);
+}
+
+.bb-session-item--active {
+  background: var(--bb-blue-bg);
+  border: 1px solid var(--bb-blue);
+}
+
+.bb-session-item--active .bb-session-name {
+  color: var(--bb-blue);
+  font-weight: 700;
+}
+
+.bb-session-item--active .bb-session-updated {
+  color: var(--bb-blue);
+}
+
+.bb-session-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.bb-session-name {
+  font-size: var(--bb-font-sm);
+  font-weight: 600;
+  color: var(--bb-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bb-session-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: var(--bb-font-xs);
+}
+
+.bb-session-updated {
+  color: var(--bb-text-secondary);
+  white-space: nowrap;
+}
+
+.bb-session-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--bb-radius-pill);
+  font-size: var(--bb-font-xs);
+  font-weight: 600;
+  background: var(--bb-elevated);
+  border: 1px solid var(--bb-border);
+  color: var(--bb-text-secondary);
+}
+
+.bb-session-badge--force {
+  background: var(--bb-warning-bg);
+  border-color: var(--bb-warning);
+  color: var(--bb-warning);
+}
+
+.bb-delete-btn {
+  --color: var(--bb-text-secondary);
+  --color-hover: var(--bb-danger);
+  --background-hover: var(--bb-danger-bg);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.bb-session-item:hover .bb-delete-btn,
+.bb-session-item:focus-within .bb-delete-btn {
+  opacity: 1;
+}
+
+/* Mobile drawer styles */
+@media (max-width: 768px) {
+  .bb-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 200;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: 4px 0 24px rgba(9, 30, 66, 0.15);
+  }
+
+  .bb-sidebar.bb-sidebar--open {
+    transform: translateX(0);
+  }
+
+  .bb-sidebar-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(9, 30, 66, 0.3);
+    z-index: 199;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+  }
+
+  .bb-sidebar-mask.bb-sidebar-mask--visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}

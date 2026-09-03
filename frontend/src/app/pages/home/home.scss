@@ -935,3 +935,101 @@ button.bb-link {
   margin: 0;
 }
 
+/* ===== Layout con Sidebar ===== */
+.bb-page-wrapper {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.bb-page {
+  flex: 1;
+  min-width: 0;
+  width: 90%;
+  max-width: 90vw;
+  margin: 24px auto;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+@media (min-width: 769px) {
+  .bb-page {
+    width: calc(100% - 280px);
+    max-width: calc(100% - 280px);
+    margin: 24px auto 24px 24px;
+  }
+}
+
+.bb-btn-icon {
+  --background: transparent;
+  --color: var(--bb-text-secondary);
+  --color-hover: var(--bb-text);
+  --background-hover: var(--bb-surface);
+  --padding-start: 8px;
+  --padding-end: 8px;
+  height: 36px;
+  min-width: 36px;
+  border-radius: var(--bb-radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bb-btn-icon ion-icon {
+  font-size: 20px;
+}
+
+@media (max-width: 768px) {
+  .bb-btn-icon {
+    display: flex;
+  }
+}
+
+@media (min-width: 769px) {
+  .bb-btn-icon {
+    display: none;
+  }
+}
+
+/* Mobile sidebar mask */
+.bb-sidebar-mask {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .bb-sidebar-mask {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(9, 30, 66, 0.3);
+    z-index: 199;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+  }
+
+  .bb-sidebar-mask.bb-sidebar-mask--visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Sidebar host positioning */
+.bb-sidebar-host {
+  position: relative;
+  z-index: 100;
+}
+
+@media (max-width: 768px) {
+  .bb-sidebar-host {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 200;
+  }
+}
+

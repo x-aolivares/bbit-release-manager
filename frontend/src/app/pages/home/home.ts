@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, inject, signal, effect, OnInit } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { IonHeader } from '@ionic/angular/ion-header';
@@ -7,6 +7,9 @@ import { IonContent } from '@ionic/angular/ion-content';
 import { IonSpinner } from '@ionic/angular/ion-spinner';
 import { IonCard } from '@ionic/angular/ion-card';
 import { IonCardContent } from '@ionic/angular/ion-card-content';
+import { IonIcon } from '@ionic/angular';
+import { SessionHistoryService, SessionConfig } from '../../services/session-history.service';
+import { SessionSidebarComponent } from '../../components/session-sidebar/session-sidebar';
 
 interface Health {
   status: string;
@@ -98,10 +101,13 @@ interface DiffResponse {
     IonHeader, IonToolbar,
     IonContent, IonSpinner,
     IonCard, IonCardContent,
+    IonIcon,
+    SessionSidebarComponent,
   ],
 })
-export class Home {
+export class Home implements OnInit {
   private http = inject(HttpClient);
+  private sessionHistory = inject(SessionHistoryService);
 
   health = signal<Health | null>(null);
   connected = signal(false);
@@ -153,10 +159,15 @@ export class Home {
   tagging = signal(false);
   taggingRepo = signal<string | null>(null);
 
-  reportOpen = signal(false);
+reportOpen = signal(false);
   reportMode: 'branch' | 'pr' | 'tag' | 'params' = 'branch';
   reportEnv = signal(0);
   reportCopied = signal(false);
+
+  // Session history
+  sidebarOpen = signal(false);
+  currentSessionId = signal<string | null>(null);
+  sessions = signal<SessionConfig[]>([]);
 
   prefixCols(): string {
     return this.prefixes().map(() => ' 9.5rem').join('');
@@ -226,6 +237,68 @@ export class Home {
         }
       },
     });
+
+    // Cargar historial de sesiones
+    this.refreshSessions();
+    
+    // Cargar última sesión al iniciar
+    const latest = this.sessionHistory.getLatest();
+    if (latest) {
+      this.loadSession(latest);
+    }
+  }
+
+  ngOnInit(): void {
+    // Effect para mantener sessions signal sincronizado
+    // (se actualiza via refreshSessions() en cada cambio)
+  }
+
+  private refreshSessions(): void {
+    this.sessions.set(this.sessionHistory.getAll());
+  }
+
+  private saveCurrentSession(): void {
+    if (!this.origin) return;
+    const session = this.sessionHistory.save({
+      origin: this.origin,
+      destination: this.destination || 'master',
+      prefixes: this.prefixes(),
+      projectPrefixes: this.projectPrefixes(),
+      blacklisted: this.blacklisted(),
+      forceCache: this.forceCache(),
+    });
+    this.currentSessionId.set(session.id);
+    this.refreshSessions();
+  }
+
+  protected onSessionSelected(session: SessionConfig): void {
+    this.loadSession(session);
+    this.sidebarOpen.set(false);
+  }
+
+  protected onSessionDeleted(id: string): void {
+    this.sessionHistory.delete(id);
+    if (this.currentSessionId() === id) {
+      this.currentSessionId.set(null);
+    }
+    this.refreshSessions();
+  }
+
+  protected onHistoryCleared(): void {
+    this.sessionHistory.clear();
+    this.currentSessionId.set(null);
+    this.refreshSessions();
+  }
+
+  private loadSession(session: SessionConfig): void {
+    this.origin = session.origin;
+    this.destination = session.destination;
+    this.prefixes.set(session.prefixes);
+    this.projectPrefixes.set(session.projectPrefixes);
+    this.blacklisted.set(session.blacklisted);
+    this.forceCache.set(session.forceCache);
+    this.currentSessionId.set(session.id);
+    this.loadRepos();
   }
 
   reuseSession() {
@@ -342,7 +415,11 @@ export class Home {
         }
       },
       error: () => this.error.set('Error al cargar la tabla.'),
-      complete: () => this.reposLoading.set(false),
+      complete: () => {
+        this.reposLoading.set(false);
+        // Auto-guardar sesión tras carga exitosa
+        this.saveCurrentSession();
+      },
     });
   }
 
