@@ -29,7 +29,7 @@
   align-items: center;
   gap: 28px;
   padding: 8px 20px;
-  font-size: 12.5px;
+  font-size: var(--bb-font-sm);
   flex-wrap: wrap;
 }
 
@@ -80,7 +80,7 @@
 }
 
 .bb-subtitle {
-  font-size: 14px;
+  font-size: var(--bb-font-md);
   font-weight: 700;
   color: var(--bb-text);
 }
@@ -117,7 +117,7 @@
   gap: 16px;
   align-items: center;
   padding: 10px 14px;
-  font-size: 13px;
+  font-size: var(--bb-font-base);
 }
 
 .bb-table--repos .bb-repos-head,
@@ -144,7 +144,7 @@
   color: var(--bb-text-secondary);
   font-weight: 700;
   text-transform: uppercase;
-  font-size: 11.5px;
+  font-size: var(--bb-font-xs);
   letter-spacing: 0.4px;
   border-bottom: 1px solid var(--bb-border);
 }
@@ -184,7 +184,7 @@
 }
 
 .bb-panel-title {
-  font-size: 15px;
+  font-size: var(--bb-font-md);
   font-weight: 800;
   color: var(--bb-text);
   letter-spacing: 0.3px;
@@ -203,7 +203,7 @@
 }
 
 .bb-field label {
-  font-size: 12px;
+  font-size: var(--bb-font-sm);
   font-weight: 700;
   color: var(--bb-text-secondary);
   text-transform: uppercase;
@@ -211,11 +211,11 @@
 }
 
 .bb-input {
-  font-size: 14px;
+  font-size: var(--bb-font-md);
   color: var(--bb-text);
   background: var(--bb-elevated);
   border: 1px solid var(--bb-border);
-  border-radius: 6px;
+  border-radius: var(--bb-radius-md);
   padding: 8px 10px;
   width: 100%;
   box-sizing: border-box;
@@ -239,9 +239,9 @@
   gap: 6px;
   background: var(--bb-surface);
   border: 1px solid var(--bb-border);
-  border-radius: 999px;
+  border-radius: var(--bb-radius-pill);
   padding: 4px 10px;
-  font-size: 13px;
+  font-size: var(--bb-font-sm);
 }
 
 .bb-chip-pill--danger {
@@ -253,7 +253,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12.5px;
+  font-size: var(--bb-font-sm);
   color: var(--bb-text-secondary);
   cursor: pointer;
 }
@@ -262,7 +262,7 @@
   border: none;
   background: transparent;
   color: var(--bb-text-secondary);
-  font-size: 14px;
+  font-size: var(--bb-font-md);
   cursor: pointer;
   line-height: 1;
   padding: 0 2px;
@@ -276,17 +276,17 @@
   border: 1px dashed var(--bb-border);
   background: transparent;
   color: var(--bb-blue);
-  font-size: 12.5px;
+  font-size: var(--bb-font-sm);
   font-weight: 600;
-  border-radius: 999px;
+  border-radius: var(--bb-radius-pill);
   padding: 4px 12px;
   cursor: pointer;
 }
 
 .bb-chip-input {
-  font-size: 13px;
+  font-size: var(--bb-font-sm);
   border: 1px solid var(--bb-border);
-  border-radius: 999px;
+  border-radius: var(--bb-radius-pill);
   padding: 4px 12px;
   width: 90px;
   background: var(--bb-elevated);
@@ -295,7 +295,7 @@
 .bb-seg {
   display: inline-flex;
   border: 1px solid var(--bb-border);
-  border-radius: 6px;
+  border-radius: var(--bb-radius-md);
   overflow: hidden;
   margin-bottom: 4px;
 }
@@ -303,8 +303,8 @@
 .bb-seg-btn {
   border: 0;
   background: transparent;
-  color: var(--bb-muted);
-  font-size: 13px;
+  color: var(--bb-text-secondary);
+  font-size: var(--bb-font-base);
   font-weight: 600;
   padding: 8px 16px;
   cursor: pointer;
@@ -339,7 +339,7 @@
 .bb-modal {
   background: var(--bb-elevated);
   border: 1px solid var(--bb-border);
-  border-radius: 8px;
+  border-radius: var(--bb-radius-lg);
   max-width: 720px;
   width: 100%;
   max-height: 90vh;
@@ -352,7 +352,7 @@
 
 .bb-modal-title {
   font-weight: 700;
-  font-size: 15px;
+  font-size: var(--bb-font-md);
 }
 
 .bb-modal-row {
@@ -367,8 +367,8 @@
 }
 
 .bb-btn-sm {
-  font-size: 13px;
-  padding: 7px 14px;
+  font-size: var(--bb-font-sm);
+  padding: 6px 12px;
 }
 
 .bb-report-area {
@@ -376,10 +376,10 @@
   min-height: 260px;
   resize: vertical;
   font-family: var(--bb-mono);
-  font-size: 12.5px;
+  font-size: var(--bb-font-sm);
   line-height: 1.5;
   border: 1px solid var(--bb-border);
-  border-radius: 6px;
+  border-radius: var(--bb-radius-md);
   padding: 10px;
   background: var(--bb-surface, #fafbfc);
   color: inherit;
@@ -393,9 +393,9 @@
 
 .bb-btn-primary,
 .bb-btn-secondary {
-  font-size: 13px;
+  font-size: var(--bb-font-base);
   font-weight: 600;
-  border-radius: 6px;
+  border-radius: var(--bb-radius-md);
   padding: 8px 16px;
   cursor: pointer;
   border: 1px solid transparent;
@@ -451,7 +451,7 @@
 
 .bb-stat-label {
   margin: 0;
-  font-size: 11.5px;
+  font-size: var(--bb-font-xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.4px;
@@ -460,7 +460,7 @@
 
 .bb-stat-value {
   margin: 4px 0 0;
-  font-size: 22px;
+  font-size: var(--bb-font-xl);
   font-weight: 800;
   color: var(--bb-text);
 }
@@ -479,9 +479,9 @@
 
 .bb-sync {
   display: inline-block;
-  font-size: 12px;
+  font-size: var(--bb-font-sm);
   font-weight: 700;
-  border-radius: 999px;
+  border-radius: var(--bb-radius-pill);
   padding: 3px 10px;
 }
 
@@ -511,7 +511,7 @@
 }
 
 button.bb-link {
-  font-size: 12.5px;
+  font-size: var(--bb-font-sm);
   cursor: pointer;
   background: none;
   border: none;
@@ -530,19 +530,19 @@ button.bb-link {
 }
 
 .bb-repo-name {
-  font-size: 13px;
+  font-size: var(--bb-font-base);
 }
 
 .bb-deploy-col {
-  font-size: 12.5px;
+  font-size: var(--bb-font-sm);
   overflow-wrap: anywhere;
 }
 
 .bb-deploy-badge {
   display: inline-block;
-  font-size: 11.5px;
+  font-size: var(--bb-font-xs);
   font-weight: 700;
-  border-radius: 4px;
+  border-radius: var(--bb-border-radius);
   padding: 2px 8px;
   text-decoration: none;
 }
@@ -567,7 +567,7 @@ button.bb-link {
 }
 
 .bb-xs {
-  font-size: 11px;
+  font-size: var(--bb-font-xs);
   line-height: 1.2;
   display: block;
 }
@@ -578,7 +578,7 @@ button.bb-link {
 }
 
 .bb-hint {
-  font-size: 12px;
+  font-size: var(--bb-font-sm);
   margin-top: 8px;
 }
 
@@ -593,7 +593,7 @@ button.bb-link {
 .bb-token-link {
   color: var(--bb-blue);
   text-decoration: none;
-  font-size: 12px;
+  font-size: var(--bb-font-sm);
   font-weight: 600;
   white-space: nowrap;
   margin-left: 8px;
@@ -648,9 +648,9 @@ button.bb-link {
   display: inline-block;
   background: var(--bb-warning-bg);
   color: var(--bb-warning);
-  font-size: 11px;
+  font-size: var(--bb-font-xs);
   font-weight: 600;
-  border-radius: 3px;
+  border-radius: var(--bb-border-radius);
   padding: 2px 6px;
   margin-left: 6px;
   line-height: 1.3;
@@ -668,7 +668,7 @@ button.bb-link {
 }
 
 .bb-section-header {
-  font-size: 13px;
+  font-size: var(--bb-font-base);
   font-weight: 700;
   color: var(--bb-text);
   padding-bottom: 10px;

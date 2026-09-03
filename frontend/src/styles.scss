@@ -13,6 +13,17 @@
   --bb-text: #172b4d;
   --bb-text-secondary: #5e6c84;
   --bb-border-radius: 3px;
+  --bb-radius-md: 6px;
+  --bb-radius-lg: 8px;
+  --bb-radius-pill: 999px;
+
+  /* Typography scale */
+  --bb-font-xs: 11px;
+  --bb-font-sm: 12px;
+  --bb-font-base: 13px;
+  --bb-font-md: 14px;
+  --bb-font-lg: 16px;
+  --bb-font-xl: 22px;
 
   /* Semantic status tokens */
   --bb-success: #36b37e;
@@ -49,7 +60,7 @@ body {
   border: 1px solid var(--bb-border);
   border-radius: var(--bb-border-radius);
   padding: 0 6px;
-  font-size: 12.5px;
+  font-size: var(--bb-font-sm);
   line-height: 1.9;
   display: inline-block;
 }
@@ -60,7 +71,7 @@ body {
   gap: 6px;
   border-radius: var(--bb-border-radius);
   padding: 3px 10px;
-  font-size: 12px;
+  font-size: var(--bb-font-sm);
   font-weight: 600;
   line-height: 1.8;
   border: 1px solid transparent;
