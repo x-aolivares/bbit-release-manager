@@ -3,19 +3,10 @@ import { HttpClient } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { IonHeader } from '@ionic/angular/ion-header';
 import { IonToolbar } from '@ionic/angular/ion-toolbar';
-import { IonTitle } from '@ionic/angular/ion-title';
-import { IonButtons } from '@ionic/angular/ion-buttons';
 import { IonContent } from '@ionic/angular/ion-content';
-import { IonChip } from '@ionic/angular/ion-chip';
-import { IonLabel } from '@ionic/angular/ion-label';
 import { IonSpinner } from '@ionic/angular/ion-spinner';
 import { IonCard } from '@ionic/angular/ion-card';
-import { IonCardHeader } from '@ionic/angular/ion-card-header';
-import { IonCardTitle } from '@ionic/angular/ion-card-title';
 import { IonCardContent } from '@ionic/angular/ion-card-content';
-import { IonInput } from '@ionic/angular/ion-input';
-import { IonButton } from '@ionic/angular/ion-button';
-import { IonItem } from '@ionic/angular/ion-item';
 
 interface Health {
   status: string;
@@ -104,10 +95,9 @@ interface DiffResponse {
   standalone: true,
   imports: [
     FormsModule,
-    IonHeader, IonToolbar, IonTitle, IonButtons,
-    IonContent, IonChip, IonLabel, IonSpinner,
-    IonCard, IonCardHeader, IonCardTitle, IonCardContent,
-    IonInput, IonButton, IonItem,
+    IonHeader, IonToolbar,
+    IonContent, IonSpinner,
+    IonCard, IonCardContent,
   ],
 })
 export class Home {
