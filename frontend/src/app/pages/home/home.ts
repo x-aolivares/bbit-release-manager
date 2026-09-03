@@ -157,6 +157,8 @@ export class Home {
   projectsLoading = signal(false);
   tableLoading = signal(false);
   paramsLoading = signal(false);
+  tableLoaded = signal(false);
+  paramsLoaded = signal(false);
 
   creatingPr = signal<string | null>(null);
   tagging = signal(false);
@@ -334,6 +336,7 @@ export class Home {
     this.tableLoading.set(true);
     this.error.set(null);
     this.creatingPr.set(null);
+    this.tableLoaded.set(true);
     const dest = this.projectsDest();
     const prefixes = this.prefixes().join(',');
     const exclude = this.blacklisted().join(',');
@@ -359,6 +362,7 @@ export class Home {
     if (!this.origin) return;
     this.paramsLoading.set(true);
     this.error.set(null);
+    this.paramsLoaded.set(true);
     const dest = this.projectsDest();
     const exclude = this.blacklisted().join(',');
     const force = this.forceCache() ? 1 : 0;

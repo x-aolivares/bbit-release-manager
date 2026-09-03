@@ -204,7 +204,7 @@
     </div>
     }
 
-    @if (connected()) {
+    @if (connected() && tableLoaded()) {
     <div class="bb-panel">
       <div class="bb-section">
         <div class="bb-section-header">Tabla de repositorios</div>
@@ -357,7 +357,7 @@
     </div>
     }
 
-    @if (connected()) {
+    @if (connected() && paramsLoaded()) {
     <div class="bb-panel">
       <div class="bb-section">
         <div class="bb-section-header">Parámetros SSM — respuesta</div>
