@@ -211,12 +211,13 @@
 }
 
 .bb-input {
-  font-size: var(--bb-font-md);
+  font-size: var(--bb-font-base);
   color: var(--bb-text);
   background: var(--bb-elevated);
   border: 1px solid var(--bb-border);
   border-radius: var(--bb-radius-md);
-  padding: 8px 10px;
+  height: var(--bb-control-h);
+  padding: 0 var(--bb-control-pad-x);
   width: 100%;
   box-sizing: border-box;
 }
@@ -297,6 +298,8 @@
   border: 1px solid var(--bb-border);
   border-radius: var(--bb-radius-md);
   overflow: hidden;
+  height: var(--bb-control-h);
+  box-sizing: border-box;
   margin-bottom: 4px;
 }
 
@@ -306,13 +309,18 @@
   color: var(--bb-text-secondary);
   font-size: var(--bb-font-base);
   font-weight: 600;
-  padding: 8px 16px;
+  height: 100%;
+  padding: 0 var(--bb-control-pad-x);
   cursor: pointer;
 }
 
 .bb-seg-btn--active {
   background: var(--bb-blue);
   color: #fff;
+}
+
+.bb-seg-btn:not(.bb-seg-btn--active):hover {
+  background: var(--bb-surface);
 }
 
 .bb-removed {
@@ -368,7 +376,9 @@
 
 .bb-btn-sm {
   font-size: var(--bb-font-sm);
-  padding: 6px 12px;
+  height: var(--bb-control-h);
+  padding: 0 12px;
+  box-sizing: border-box;
 }
 
 .bb-report-area {
@@ -396,9 +406,11 @@
   font-size: var(--bb-font-base);
   font-weight: 600;
   border-radius: var(--bb-radius-md);
-  padding: 8px 16px;
+  height: var(--bb-control-h);
+  padding: 0 var(--bb-control-pad-x);
   cursor: pointer;
   border: 1px solid transparent;
+  box-sizing: border-box;
 }
 
 .bb-btn-primary {
@@ -617,7 +629,7 @@ button.bb-link {
 .bb-row-top {
   display: flex;
   gap: 12px;
-  align-items: flex-end;
+  align-items: center;
   flex-wrap: wrap;
 }
 
