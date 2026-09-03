@@ -351,14 +351,7 @@
           <button class="bb-btn-secondary" (click)="openParams()" [disabled]="params().length === 0 && removed().length === 0">
             Ver parámetros
           </button>
-        </div>
-        <div class="bb-muted bb-hint">
-          "Solo el diff" analiza los archivos tocados por la rama (rápido);
-          "Todos los archivos" recorre el repo completo por ref (más lento).
-        </div>
-
-        @if (params().length > 0 || removed().length > 0) {
-        <div class="bb-row-top">
+          @if (params().length > 0 || removed().length > 0) {
           <button class="bb-btn-secondary bb-btn-sm" (click)="loadParams()" [disabled]="paramsLoading()">
             @if (paramsLoading()) {
             <span class="bb-spinner-inline"></span>
@@ -366,7 +359,14 @@
             Refrescar
             }
           </button>
+          }
         </div>
+        <div class="bb-muted bb-hint">
+          "Solo el diff" analiza los archivos tocados por la rama (rápido);
+          "Todos los archivos" recorre el repo completo por ref (más lento).
+        </div>
+
+        @if (params().length > 0 || removed().length > 0) {
         @if (removed().length > 0) {
         <p class="bb-muted bb-hint bb-params-hint">
           "Solo destino" = existe en '{{ destination }}' pero ya no se referencias en '{{ origin }}'.
