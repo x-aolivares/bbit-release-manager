@@ -351,15 +351,6 @@
           <button class="bb-btn-secondary" (click)="openParams()" [disabled]="params().length === 0 && removed().length === 0">
             Ver parámetros
           </button>
-          @if (params().length > 0 || removed().length > 0) {
-          <button class="bb-btn-secondary bb-btn-sm" (click)="loadParams()" [disabled]="paramsLoading()">
-            @if (paramsLoading()) {
-            <span class="bb-spinner-inline"></span>
-            } @else {
-            Refrescar
-            }
-          </button>
-          }
         </div>
         <div class="bb-muted bb-hint">
           "Solo el diff" analiza los archivos tocados por la rama (rápido);
