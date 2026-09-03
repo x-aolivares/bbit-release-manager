@@ -200,11 +200,17 @@
             </div>
           </div>
         </div>
+      </div>
+    </div>
+    }
 
+    @if (connected()) {
+    <div class="bb-panel">
+      <div class="bb-section">
+        <div class="bb-section-header">Tabla de repositorios</div>
         @if (ciError()) {
         <div class="bb-error">{{ ciError() }}</div>
         }
-
         @if (repos().length > 0) {
         <div class="bb-row-top">
           <input class="" [(ngModel)]="prTitle" placeholder="Título del PR"/>
@@ -347,7 +353,14 @@
           "Solo el diff" analiza los archivos tocados por la rama (rápido);
           "Todos los archivos" recorre el repo completo por ref (más lento).
         </div>
+      </div>
+    </div>
+    }
 
+    @if (connected()) {
+    <div class="bb-panel">
+      <div class="bb-section">
+        <div class="bb-section-header">Parámetros SSM — respuesta</div>
         @if (params().length > 0 || removed().length > 0) {
         @if (removed().length > 0) {
         <p class="bb-muted bb-hint bb-params-hint">
