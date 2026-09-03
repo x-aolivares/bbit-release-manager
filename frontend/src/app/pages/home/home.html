@@ -226,9 +226,7 @@
             }
             Generar tags faltantes
           </button>
-          <button class="bb-btn-secondary bb-btn-sm" (click)="reportOpen.set(true)">Previsualizar información del
-            Reporte
-          </button>
+          <button class="bb-btn-secondary bb-btn-sm" (click)="reportOpen.set(true)">Previsualizar reporte</button>
           <button class="bb-btn-secondary bb-btn-sm" (click)="loadRepos()" [disabled]="reposLoading()">
             @if (reposLoading()) {
             <span class="bb-spinner-inline"></span>

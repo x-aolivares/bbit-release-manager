@@ -387,6 +387,10 @@ reportOpen = signal(false);
     this.error.set(null);
     this.creatingPr.set(null);
     this.tableLoaded.set(true);
+    // Limpiar params al cambiar de rama origen (nueva consulta = nueva cache)
+    this.params.set([]);
+    this.removed.set([]);
+    this.paramsLoaded.set(false);
     const dest = this.projectsDest();
     const prefixes = this.prefixes().join(',');
     const exclude = this.blacklisted().join(',');
