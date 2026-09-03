@@ -130,6 +130,14 @@
   grid-template-columns: 1.6fr 1fr 1fr;
 }
 
+.bb-table--params {
+  background: var(--bb-elevated);
+}
+
+.bb-table--params .bb-repos-head {
+  background: var(--bb-surface);
+}
+
 .bb-params-hint {
   margin: 0 0 10px;
 }

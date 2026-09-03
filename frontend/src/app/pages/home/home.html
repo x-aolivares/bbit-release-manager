@@ -356,14 +356,9 @@
           "Solo el diff" analiza los archivos tocados por la rama (rápido);
           "Todos los archivos" recorre el repo completo por ref (más lento).
         </div>
-      </div>
-    </div>
-    }
 
-    @if (params().length > 0 || removed().length > 0) {
-    <ion-card class="bb-card">
-      <ion-card-header>
-        <div style="display: flex; gap: 8px;">
+        @if (params().length > 0 || removed().length > 0) {
+        <div class="bb-row-top">
           <button class="bb-btn-secondary bb-btn-sm" (click)="loadParams()" [disabled]="paramsLoading()">
             @if (paramsLoading()) {
             <span class="bb-spinner-inline"></span>
@@ -372,8 +367,6 @@
             }
           </button>
         </div>
-      </ion-card-header>
-      <ion-card-content>
         @if (removed().length > 0) {
         <p class="bb-muted bb-hint bb-params-hint">
           "Solo destino" = existe en '{{ destination }}' pero ya no se referencias en '{{ origin }}'.
@@ -394,16 +387,12 @@
           </div>
           }
         </div>
-
-      </ion-card-content>
-    </ion-card>
-    } @else if (repos().length > 0) {
-    <ion-card class="bb-card">
-      <ion-card-content class="bb-muted">Sin parámetros SSM.</ion-card-content>
-    </ion-card>
+        } @else if (repos().length > 0) {
+        <div class="bb-muted">Sin parámetros SSM.</div>
+        }
+      </div>
+    </div>
     }
-
-
     @if (reportOpen()) {
     <div class="bb-modal-mask" (click)="reportOpen.set(false)">
       <div class="bb-modal" (click)="$event.stopPropagation()">
