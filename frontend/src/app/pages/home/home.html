@@ -200,21 +200,13 @@
             </div>
           </div>
         </div>
-      </div>
-    </div>
-    }
 
-    @if (ciError()) {
-    <ion-card class="bb-card">
-      <ion-card-content class="bb-error">{{ ciError() }}</ion-card-content>
-    </ion-card>
-    }
+        @if (ciError()) {
+        <div class="bb-error">{{ ciError() }}</div>
+        }
 
-    @if (repos().length > 0) {
-    <ion-card class="bb-card">
-      <ion-card-header>
-        <div style="display: flex; gap: 8px;">
-
+        @if (repos().length > 0) {
+        <div class="bb-row-top">
           <input class="" [(ngModel)]="prTitle" placeholder="Título del PR"/>
           <button class="bb-btn-secondary" (click)="syncPrs('create')" [disabled]="syncingPrs()">Crear PRs faltantes
           </button>
@@ -237,8 +229,6 @@
             }
           </button>
         </div>
-      </ion-card-header>
-      <ion-card-content>
         <div class="bb-table bb-table--repos"
              [style.--bb-cols]="'1.4fr 1fr 1fr 1.4fr' + prefixCols()">
           <div class="bb-repos-head">
@@ -325,8 +315,9 @@
           </div>
           }
         </div>
-      </ion-card-content>
-    </ion-card>
+        }
+      </div>
+    </div>
     }
 
     @if (connected()) {
