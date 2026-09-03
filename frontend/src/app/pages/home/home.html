@@ -155,7 +155,7 @@
                   </span>
               }
               @if (!addingBlacklist()) {
-              <button class="bb-chip-add" (click)="addingBlacklist.set(true)">+ Excluir</button>
+              <button class="bb-chip-add" (click)="addingBlacklist.set(true)">+ Excluir proyecto</button>
               } @else {
               <input class="bb-chip-input" [(ngModel)]="blacklistInput" placeholder="repo-a"
                      (keyup.enter)="addBlacklist()"/>
@@ -173,7 +173,7 @@
                   </span>
               }
               @if (!addingProjectPrefix()) {
-              <button class="bb-chip-add" (click)="addingProjectPrefix.set(true)">+ Agregar</button>
+              <button class="bb-chip-add" (click)="addingProjectPrefix.set(true)">+ Agregar prefijo</button>
               } @else {
               <input class="bb-chip-input" [(ngModel)]="projectPrefixInput" placeholder="orders"
                      (keyup.enter)="addProjectPrefix()"/>
@@ -191,7 +191,7 @@
                   </span>
               }
               @if (!addingPrefix()) {
-              <button class="bb-chip-add" (click)="addingPrefix.set(true)">+ Agregar</button>
+              <button class="bb-chip-add" (click)="addingPrefix.set(true)">+ Agregar ambiente</button>
               } @else {
               <input class="bb-chip-input" [(ngModel)]="prefixInput" placeholder="uat" (keyup.enter)="addPrefix()"/>
               <button class="bb-chip-add" (click)="addPrefix()">OK</button>
