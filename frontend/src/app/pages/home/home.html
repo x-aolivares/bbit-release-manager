@@ -132,17 +132,11 @@
             <input type="checkbox" [(ngModel)]="forceCache"/>
             Forzar consultas (ignorar caché)
           </label>
-          <button class="bb-btn-secondary" (click)="loadProjects()" [disabled]="projectsLoading() || !origin">
-            @if (projectsLoading()) {
+          <button class="bb-btn-primary" (click)="loadRepos()" [disabled]="reposLoading() || !origin">
+            @if (reposLoading()) {
             <span class="bb-spinner-inline"></span>
             }
-            Obtener proyectos
-          </button>
-          <button class="bb-btn-primary" (click)="loadTable()" [disabled]="tableLoading() || !origin">
-            @if (tableLoading()) {
-            <span class="bb-spinner-inline"></span>
-            }
-            Cargar Tabla
+            Obtener Repositorios
           </button>
         </div>
         <div class="bb-row-top">
@@ -227,8 +221,8 @@
           <button class="bb-btn-secondary bb-btn-sm" (click)="reportOpen.set(true)">Previsualizar información del
             Reporte
           </button>
-          <button class="bb-btn-secondary bb-btn-sm" (click)="loadTable()" [disabled]="tableLoading()">
-            @if (tableLoading()) {
+          <button class="bb-btn-secondary bb-btn-sm" (click)="loadRepos()" [disabled]="reposLoading()">
+            @if (reposLoading()) {
             <span class="bb-spinner-inline"></span>
             } @else {
             Refrescar

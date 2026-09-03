@@ -154,8 +154,7 @@ export class Home {
   askDisconnect = signal(false);
   syncingPrs = signal(false);
 
-  projectsLoading = signal(false);
-  tableLoading = signal(false);
+  reposLoading = signal(false);
   paramsLoading = signal(false);
   tableLoaded = signal(false);
   paramsLoaded = signal(false);
@@ -311,29 +310,9 @@ export class Home {
     return this.destination || 'master';
   }
 
-  loadProjects() {
+  loadRepos() {
     if (!this.origin) return;
-    this.projectsLoading.set(true);
-    this.error.set(null);
-    const force = this.forceCache() ? 1 : 0;
-    const exclude = this.blacklisted().join(',');
-    this.http.get<any>(`/api/repos?origin=${encodeURIComponent(this.origin)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&force=${force}&exclude=${encodeURIComponent(exclude)}`).subscribe({
-      next: (r) => {
-        const items: ScanProject[] = (r.items ?? []).slice();
-        items.sort((a, b) => a.slug.localeCompare(b.slug));
-        this.projects.set(items);
-        if (!items.length) {
-          this.error.set(`Ningún repo contiene la rama '${this.origin}'.`);
-        }
-      },
-      error: () => this.error.set('Error al obtener los proyectos.'),
-      complete: () => this.projectsLoading.set(false),
-    });
-  }
-
-  loadTable() {
-    if (!this.origin) return;
-    this.tableLoading.set(true);
+    this.reposLoading.set(true);
     this.error.set(null);
     this.creatingPr.set(null);
     this.tableLoaded.set(true);
@@ -341,8 +320,19 @@ export class Home {
     const prefixes = this.prefixes().join(',');
     const exclude = this.blacklisted().join(',');
     const force = this.forceCache() ? 1 : 0;
-    const base = `/api/scan?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&force=${force}`;
 
+    // Endpoint de proyectos (alimenta la blacklist)
+    this.http.get<any>(`/api/repos?origin=${encodeURIComponent(this.origin)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&force=${force}&exclude=${encodeURIComponent(exclude)}`).subscribe({
+      next: (r) => {
+        const items: ScanProject[] = (r.items ?? []).slice();
+        items.sort((a, b) => a.slug.localeCompare(b.slug));
+        this.projects.set(items);
+      },
+      error: () => this.error.set('Error al obtener los proyectos.'),
+    });
+
+    // Endpoint de la tabla de repos
+    const base = `/api/scan?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&force=${force}`;
     this.http.get<any>(base).subscribe({
       next: (r) => {
         this.ciConfigured.set(r.ci_configured ?? true);
@@ -354,7 +344,7 @@ export class Home {
         }
       },
       error: () => this.error.set('Error al cargar la tabla.'),
-      complete: () => this.tableLoading.set(false),
+      complete: () => this.reposLoading.set(false),
     });
   }
 
@@ -379,7 +369,7 @@ export class Home {
 
   // Alias: tras crear/actualizar PRs o tags se recarga la tabla (no encadena params).
   resolve() {
-    this.loadTable();
+    this.loadRepos();
   }
 
   paramRows(): { param: string; estado: string }[] {
