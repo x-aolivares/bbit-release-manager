@@ -629,8 +629,12 @@ button.bb-link {
 .bb-row-top {
   display: flex;
   gap: 12px;
-  align-items: flex-start;
+  align-items: center;
   flex-wrap: wrap;
+}
+
+.bb-row-top:has(.bb-chips) {
+  align-items: flex-start;
 }
 
 .bb-row .bb-btn {
