@@ -176,7 +176,7 @@ def test_scan_returns_repos_with_pr_and_params(monkeypatch):
             pass
         def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "abc123"
         def commits_behind(self, repo, branch, base):
             return 2
@@ -236,7 +236,7 @@ def test_scan_reuses_pr_hash(monkeypatch):
             pass
         def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             commit_calls.append(branch)
             return "fromCommit"
         def commits_behind(self, repo, branch, base):
@@ -273,7 +273,7 @@ def test_scan_deploys_from_tag(monkeypatch):
             pass
         def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "abc123"
         def commits_behind(self, repo, branch, base):
             return 0
@@ -326,7 +326,7 @@ def test_scan_resolves_full_hash_with_pr(monkeypatch):
             pass
         def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             calls.append(branch)
             return "abc123456789000000000000000000000000000000"
         def commits_behind(self, repo, branch, base):
@@ -372,7 +372,7 @@ def test_generate_tags(monkeypatch):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def find_pr(self, repo, origin, destination):
             return None
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "abc123"
         def tag_exists(self, slug, name):
             return name == "stgp-7"
@@ -412,7 +412,7 @@ def test_circleci_config_creates(monkeypatch):
             pass
         def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "head1"
         def raw_file(self, slug, ref, path):
             return None
@@ -445,7 +445,7 @@ def test_circleci_config_skips_when_present(monkeypatch):
             pass
         def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "head1"
         def raw_file(self, slug, ref, path):
             return (
@@ -500,7 +500,7 @@ def test_circleci_config_remigra_forma_triggers_invalida(monkeypatch):
             pass
         def repos_with_branch(self, origin, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "head1"
         def raw_file(self, slug, ref, path):
             return (
@@ -567,7 +567,7 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
             return SimpleNamespace(files=[plain_file, ssm_file, deleted_ssm])
         def find_pr(self, repo, origin, destination):
             return None
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "headOrigin" if branch == "release/x" else "headDest"
         def list_files(self, repo, ref):
             return ["config/x.yaml", "gone.yaml"]
@@ -621,7 +621,7 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
             return None
         def find_pr(self, repo, origin, destination):
             return None
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "headOrigin" if branch == "release/x" else "headDest"
 
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
@@ -671,7 +671,7 @@ def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
             return SimpleNamespace(files=[f])
         def find_pr(self, repo, origin, destination):
             return None
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "headO" if branch == "release/x" else "headM"
         def list_files(self, repo, ref):
             return ["config/x.yaml"]
@@ -726,7 +726,7 @@ def test_diff_cache_key_incluye_ssm_prefixes(monkeypatch):
             return SimpleNamespace(files=[f])
         def find_pr(self, repo, origin, destination):
             return None
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "headO" if branch == "release/x" else "headM"
         def list_files(self, repo, ref):
             return ["config/x.yaml"]
@@ -779,7 +779,7 @@ def test_diff_reutilizado_cuando_path_esta_en_master_del_mismo_repo(monkeypatch)
             return SimpleNamespace(files=[f])
         def find_pr(self, repo, origin, destination):
             return None
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "headO" if branch == "release/x" else "headM"
         def list_files(self, repo, ref):
             return ["config/x.yaml"]
@@ -832,7 +832,7 @@ def test_diff_reutilizado_y_count_multirepo(monkeypatch):
             return SimpleNamespace(files=[f])
         def find_pr(self, repo, origin, destination):
             return None
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "headO" if branch == "release/x" else "headM"
         def list_files(self, repo, ref):
             return ["config/x.yaml"]
@@ -876,7 +876,7 @@ def test_diff_repos_only_master_no_aparecen(monkeypatch):
             return SimpleNamespace(files=[f])
         def find_pr(self, repo, origin, destination):
             return None
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "headO" if branch == "release/x" else "headM"
         def list_files(self, repo, ref):
             return ["config/x.yaml"]
@@ -1189,7 +1189,7 @@ def test_scan_respects_exclude(monkeypatch):
                 SimpleNamespace(slug="trans-b", name="TB", workspace="ws", default_branch="master"),
                 SimpleNamespace(slug="core-app", name="CA", workspace="ws", default_branch="master"),
             ]
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "abc123"
         def commits_behind(self, repo, branch, base):
             return 0
@@ -1274,7 +1274,7 @@ def test_tags_respect_exclude(monkeypatch):
                 SimpleNamespace(slug="trans-a", name="TA", workspace="ws", default_branch="master"),
                 SimpleNamespace(slug="trans-b", name="TB", workspace="ws", default_branch="master"),
             ]
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "abc123"
         def tag_exists(self, slug, name):
             return False
@@ -1314,7 +1314,7 @@ def test_scan_cache_hit_on_second_call(monkeypatch):
         def repos_with_branch(self, origin, prefixes=None):
             calls["branch"] += 1
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "abc123"
         def commits_behind(self, repo, branch, base):
             return 1
@@ -1362,7 +1362,7 @@ def test_scan_force_refreshes(monkeypatch):
         def repos_with_branch(self, origin, prefixes=None):
             calls["branch"] += 1
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
-        def commit_for_branch(self, repo, branch):
+        def commit_for_branch(self, repo, branch, resolved=""):
             return "abc123"
         def commits_behind(self, repo, branch, base):
             return 1

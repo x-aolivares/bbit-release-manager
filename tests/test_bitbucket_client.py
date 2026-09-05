@@ -78,6 +78,7 @@ def test_repos_with_branch():
     finally:
         client.close()
     assert [r.slug for r in found] == ["a"]
+    assert found[0].resolved_branch == "release"
 
 
 def test_resolve_branch_prefix_matches_latest():
@@ -189,6 +190,72 @@ def test_commit_for_branch():
     finally:
         client.close()
     assert h == "abc123"
+
+
+def test_commit_for_branch_with_resolved_skips_resolve():
+    def commits(request):
+        return httpx.Response(200, json={"values": [{"hash": "abc123"}]})
+
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/commits/release/REP-1-V2"): commits,
+    }))
+    try:
+        h = client.commit_for_branch("r1", "release/REP-1", resolved="release/REP-1-V2")
+    finally:
+        client.close()
+    assert h == "abc123"
+
+
+def test_commit_for_branch_with_resolved_missing_returns_empty():
+    client = BitbucketClient("ws", "tok", transport=_transport({}))
+    try:
+        h = client.commit_for_branch("r1", "release/REP-1", resolved="release/REP-1-V2")
+    finally:
+        client.close()
+    assert h == ""
+
+
+def test_commits_behind_uses_size_single_request():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json={"values": [], "size": 5})
+
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/commits/master"): handler,
+    }))
+    try:
+        behind = client.commits_behind("r1", "release", "master")
+    finally:
+        client.close()
+    assert behind == 5
+    assert len(calls) == 1
+
+
+def test_commits_behind_fallback_paginates_without_size():
+    hits = {"n": 0}
+
+    def handler(request):
+        hits["n"] += 1
+        if int(request.url.params.get("pagelen", 100)) == 1:
+            return httpx.Response(200, json={"values": [], "size": None})
+        if hits["n"] == 2:
+            return httpx.Response(200, json={
+                "values": [{"hash": f"c{i}"} for i in range(3)],
+                "next": "https://api.bitbucket.org/2.0/repositories/ws/r1/commits/master?exclude=release&pagelen=100&page=2",
+            })
+        return httpx.Response(200, json={"values": [{"hash": "c3"}]})
+
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/commits/master"): handler,
+    }))
+    try:
+        behind = client.commits_behind("r1", "release", "master")
+    finally:
+        client.close()
+    assert behind == 4
+    assert hits["n"] == 3
 
 
 def test_tags_on_commit():

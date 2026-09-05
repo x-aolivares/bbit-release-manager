@@ -45,8 +45,8 @@ def test_seeds_providers(tmp_path):
 def test_seeds_request_types(tmp_path):
     cache = _make_cache(tmp_path)
     for name, ttl in [
-        ("get_user_repositories", 300),
-        ("get_branch_repositories", 300),
+        ("get_user_repositories", 1800),
+        ("get_branch_repositories", 3600),
         ("scan_release", 1800),
         ("diff_ssm", 1800),
         ("get_master_params", 3600),
@@ -60,6 +60,17 @@ def test_seeds_request_types(tmp_path):
         assert rt["ttl_seconds"] == ttl, name
         assert rt["service_url"], name
     assert cache.get_rt("NoExiste") is None
+
+
+def test_seed_upserts_existing_rt_ttl(tmp_path):
+    cache = _make_cache(tmp_path)
+    rt = cache.get_rt("get_branch_repositories")
+    cache._conn.execute(
+        "UPDATE request_type SET rt_ttl_seconds = ? WHERE rt_id = ?", (777, rt["id"])
+    )
+    cache._conn.commit()
+    fresh = _make_cache(tmp_path)
+    assert fresh.get_rt("get_branch_repositories")["ttl_seconds"] == 3600
 
 
 # -- sesiones ---------------------------------------------------------------

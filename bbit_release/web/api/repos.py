@@ -1,7 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 import logging
 import re
-import time
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
@@ -24,8 +23,7 @@ log = logging.getLogger("bbit.scan")
 
 router = APIRouter(prefix="/api", tags=["repos"])
 
-MAX_WORKERS = 4
-_SUBMIT_DELAY = 0.1
+MAX_WORKERS = 8
 
 
 def _project_prefixes(cfg, raw: str = "") -> list[str] | None:
@@ -105,7 +103,10 @@ def _branch_repos_cached(client, origin: str, destination: str, prefs: list[str]
         repos = client.repos_with_branch(origin, prefixes=prefs, repos=base)
     else:
         repos = client.repos_with_branch(origin, prefixes=prefs)
-    items = [{"repo_name": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch} for r in repos]
+    items = [{
+        "repo_name": r.slug, "name": r.name, "workspace": r.workspace,
+        "default_branch": r.default_branch, "resolved_branch": getattr(r, "resolved_branch", ""),
+    } for r in repos]
     cache.set_branch_repos(origin, destination, prefs, exclude, items)
     return repos
 
@@ -415,6 +416,7 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
     el deploy es válido solo si el pipeline del tag tiene ese número, la
     revisión del commit y un workflow que mencione el ambiente.
     """
+    resolved = getattr(repo, "resolved_branch", "") or ""
     try:
         pr = client.find_pr(repo.slug, origin, destination)
     except bb.BitbucketError:
@@ -423,7 +425,7 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
     if pr and pr.get("source_commit"):
         commit = pr["source_commit"]
     else:
-        commit = client.commit_for_branch(repo.slug, origin)
+        commit = client.commit_for_branch(repo.slug, origin, resolved=resolved)
     if not pr:
         no_changes = not client.has_commits_ahead(repo.slug, origin, destination)
     else:
@@ -431,7 +433,7 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
     behind = client.commits_behind(repo.slug, origin, destination)
     match_commit = commit
     if ci is not None and pr and pr.get("source_commit"):
-        branch_head = client.commit_for_branch(repo.slug, origin)
+        branch_head = client.commit_for_branch(repo.slug, origin, resolved=resolved)
         log.info(
             "scan: %s pr.source_commit=%s branch_head=%s match_commit=%s",
             repo.slug,
@@ -527,11 +529,7 @@ def scan(origin: str, destination: str = "master", prefixes: str = "", project_p
     repos = _apply_filters(_branch_repos_cached(data.client, origin, destination, proj, blocked), proj, blocked)
     workers = min(MAX_WORKERS, len(repos) or 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = []
-        for i, repo in enumerate(repos):
-            futures.append(ex.submit(_repo_scan, data.client, ci, repo, origin, destination, clean))
-            if i < len(repos) - 1:
-                time.sleep(_SUBMIT_DELAY)
+        futures = [ex.submit(_repo_scan, data.client, ci, repo, origin, destination, clean) for repo in repos]
         results = [f.result() for f in futures]
 
     items = [r[0] for r in results]

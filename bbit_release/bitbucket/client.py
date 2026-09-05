@@ -22,7 +22,7 @@ MAX_RETRIES = 5
 RETRY_BASE_DELAY = 1.0
 
 API_BASE = "https://api.bitbucket.org/2.0"
-MAX_WORKERS = 4
+MAX_WORKERS = 8
 
 
 class _RateLimiter:
@@ -48,7 +48,7 @@ class _RateLimiter:
 
 
 # Rate limiter global para todas las instancias de BitbucketClient
-_rate_limiter = _RateLimiter(max_concurrent=4, min_interval=0.25)
+_rate_limiter = _RateLimiter(max_concurrent=8, min_interval=0.125)
 
 
 class BitbucketError(Exception):
@@ -73,6 +73,7 @@ class Repository:
     name: str
     workspace: str
     default_branch: str = "master"
+    resolved_branch: str = ""
 
 
 @dataclass(frozen=True)
@@ -355,10 +356,17 @@ class BitbucketClient:
             futures = [(repo, ex.submit(self.resolve_branch, repo.slug, branch)) for repo in repos]
             for repo, fut in futures:
                 try:
-                    if fut.result():
-                        matched.append(repo)
+                    resolved = fut.result()
                 except BitbucketError:
                     continue
+                if resolved:
+                    matched.append(Repository(
+                        slug=repo.slug,
+                        name=repo.name,
+                        workspace=repo.workspace,
+                        default_branch=getattr(repo, "default_branch", "master"),
+                        resolved_branch=resolved,
+                    ))
         return matched
 
     def diff(self, slug: str, from_ref: str, to_ref: str) -> DiffResult:
@@ -471,18 +479,23 @@ class BitbucketClient:
                 break
         return sorted(files)
 
-    def commit_for_branch(self, slug: str, branch: str) -> str:
+    def commit_for_branch(self, slug: str, branch: str, resolved: str = "") -> str:
         """Último commit de una rama (hash completo).
 
-        Si la rama no existe literalmente, resuelve por prefijo (por ejemplo
-        `release/REP-325073` → `release/REP-325073-V2`)."""
+        `resolved` es la rama efectiva ya resuelta (p.ej. del barrido de
+        `repos_with_branch`): si viene, se consulta directo y se evita
+        re-resolver (ahorra 2-3 requests cuando la rama literal no existe y
+        hay variante `-V2`). Sin `resolved`, cae en `resolve_branch`."""
+        target = resolved or branch
         data = self._request(
             "GET",
-            f"/repositories/{self.workspace}/{slug}/commits/{branch}",
+            f"/repositories/{self.workspace}/{slug}/commits/{target}",
             params={"pagelen": 1},
         )
         if data and data.get("values"):
             return data["values"][0].get("hash", "")
+        if resolved:
+            return ""
         resolved = self.resolve_branch(slug, branch)
         if not resolved or resolved == branch:
             return ""
@@ -518,13 +531,19 @@ class BitbucketClient:
         """Cantidad de commits en base que la rama no tiene (gap de sync).
 
         GET /commits/{base}?exclude={branch} → commits de base ausentes en branch.
+        Pide `pagelen=1` y lee `size` del envelope (el total de la consulta) en
+        un solo request; si el servidor no devuelve `size`, pagina como antes.
         """
+        url_base = f"/repositories/{self.workspace}/{slug}/commits/{base}"
         try:
-            data = self._request(
-                "GET",
-                f"/repositories/{self.workspace}/{slug}/commits/{base}",
-                params={"exclude": branch, "pagelen": 100},
-            )
+            data = self._request("GET", url_base, params={"exclude": branch, "pagelen": 1})
+        except (BitbucketError, BitbucketAuthError):
+            return 0
+        size = (data or {}).get("size")
+        if isinstance(size, int) and size >= 0:
+            return size
+        try:
+            data = self._request("GET", url_base, params={"exclude": branch, "pagelen": 100})
         except (BitbucketError, BitbucketAuthError):
             return 0
         count = 0

@@ -43,12 +43,12 @@ _SEED_PROVIDERS = {
 # name -> (provider, ttl_seconds, service_url, details)
 _SEED_REQUEST_TYPES = {
     "get_user_repositories": (
-        "Bitbucket", 300,
+        "Bitbucket", 1800,
         f"{_BITBUCKET_BASE}/repositories/{{workspace}}",
         {"method": "GET"},
     ),
     "get_branch_repositories": (
-        "Bitbucket", 300,
+        "Bitbucket", 3600,
         f"{_BITBUCKET_BASE}/repositories/{{workspace}}/{{repo}}/refs/branches/{{branch}}",
         {"method": "GET"},
     ),
@@ -215,10 +215,15 @@ class ReleaseCache:
             if row is None:
                 continue
             self._conn.execute(
-                "INSERT OR IGNORE INTO request_type "
+                "INSERT INTO request_type "
                 "(rt_service_provider_id, rt_name, rt_ttl_seconds, rt_service_url, "
                 " rt_details, rt_created_at, rt_updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(rt_name) DO UPDATE SET "
+                " rt_ttl_seconds = excluded.rt_ttl_seconds, "
+                " rt_service_url = excluded.rt_service_url, "
+                " rt_details = excluded.rt_details, "
+                " rt_updated_at = excluded.rt_updated_at",
                 (row[0], name, ttl, url, json.dumps(details), now, now),
             )
         self._conn.commit()
