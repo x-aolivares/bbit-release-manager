@@ -630,7 +630,7 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
 
     body = client.get("/api/diff", params={"origin": "release/x", "mode": "all"}).json()
     assert body["mode"] == "all"
-    assert seen["list"] == [("r1", "release/x"), ("r1", "master")]
+    assert seen["list"] == [("r1", "headOrigin"), ("r1", "headDest")]
     assert ("r1", "headOrigin", "logo.png") not in seen["raw"]
     assert body["params"] == [
         {"param": "/config/a/b", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"], "count": 1},
@@ -638,9 +638,9 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
     assert body["repos"][0]["added"] == ["/config/a/b"]
 
 
-def test_diff_resolve_master_lista_por_nombre_de_rama(monkeypatch):
-    """El modo diff lista master por NOMBRE de rama en list_files (el listado
-    raiz /src no resuelve un SHA crudo) y reserva el SHA para raw_file."""
+def test_diff_resolve_master_lista_por_sha(monkeypatch):
+    """El modo diff lista master por el SHA del head de la rama (list_files
+    agrega el trailing slash en la raíz) y usa el mismo ref para raw_file."""
     list_refs, raw_refs = [], []
 
     class StubClient:
@@ -679,7 +679,7 @@ def test_diff_resolve_master_lista_por_nombre_de_rama(monkeypatch):
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
-    assert list_refs == ["master"]
+    assert list_refs == ["headDest"]
     assert {"headOrigin", "headDest"} <= set(raw_refs)
     assert body["params"] == [
         {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"], "count": 1},

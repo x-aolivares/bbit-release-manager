@@ -456,11 +456,16 @@ class BitbucketClient:
 
         GET /src/{ref}/{tree} devuelve un nivel del árbol con paginación;
         se recorre hasta la base. Resultado ordenado y sin duplicados.
+
+        El ref raíz (sin `tree`) requiere el trailing slash en la URL
+        (`/src/{ref}/`): la API responde 404 sin él. Los subdirectorios
+        (`tree` no vacío) funcionan igual con o sin.
         """
         files: set[str] = set()
-        url: str | None = (
-            f"/repositories/{self.workspace}/{slug}/src/{ref}/{tree}".rstrip("/")
-        )
+        base = f"/repositories/{self.workspace}/{slug}/src/{ref}/{tree}".rstrip("/")
+        if not tree:
+            base += "/"
+        url: str | None = base
         params: dict | None = {"pagelen": 100}
         while url:
             payload = self._request("GET", url, params=params)
@@ -470,9 +475,10 @@ class BitbucketClient:
             for item in payload.get("values", []):
                 if not isinstance(item, dict):
                     continue
-                if item.get("type") == "directory":
+                name = item.get("type", "")
+                if name.endswith("directory"):
                     files.update(self.list_files(slug, ref, item.get("path", "")))
-                elif item.get("type") == "file":
+                elif name.endswith("file"):
                     files.add(item.get("path", ""))
             url = (payload.get("next") or "").replace(API_BASE, "")
             if not url:

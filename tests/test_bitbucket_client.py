@@ -429,21 +429,22 @@ def test_has_commits_ahead_ignores_api_error():
 
 
 def test_list_files_recursive_paginated():
+    """El ref raíz usa trailing slash y se recorren subdirectorios."""
     def handler(request):
         q = request.url.params
         if q.get("page") == "2":
             return httpx.Response(200, json={"values": [{"path": "b.txt", "type": "file"}]})
-        if request.url.path.endswith("/src/abc"):
+        if request.url.path == "/2.0/repositories/ws/r1/src/abc/":
             return httpx.Response(200, json={
                 "values": [
                     {"path": "z.txt", "type": "file"},
-                    {"path": "config", "type": "directory"},
+                    {"path": "config", "type": "commit_directory"},
                 ],
                 "next": "https://api.bitbucket.org/2.0/repositories/ws/r1/src/abc?page=2",
             })
-        if request.url.path.endswith("/src/abc/config"):
+        if request.url.path == "/2.0/repositories/ws/r1/src/abc/config":
             return httpx.Response(200, json={
-                "values": [{"path": "config/nested.yaml", "type": "file"}],
+                "values": [{"path": "config/nested.yaml", "type": "commit_file"}],
             })
         return httpx.Response(404, json={})
 
@@ -469,13 +470,15 @@ def test_list_files_branch_name_with_slash():
 
     def handler(request):
         calls.append(request.url.path)
-        if request.url.path.endswith("/config"):
+        if request.url.path == "/2.0/repositories/ws/r1/src/release/REP-325073/config":
             payload = {"values": [{"type": "file", "path": "config/nested.yaml"}]}
-        else:
+        elif request.url.path == "/2.0/repositories/ws/r1/src/release/REP-325073/":
             payload = {"values": [
-                {"type": "directory", "path": "config"},
-                {"type": "file", "path": "app.yaml"},
+                {"type": "commit_directory", "path": "config"},
+                {"type": "commit_file", "path": "app.yaml"},
             ]}
+        else:
+            return httpx.Response(404, json={})
         return httpx.Response(200, json=payload)
 
     client = BitbucketClient("ws", "tok", transport=httpx.MockTransport(handler))
@@ -485,7 +488,7 @@ def test_list_files_branch_name_with_slash():
         client.close()
     assert files == ["app.yaml", "config/nested.yaml"]
     assert calls == [
-        "/2.0/repositories/ws/r1/src/release/REP-325073",
+        "/2.0/repositories/ws/r1/src/release/REP-325073/",
         "/2.0/repositories/ws/r1/src/release/REP-325073/config",
     ]
 
