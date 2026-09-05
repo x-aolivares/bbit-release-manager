@@ -29,7 +29,8 @@ from pathlib import Path
 
 log = logging.getLogger("bbit.cache")
 
-_DEFAULT_DB = Path.home() / ".bbit" / "cache.db"
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_DEFAULT_DB = _PROJECT_ROOT / "data" / "cache.db"
 _BITBUCKET_BASE = "https://api.bitbucket.org/2.0"
 
 # Catálogo inicial de proveedores.
