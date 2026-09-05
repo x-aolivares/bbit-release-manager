@@ -143,6 +143,7 @@ class BitbucketClient:
     def _make_response_hook(self, recorder: Callable[[dict], None]):
         def hook(response: httpx.Response) -> None:
             try:
+                response.read()
                 start = response.request.extensions.get("_bbit_start")
                 duration_ms = (time.perf_counter() - start) * 1000 if start else 0.0
                 url = response.request.url

@@ -579,6 +579,38 @@ def test_recorder_failure_does_not_break_client():
         client.close()
 
 
+def test_response_hook_streaming_body():
+    """El hook debe leer el body streamed (caso httpx real), no asumirlos leídos."""
+
+    class Chunks(httpx._types.SyncByteStream):
+        def __init__(self, chunks):
+            self._chunks = iter(chunks)
+
+        def __iter__(self):
+            return self._chunks
+
+        def close(self):
+            pass
+
+    def stream_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=Chunks([b'{"name": "main"}']))
+
+    recorded: list[dict] = []
+    client = BitbucketClient(
+        "ws", "tok",
+        transport=httpx.MockTransport(stream_handler),
+        recorder=recorded.append,
+    )
+    try:
+        assert client.has_branch("r1", "main") is True
+    finally:
+        client.close()
+
+    assert len(recorded) == 1
+    assert recorded[0]["status"] == 200
+    assert recorded[0]["response"] == '{"name": "main"}'
+
+
 def test_no_recorder_returns_same_behavior():
     def branch(request):
         return httpx.Response(200, json={"name": "main"})
