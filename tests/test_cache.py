@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 from concurrent.futures import ThreadPoolExecutor
 
-from bbit_release.cache import ReleaseCache, _cache_key, reset_cache
+from bbit_release import cache as cache_mod
+from bbit_release.cache import ReleaseCache, reset_cache
 
 
 @pytest.fixture(autouse=True)
@@ -19,23 +20,119 @@ def _make_cache(tmp_path: Path) -> ReleaseCache:
     return ReleaseCache(db_path=tmp_path / "test.db")
 
 
-def test_cache_key_deterministic():
-    k1 = _cache_key("release/x", "master", ["trans"], {"billing"})
-    k2 = _cache_key("release/x", "master", ["trans"], {"billing"})
-    assert k1 == k2
+def _invoke_details(prefixes=None, exclude=None) -> dict:
+    return {
+        "repositories": {
+            "excluded": sorted(exclude or []),
+            "prefixes": sorted(prefixes or []),
+        }
+    }
 
 
-def test_cache_key_differs_with_different_origin():
-    k1 = _cache_key("release/a", "master", None, None)
-    k2 = _cache_key("release/b", "master", None, None)
-    assert k1 != k2
+# -- catálogo ---------------------------------------------------------------
+
+def test_seeds_providers(tmp_path):
+    cache = _make_cache(tmp_path)
+    bb = cache.get_provider("Bitbucket")
+    assert bb is not None
+    assert bb["details"]["base_url"] == "https://api.bitbucket.org/2.0"
+    ci = cache.get_provider("CircleCi")
+    assert ci is not None
+    assert ci["details"]["vcs"] == "bb"
+    assert cache.get_provider("NoExiste") is None
 
 
-def test_cache_key_differs_with_different_exclude():
-    k1 = _cache_key("release/x", "master", None, {"a"})
-    k2 = _cache_key("release/x", "master", None, {"b"})
-    assert k1 != k2
+def test_seeds_request_types(tmp_path):
+    cache = _make_cache(tmp_path)
+    for name, ttl in [
+        ("get_user_repositories", 300),
+        ("get_branch_repositories", 300),
+        ("scan_release", 1800),
+        ("diff_ssm", 1800),
+        ("get_master_params", 3600),
+    ]:
+        rt = cache.get_rt(name)
+        assert rt is not None, name
+        assert rt["ttl_seconds"] == ttl, name
+        assert rt["service_url"], name
+    assert cache.get_rt("NoExiste") is None
 
+
+# -- sesiones ---------------------------------------------------------------
+
+def test_create_and_get_session(tmp_path):
+    cache = _make_cache(tmp_path)
+    sid = cache.create_session("release/x", "master", {"repositories": {}})
+    got = cache.get_session(sid)
+    assert got["source"] == "release/x"
+    assert got["target"] == "master"
+    assert json.loads(got["details"]) == {
+        "source_branch": "release/x",
+        "target_branch": "master",
+        "config": {"repositories": {}},
+    }
+
+
+def test_find_session_reuses_same_config(tmp_path):
+    cache = _make_cache(tmp_path)
+    details = {"repositories": {"excluded": ["billing"], "prefixes": ["trans"]}}
+    a = cache.find_session("release/x", "master", details)
+    b = cache.find_session("release/x", "master", details)
+    assert a == b
+    assert len(cache._fetchall("SELECT is_id FROM init_sesion")) == 1
+
+
+def test_find_session_new_when_config_differs(tmp_path):
+    cache = _make_cache(tmp_path)
+    a = cache.find_session("release/x", "master", {"repositories": {}})
+    b = cache.find_session("release/x", "master", {"repositories": {"excluded": ["x"]}})
+    assert a != b
+
+
+# -- requests / TTL ---------------------------------------------------------
+
+def test_add_request_and_latest_success(tmp_path):
+    cache = _make_cache(tmp_path)
+    sid = cache.create_session("release/x", "master", {})
+    rt = cache.get_rt("scan_release")
+    rq = cache.add_request(sid, rt["id"], {"origin": "release/x"})
+    assert rq > 0
+    hit = cache.latest_success(rt["id"], sid)
+    assert hit is not None
+    assert hit["payload"] == {"origin": "release/x"}
+
+
+def test_latest_success_ignores_failed_requests(tmp_path):
+    cache = _make_cache(tmp_path)
+    sid = cache.create_session("release/x", "master", {})
+    rt = cache.get_rt("scan_release")
+    cache.add_request(sid, rt["id"], {"error": "boom"}, status="FAILED")
+    assert cache.latest_success(rt["id"], sid) is None
+
+
+def test_ttl_expiry_invalidates_hit(tmp_path, monkeypatch):
+    cache = _make_cache(tmp_path)
+    sid = cache.create_session("release/x", "master", {})
+    rt = cache.get_rt("scan_release")
+
+    now = time.time()
+    monkeypatch.setattr(cache_mod.time, "time", lambda: now)
+    cache.add_request(sid, rt["id"], {"origin": "release/x"})
+
+    monkeypatch.setattr(cache_mod.time, "time", lambda: now + rt["ttl_seconds"] + 1)
+    assert cache.latest_success(rt["id"], sid) is None
+
+
+def test_is_expired_semantics(tmp_path):
+    cache = _make_cache(tmp_path)
+    now = time.time()
+    assert not cache.is_expired(now, 300)
+    assert cache.is_expired(now - 301, 300)
+    assert not cache.is_expired(now - 10**6, 0)  # TTL 0 = nunca expira
+    assert not cache.is_expired(now - 10**6, -1)
+
+
+# -- facade roundtrips ------------------------------------------------------
 
 def test_repos_roundtrip(tmp_path):
     cache = _make_cache(tmp_path)
@@ -89,80 +186,6 @@ def test_master_miss(tmp_path):
     assert cache.get_master("r1", "master") is None
 
 
-def test_invalidate_repos(tmp_path):
-    cache = _make_cache(tmp_path)
-    cache.set_repos("release/x", "master", None, None, [{"slug": "r1"}])
-    cache.invalidate("release/x", "master", None, None)
-    assert cache.get_repos("release/x", "master", None, None) is None
-
-
-def test_invalidate_scan(tmp_path):
-    cache = _make_cache(tmp_path)
-    cache.set_scan("release/x", "master", None, None, {"origin": "x"})
-    cache.invalidate("release/x", "master", None, None)
-    assert cache.get_scan("release/x", "master", None, None) is None
-
-
-def test_invalidate_diff(tmp_path):
-    cache = _make_cache(tmp_path)
-    cache.set_diff("release/x", "master", None, None, {"origin": "x"})
-    cache.invalidate("release/x", "master", None, None)
-    assert cache.get_diff("release/x", "master", None, None) is None
-
-
-def test_invalidate_does_not_touch_master(tmp_path):
-    cache = _make_cache(tmp_path)
-    cache.set_master("r1", "master", {("/config/a", "")})
-    cache.invalidate("release/x", "master", None, None)
-    assert cache.get_master("r1", "master") == {("/config/a", "")}
-
-
-def test_invalidate_all_clears_everything(tmp_path):
-    cache = _make_cache(tmp_path)
-    cache.set_repos("release/x", "master", None, None, [{"slug": "r1"}])
-    cache.set_scan("release/x", "master", None, None, {"origin": "x"})
-    cache.set_diff("release/x", "master", None, None, {"origin": "x"})
-    cache.set_master("r1", "master", {("/config/a", "")})
-    cache.invalidate_all()
-    assert cache.get_repos("release/x", "master", None, None) is None
-    assert cache.get_scan("release/x", "master", None, None) is None
-    assert cache.get_diff("release/x", "master", None, None) is None
-    assert cache.get_master("r1", "master") is None
-
-
-def test_overwrite_replaces(tmp_path):
-    cache = _make_cache(tmp_path)
-    cache.set_repos("release/x", "master", None, None, [{"slug": "old"}])
-    cache.set_repos("release/x", "master", None, None, [{"slug": "new"}])
-    got = cache.get_repos("release/x", "master", None, None)
-    assert got == [{"slug": "new"}]
-
-
-def test_persists_after_reopen(tmp_path):
-    path = tmp_path / "test.db"
-    c1 = ReleaseCache(db_path=path)
-    c1.set_repos("release/x", "master", None, None, [{"slug": "r1"}])
-    c1.close()
-    c2 = ReleaseCache(db_path=path)
-    got = c2.get_repos("release/x", "master", None, None)
-    assert got == [{"slug": "r1"}]
-    c2.close()
-
-
-def test_empty_prefixes_and_exclude():
-    k1 = _cache_key("release/x", "master", None, None)
-    k2 = _cache_key("release/x", "master", [], set())
-    assert k1 == k2
-
-
-def test_master_not_overwritten_by_different_slug(tmp_path):
-    cache = _make_cache(tmp_path)
-    cache.set_master("r1", "master", {("/config/a", "")})
-    cache.set_master("r2", "master", {("/config/b", "")})
-    assert cache.get_master("r1", "master") == {("/config/a", "")}
-    assert cache.get_master("r2", "master") == {("/config/b", "")}
-
-
 def test_branch_repos_roundtrip(tmp_path):
     cache = _make_cache(tmp_path)
     repos = [{"repo_name": "r1", "name": "R1", "workspace": "ws", "default_branch": "master"}]
@@ -191,19 +214,123 @@ def test_branch_repos_overwrite(tmp_path):
     assert cache.get_branch_repos("release/x", "master", None, None) == [{"repo_name": "new"}]
 
 
-def test_invalidate_clears_branch_repos(tmp_path):
+# -- invalidación -----------------------------------------------------------
+
+def test_invalidate_matching_repositories(tmp_path):
     cache = _make_cache(tmp_path)
+    cache.set_repos("release/x", "master", None, None, [{"slug": "r1"}])
+    cache.invalidate("release/x", "master", _invoke_details(None, None))
+    assert cache.get_repos("release/x", "master", None, None) is None
+
+
+def test_invalidate_does_not_match_different_repositories(tmp_path):
+    """Invalidar con otro bloque repositories no borra (config distinta)."""
+    cache = _make_cache(tmp_path)
+    cache.set_scan("release/x", "master", ["uat"], {"billing"}, {"origin": "x"})
+    cache.invalidate("release/x", "master", _invoke_details(None, None))
+    assert cache.get_scan("release/x", "master", ["uat"], {"billing"}) == {"origin": "x"}
+
+
+def test_invalidate_scan_and_branch(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_scan("release/x", "master", None, None, {"origin": "x"})
     cache.set_branch_repos("release/x", "master", None, None, [{"repo_name": "a"}])
-    cache.invalidate("release/x", "master", None, None)
+    cache.invalidate("release/x", "master", _invoke_details(None, None))
+    assert cache.get_scan("release/x", "master", None, None) is None
     assert cache.get_branch_repos("release/x", "master", None, None) is None
 
 
-def test_invalidate_all_clears_branch_repos(tmp_path):
+def test_invalidate_diff(tmp_path):
     cache = _make_cache(tmp_path)
+    cache.set_diff("release/x", "master", None, None, {"origin": "x"})
+    cache.invalidate("release/x", "master", _invoke_details(None, None))
+    assert cache.get_diff("release/x", "master", None, None) is None
+
+
+def test_invalidate_does_not_touch_master(tmp_path):
+    """El master params se referencia por repo, no por rama origen."""
+    cache = _make_cache(tmp_path)
+    cache.set_master("r1", "master", {("/config/a", "")})
+    cache.invalidate("release/x", "master", _invoke_details(None, None))
+    assert cache.get_master("r1", "master") == {("/config/a", "")}
+
+
+def test_invalidate_all_clears_everything(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_repos("release/x", "master", None, None, [{"slug": "r1"}])
+    cache.set_scan("release/x", "master", None, None, {"origin": "x"})
+    cache.set_diff("release/x", "master", None, None, {"origin": "x"})
+    cache.set_master("r1", "master", {("/config/a", "")})
     cache.set_branch_repos("release/x", "master", None, None, [{"repo_name": "a"}])
     cache.invalidate_all()
+    assert cache.get_repos("release/x", "master", None, None) is None
+    assert cache.get_scan("release/x", "master", None, None) is None
+    assert cache.get_diff("release/x", "master", None, None) is None
+    assert cache.get_master("r1", "master") is None
     assert cache.get_branch_repos("release/x", "master", None, None) is None
+    # El catálogo (seeds) sobrevive a invalidate_all.
+    assert cache.get_rt("scan_release") is not None
 
+
+# -- histórico --------------------------------------------------------------
+
+def test_overwrite_replaces_with_latest(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_repos("release/x", "master", None, None, [{"slug": "old"}])
+    cache.set_repos("release/x", "master", None, None, [{"slug": "new"}])
+    got = cache.get_repos("release/x", "master", None, None)
+    assert got == [{"slug": "new"}]
+
+
+def test_request_history_accumulates(tmp_path):
+    cache = _make_cache(tmp_path)
+    sid = cache.find_session("release/x", "master", _repo_details_scan())
+    rt = cache.get_rt("scan_release")
+    cache.add_request(sid, rt["id"], {"n": 1})
+    cache.add_request(sid, rt["id"], {"n": 2})
+    rows = cache._fetchall("SELECT rq_id FROM request WHERE is_id = ?", (sid,))
+    assert len(rows) == 2
+    assert cache.latest_success(rt["id"], sid)["payload"] == {"n": 2}
+
+
+def _repo_details_scan() -> dict:
+    return {
+        "bypass_cache": False,
+        "repositories": {"excluded": [], "prefixes": []},
+        "deployment_environments": ["uat", "stgp", "prod"],
+        "ssm": {"mode": "DIFF", "prefixes": ["/config", "/common"]},
+    }
+
+
+# -- persistencia / equivalencia ---------------------------------------------
+
+def test_persists_after_reopen(tmp_path):
+    path = tmp_path / "test.db"
+    c1 = ReleaseCache(db_path=path)
+    c1.set_repos("release/x", "master", None, None, [{"slug": "r1"}])
+    c1.close()
+    c2 = ReleaseCache(db_path=path)
+    got = c2.get_repos("release/x", "master", None, None)
+    assert got == [{"slug": "r1"}]
+    c2.close()
+
+
+def test_empty_prefixes_and_exclude_equivalent(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_repos("release/x", "master", None, None, [{"slug": "r1"}])
+    got = cache.get_repos("release/x", "master", [], set())
+    assert got == [{"slug": "r1"}]
+
+
+def test_master_not_overwritten_by_different_slug(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_master("r1", "master", {("/config/a", "")})
+    cache.set_master("r2", "master", {("/config/b", "")})
+    assert cache.get_master("r1", "master") == {("/config/a", "")}
+    assert cache.get_master("r2", "master") == {("/config/b", "")}
+
+
+# -- concurrencia -----------------------------------------------------------
 
 def test_thread_safe_concurrent_access(tmp_path):
     """Muchos hilos leen y escriben la misma conexión sin InterfaceError."""
@@ -222,5 +349,3 @@ def test_thread_safe_concurrent_access(tmp_path):
 
     for i in range(n):
         assert cache.get_master(f"r{i}", "master") == {(f"/config/{i}", "")}
-
-

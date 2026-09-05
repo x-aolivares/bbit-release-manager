@@ -457,7 +457,7 @@ def scan(origin: str, destination: str = "master", prefixes: str = "", project_p
     cache = get_cache()
 
     if force:
-        cache.invalidate(origin, destination, proj, blocked)
+        cache.invalidate(origin, destination, {"repositories": {"excluded": sorted(blocked), "prefixes": sorted(proj or [])}})
     elif cache.get_scan(origin, destination, proj, blocked, clean) is not None:
         return cache.get_scan(origin, destination, proj, blocked, clean)
 
@@ -733,7 +733,7 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
     cache = get_cache()
 
     if force:
-        cache.invalidate(origin, destination, proj, blocked, ssm_prefixes=prefixes)
+        cache.invalidate(origin, destination, {"repositories": {"excluded": sorted(blocked), "prefixes": sorted(proj or [])}})
     elif cache.get_diff(origin, destination, proj, blocked, ssm_prefixes=prefixes) is not None:
         return cache.get_diff(origin, destination, proj, blocked, ssm_prefixes=prefixes)
 
