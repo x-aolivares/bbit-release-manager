@@ -463,6 +463,33 @@ def test_list_files_empty_on_404():
         client.close()
 
 
+def test_list_files_branch_name_with_slash():
+    """Un ref con '/' (ej. release/REP-325073) no rompe URL ni recursión."""
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path.endswith("/config"):
+            payload = {"values": [{"type": "file", "path": "config/nested.yaml"}]}
+        else:
+            payload = {"values": [
+                {"type": "directory", "path": "config"},
+                {"type": "file", "path": "app.yaml"},
+            ]}
+        return httpx.Response(200, json=payload)
+
+    client = BitbucketClient("ws", "tok", transport=httpx.MockTransport(handler))
+    try:
+        files = client.list_files("r1", "release/REP-325073")
+    finally:
+        client.close()
+    assert files == ["app.yaml", "config/nested.yaml"]
+    assert calls == [
+        "/2.0/repositories/ws/r1/src/release/REP-325073",
+        "/2.0/repositories/ws/r1/src/release/REP-325073/config",
+    ]
+
+
 def test_create_pr():
     def post(request):
         assert "/pullrequests" in request.url.path

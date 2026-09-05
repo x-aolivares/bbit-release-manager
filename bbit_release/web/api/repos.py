@@ -817,7 +817,7 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
             return cached_params
         dest_ref = client.commit_for_branch(repo.slug, destination) or destination
         params = _read_files_params(client, repo.slug, dest_ref,
-                                    client.list_files(repo.slug, dest_ref), prefixes)
+                                    client.list_files(repo.slug, destination), prefixes)
         if params:
             cache.set_master(repo.slug, destination, params)
         return params
@@ -831,10 +831,11 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
         def _scan_all(client, repo):
             slug = repo.slug
             origin_ref, dest_ref = _repo_refs(client, repo)
+            origin_name = getattr(repo, "resolved_branch", "") or origin
             origin_params = _read_files_params(client, slug, origin_ref,
-                                               client.list_files(slug, origin_ref), prefixes)
+                                               client.list_files(slug, origin_name), prefixes)
             dest_params = _read_files_params(client, slug, dest_ref,
-                                             client.list_files(slug, dest_ref), prefixes)
+                                             client.list_files(slug, destination), prefixes)
             if dest_params:
                 cache.set_master(slug, destination, dest_params)
             return slug, origin_params, dest_params

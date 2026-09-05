@@ -63,6 +63,13 @@ Use conventional commits (tipo en inglés, descripción en español):
 
 El mensaje debe ser descriptivo: sujeto corto en español (ej: `feat: bbit web con dev loop por HMR`) y, si el cambio es grande, un cuerpo con viñetas detallando qué se tocó.
 
+Todo commit que implementa un route-plan lleva el identificador `(RMV-{N})`,
+donde `N` es el número del `route-plan-v{N}` correspondiente, como scope del
+tipo. Sujeto corto y descriptivo, sin emojis:
+
+- `fix(RMV-41): list_files por nombre de rama evita 404 en /src`
+- `feat(RMV-40): optimización de consultas a APIs externas en el scan`
+
 ## Config files
 
 Files under `config/env.*` (without `.example`) are gitignored.

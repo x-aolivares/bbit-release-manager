@@ -630,12 +630,60 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
 
     body = client.get("/api/diff", params={"origin": "release/x", "mode": "all"}).json()
     assert body["mode"] == "all"
-    assert seen["list"] == [("r1", "headOrigin"), ("r1", "headDest")]
+    assert seen["list"] == [("r1", "release/x"), ("r1", "master")]
     assert ("r1", "headOrigin", "logo.png") not in seen["raw"]
     assert body["params"] == [
         {"param": "/config/a/b", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"], "count": 1},
     ]
     assert body["repos"][0]["added"] == ["/config/a/b"]
+
+
+def test_diff_resolve_master_lista_por_nombre_de_rama(monkeypatch):
+    """El modo diff lista master por NOMBRE de rama en list_files (el listado
+    raiz /src no resuelve un SHA crudo) y reserva el SHA para raw_file."""
+    list_refs, raw_refs = [], []
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def diff(self, repo, destination, origin):
+            f = SimpleNamespace(
+                path="config/x.yaml", status="modified",
+                added_lines=("k: {{resolve:ssm:/config/app/key}}",), removed_lines=(),
+            )
+            return SimpleNamespace(files=[f])
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "headOrigin" if branch == "release/x" else "headDest"
+        def list_files(self, repo, ref):
+            list_refs.append(ref)
+            return ["config/x.yaml"]
+        def raw_file(self, repo, ref, path):
+            raw_refs.append(ref)
+            return "k: {{resolve:ssm:/config/app/key}}" if ref == "headOrigin" else "no ssm"
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    assert list_refs == ["master"]
+    assert {"headOrigin", "headDest"} <= set(raw_refs)
+    assert body["params"] == [
+        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"], "count": 1},
+    ]
 
 
 def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
