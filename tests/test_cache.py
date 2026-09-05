@@ -50,6 +50,10 @@ def test_seeds_request_types(tmp_path):
         ("scan_release", 1800),
         ("diff_ssm", 1800),
         ("get_master_params", 3600),
+        ("circleci_project", 3600),
+        ("circleci_pipelines", 120),
+        ("circleci_workflows", 60),
+        ("circleci_workflow_jobs", 60),
     ]:
         rt = cache.get_rt(name)
         assert rt is not None, name

@@ -32,6 +32,7 @@ log = logging.getLogger("bbit.cache")
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_DB = _PROJECT_ROOT / "data" / "cache.db"
 _BITBUCKET_BASE = "https://api.bitbucket.org/2.0"
+_CIRCLECI_BASE = "https://circleci.com/api/v2"
 
 # Catálogo inicial de proveedores.
 _SEED_PROVIDERS = {
@@ -64,6 +65,26 @@ _SEED_REQUEST_TYPES = {
     "get_master_params": (
         "Bitbucket", 3600,
         f"{_BITBUCKET_BASE}/repositories/{{workspace}}/{{repo}}/src/{{ref}}",
+        {"method": "GET"},
+    ),
+    "circleci_project": (
+        "CircleCi", 3600,
+        f"{_CIRCLECI_BASE}/project/{{slug}}",
+        {"method": "GET"},
+    ),
+    "circleci_pipelines": (
+        "CircleCi", 120,
+        f"{_CIRCLECI_BASE}/project/{{slug}}/pipeline",
+        {"method": "GET"},
+    ),
+    "circleci_workflows": (
+        "CircleCi", 60,
+        f"{_CIRCLECI_BASE}/pipeline/{{pipeline_id}}/workflow",
+        {"method": "GET"},
+    ),
+    "circleci_workflow_jobs": (
+        "CircleCi", 60,
+        f"{_CIRCLECI_BASE}/workflow/{{workflow_id}}/job",
         {"method": "GET"},
     ),
 }
@@ -585,6 +606,36 @@ class ReleaseCache:
     def set_master(self, slug: str, destination: str, params: set) -> None:
         details = _repo_details(bypass_cache=False)
         self._set_cached("get_master_params", slug, destination, details, list(params))
+
+    # -- fachadas CircleCI -------------------------------------------------------
+
+    def get_circleci_project(self, slug: str) -> dict | None:
+        return self._get_cached("circleci_project", slug, "project", {})
+
+    def set_circleci_project(self, slug: str, payload: dict) -> None:
+        self._set_cached("circleci_project", slug, "project", {}, payload)
+
+    def get_circleci_pipelines(self, slug: str, branch_or_tag: str, kind: str) -> list[dict] | None:
+        return self._get_cached(
+            "circleci_pipelines", slug, branch_or_tag, {"kind": kind},
+        )
+
+    def set_circleci_pipelines(self, slug: str, branch_or_tag: str, kind: str, items: list[dict]) -> None:
+        self._set_cached(
+            "circleci_pipelines", slug, branch_or_tag, {"kind": kind}, items,
+        )
+
+    def get_circleci_workflows(self, pipeline_id: str) -> list[dict] | None:
+        return self._get_cached("circleci_workflows", pipeline_id, "", {})
+
+    def set_circleci_workflows(self, pipeline_id: str, items: list[dict]) -> None:
+        self._set_cached("circleci_workflows", pipeline_id, "", {}, items)
+
+    def get_circleci_workflow_jobs(self, workflow_id: str) -> list[dict] | None:
+        return self._get_cached("circleci_workflow_jobs", workflow_id, "", {})
+
+    def set_circleci_workflow_jobs(self, workflow_id: str, items: list[dict]) -> None:
+        self._set_cached("circleci_workflow_jobs", workflow_id, "", {}, items)
 
 
 _global_cache: ReleaseCache | None = None

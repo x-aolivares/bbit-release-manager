@@ -164,6 +164,7 @@ def _circleci() -> CircleCiClient | None:
         vcs=cfg.circleci_vcs,
         org=cfg.circleci_org or cfg.workspace,
         recorder=_recorder,
+        cache=get_cache(),
     )
 
 

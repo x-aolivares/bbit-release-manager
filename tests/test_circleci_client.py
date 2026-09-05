@@ -256,3 +256,100 @@ def test_recorder_failure_does_not_break_client():
         assert client.me()["name"] == "ada"
     finally:
         client.close()
+
+
+# -- cache SQLite -----------------------------------------------------------
+
+def _make_cache(tmp_path):
+    from bbit_release.cache import ReleaseCache
+    return ReleaseCache(db_path=tmp_path / "ci-cache.db")
+
+
+def test_project_id_cache_hit_avoids_http(tmp_path):
+    calls: list[str] = []
+
+    def project(request):
+        calls.append("http")
+        return httpx.Response(200, json={
+            "id": "9beb07c8-cc3b-4da1-8bc4-e9121667fbb7", "slug": "bb/o/r1",
+        })
+
+    cache = _make_cache(tmp_path)
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1"): project,
+    }), cache=cache)
+    try:
+        assert client.project_id("r1") == "9beb07c8-cc3b-4da1-8bc4-e9121667fbb7"
+        assert calls == ["http"]
+        assert client.project_id("r1") == "9beb07c8-cc3b-4da1-8bc4-e9121667fbb7"
+        assert calls == ["http"]  # 2do pega en el cache
+    finally:
+        client.close()
+        cache.close()
+
+
+def test_pipelines_cache_distinguishes_branch_and_tag(tmp_path):
+    calls: list[str] = []
+
+    def pipelines(request):
+        calls.append(request.url.params.get("branch", "?"))
+        branch = request.url.params.get("branch", "")
+        vcs = {"revision": "abc"}
+        if branch:
+            vcs["tag"] = branch
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [{"id": "p", "number": 1, "vcs": vcs}],
+        })
+
+    cache = _make_cache(tmp_path)
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): pipelines,
+    }), cache=cache)
+    try:
+        assert [p["id"] for p in client.pipelines("r1", branch="release")] == ["p"]
+        assert [p["id"] for p in client.pipelines("r1", branch="release")] == ["p"]
+        assert calls == ["release"]  # 2do pega en el cache
+        assert [p["id"] for p in client.pipelines("r1", tag="v1.0")] == ["p"]
+        assert calls == ["release", "v1.0"]  # tag no colisiona con branch
+        rt = cache.get_rt("circleci_pipelines")
+        assert rt is not None
+        total = cache._fetchone(
+            "SELECT COUNT(*) FROM request WHERE rt_id = ?", (rt["id"],)
+        )[0]
+        assert total == 2  # una fila por branch y otra por tag, con hit en 2do
+    finally:
+        client.close()
+        cache.close()
+
+
+def test_workflows_and_jobs_cache_hit(tmp_path):
+    calls = {"wf": 0, "jobs": 0}
+
+    def workflows(request):
+        calls["wf"] += 1
+        return httpx.Response(200, json={"next_page_token": None, "items": [
+            {"id": "wf1", "name": "deploy", "status": "success", "created_at": "x"},
+        ]})
+
+    def jobs(request):
+        calls["jobs"] += 1
+        return httpx.Response(200, json={"next_page_token": None, "items": [
+            {"id": "j1", "type": "build", "number": 8, "name": "deploy"},
+        ]})
+
+    cache = _make_cache(tmp_path)
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/pipeline/p1/workflow"): workflows,
+        ("GET", "/api/v2/workflow/wf1/job"): jobs,
+    }), cache=cache)
+    try:
+        assert client.workflows("p1")[0]["name"] == "deploy"
+        assert client.workflows("p1")[0]["name"] == "deploy"
+        assert calls["wf"] == 1
+        assert client.workflow_jobs("wf1")[0]["name"] == "deploy"
+        assert client.workflow_jobs("wf1")[0]["name"] == "deploy"
+        assert calls["jobs"] == 1
+    finally:
+        client.close()
+        cache.close()

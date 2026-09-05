@@ -10,9 +10,12 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import httpx
+
+if TYPE_CHECKING:
+    from ..cache import ReleaseCache
 
 log = logging.getLogger("bbit.circleci")
 
@@ -47,6 +50,7 @@ class CircleCiClient:
         timeout: float = 15.0,
         transport: httpx.BaseTransport | None = None,
         recorder: Callable[[dict], None] | None = None,
+        cache: ReleaseCache | None = None,
     ):
         if not token:
             raise ValueError("CIRCLECI_TOKEN es obligatorio")
@@ -54,6 +58,7 @@ class CircleCiClient:
             raise ValueError("org (CIRCLECI_ORG) es obligatorio")
         self.vcs = vcs
         self.org = org
+        self._cache = cache
 
         hooks: dict[str, list[Callable]] = {}
         if recorder is not None:
@@ -113,7 +118,14 @@ class CircleCiClient:
 
     def project_id(self, repo: str) -> str | None:
         """UUID del proyecto en CircleCI (se usa en el link web filtrado por tag)."""
-        payload = self._request("GET", f"/project/{self.project_slug(repo)}")
+        slug = self.project_slug(repo)
+        if self._cache is not None:
+            cached = self._cache.get_circleci_project(slug)
+            if cached is not None:
+                return cached.get("id") or None
+        payload = self._request("GET", f"/project/{slug}")
+        if self._cache is not None:
+            self._cache.set_circleci_project(slug, payload)
         return payload.get("id") or None
 
     def me(self) -> dict:
@@ -148,21 +160,45 @@ class CircleCiClient:
     def pipelines(self, repo: str, branch: str | None = None, tag: str | None = None) -> list[dict]:
         """Pipelines del proyecto, opcionalmente filtrados por rama o tag."""
         params: dict = {"limit": 100}
+        key = ""
+        kind = ""
         if branch:
             params["branch"] = branch
+            key, kind = branch, "branch"
         elif tag:
             params["branch"] = tag
+            key, kind = tag, "tag"
+        if self._cache is not None and key:
+            cached = self._cache.get_circleci_pipelines(self.project_slug(repo), key, kind)
+            if cached is not None:
+                return cached
         items = self._paginate(f"/project/{self.project_slug(repo)}/pipeline", params)
         if tag:
             items = [p for p in items if (p.get("vcs") or {}).get("tag") == tag]
+        if self._cache is not None and key:
+            self._cache.set_circleci_pipelines(self.project_slug(repo), key, kind, items)
         return items
 
     def workflows(self, pipeline_id: str) -> list[dict]:
-        return self._paginate(f"/pipeline/{pipeline_id}/workflow", {})
+        if self._cache is not None:
+            cached = self._cache.get_circleci_workflows(pipeline_id)
+            if cached is not None:
+                return cached
+        items = self._paginate(f"/pipeline/{pipeline_id}/workflow", {})
+        if self._cache is not None:
+            self._cache.set_circleci_workflows(pipeline_id, items)
+        return items
 
     def workflow_jobs(self, workflow_id: str) -> list[dict]:
         """Jobs de un workflow (para el deep-link al job del deploy)."""
-        return self._paginate(f"/workflow/{workflow_id}/job", {})
+        if self._cache is not None:
+            cached = self._cache.get_circleci_workflow_jobs(workflow_id)
+            if cached is not None:
+                return cached
+        items = self._paginate(f"/workflow/{workflow_id}/job", {})
+        if self._cache is not None:
+            self._cache.set_circleci_workflow_jobs(workflow_id, items)
+        return items
 
     def _deploy_from_workflow(self, repo: str, pipeline: dict, workflow: dict) -> DeployJob:
         slug = self.project_slug(repo)
