@@ -251,12 +251,6 @@
                   <span>
                     <a class="bb-link bb-repo-name" [href]="repoUrl(repo)" target="_blank"
                        [title]="repo.name">{{ repo.name }}</a>
-                    @if (ciConfigured() && missingEnvs(repo).length > 0) {
-                      <span class="bb-retaag"
-                            [title]="'Requiere taguear: ' + missingEnvs(repo).join(', ')">
-                        requiere taguear: {{ missingEnvs(repo).join(', ') }}
-                      </span>
-                    }
                   </span>
             <span>
                     @let sync = syncInfo(repo.behind);
