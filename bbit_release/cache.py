@@ -387,7 +387,10 @@ class ReleaseCache:
         for is_id in matched_ids:
             self._execute("DELETE FROM request WHERE is_id = ?", (is_id,))
             self._execute("DELETE FROM init_sesion WHERE is_id = ?", (is_id,))
-        log.debug("invalidated cache: %d sessions for %s→%s", len(matched_ids), source, target)
+        log.info(
+            "cache invalidate %s->%s: %d sesion(es) y sus requests borrados de SQLite",
+            source, target, len(matched_ids),
+        )
 
     def invalidate_all(self) -> None:
         with self._lock:
@@ -395,10 +398,11 @@ class ReleaseCache:
             try:
                 cur.execute("DELETE FROM request")
                 cur.execute("DELETE FROM init_sesion")
+                deleted = cur.rowcount
             finally:
                 cur.close()
             self._conn.commit()
-        log.debug("invalidated all cache")
+        log.info("cache invalidate_all: requests/sesiones borrados de SQLite (%d registros)", deleted)
 
     def close(self) -> None:
         with self._lock:
@@ -410,24 +414,42 @@ class ReleaseCache:
         """Hit: payload del último SUCCESS de un tipo/sesión; miss: None."""
         rt = self.get_rt(rt_name)
         if rt is None:
+            log.warning("cache sin request_type '%s': consulta servicio externo", rt_name)
             return None
         session_id = self.find_session(source, target, details)
         hit = self.latest_success(rt["id"], session_id)
         if hit is None:
+            log.info(
+                "cache miss %s: %s->%s -> consulta servicio externo",
+                rt_name, source, target,
+            )
             return None
-        log.debug("cache hit %s: %s→%s", rt_name, source, target)
+        ttl = rt["ttl_seconds"]
+        log.info(
+            "cache hit %s: %s->%s desde SQLite (is_id=%d, creado hace %.0fs)",
+            rt_name, source, target, session_id,
+            max(0.0, time.time() - hit["created_at"]),
+        )
+        if ttl:
+            remaining = ttl - (time.time() - hit["created_at"])
+            log.debug("cache hit: quedan %.0fs de TTL (%ds)", max(0.0, remaining), ttl)
         return hit["payload"]
 
     def _set_cached(self, rt_name: str, source: str, target: str, details: dict, payload) -> None:
         rt = self.get_rt(rt_name)
         if rt is None:
+            log.warning("cache sin request_type '%s': no persisto respuesta", rt_name)
             return
         session_id = self.find_session(source, target, details)
-        self._insert(
+        rq_id = self._insert(
             "INSERT INTO request "
             "(is_id, rt_id, rq_status, rq_details, rq_created_at, rq_updated_at) "
             "VALUES (?, ?, 'SUCCESS', ?, ?, ?)",
             (session_id, rt["id"], json.dumps(payload), time.time(), time.time()),
+        )
+        log.info(
+            "cache store %s: %s->%s guardado en SQLite (is_id=%d, rq_id=%d)",
+            rt_name, source, target, session_id, rq_id,
         )
 
     def get_repos(self, origin: str, destination: str, prefixes: list[str] | None, exclude: set[str] | None):
