@@ -4,7 +4,7 @@
     @if (sessions().length > 0) {
       <ion-button class="bb-clear-btn" fill="clear" size="small" (click)="onClear()">
         <ion-icon slot="start" name="trash-outline"></ion-icon>
-        Limpiar
+        Limpiar todo
       </ion-button>
     }
   </div>
@@ -45,7 +45,7 @@
             class="bb-delete-btn"
             (click)="onDelete($event, session.id)"
             aria-label="Eliminar sesión">
-            <ion-icon name="trash-outline"></ion-icon>
+            Limpiar
           </ion-button>
         </ion-item>
       }

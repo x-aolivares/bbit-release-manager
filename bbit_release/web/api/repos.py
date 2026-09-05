@@ -265,16 +265,51 @@ def api_session(body: dict):
 
 
 @router.delete("/cache")
-def clear_cache():
-    """Vacía registros de request/init_sesion/service_call en la DB del cache."""
+def clear_cache(body: dict | None = None):
+    """Vacía registros del cache.
+
+    Retrocompatible: sin body limpia TODO (request/init_sesion/service_call).
+    Con ``{"sessions": [{origin, destination, project_prefixes, exclude}, ...]}``
+    elimina solo las sesiones indicadas (y sus requests). Devuelve el desglose.
+    """
+    sessions = (body or {}).get("sessions") or []
+    if not sessions:
+        try:
+            counts = get_cache().clear_all()
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"No se pudo limpiar el cache: {exc}"},
+                status_code=500,
+            )
+        return {"ok": True, "cleared": counts}
+
+    cache = get_cache()
+    total: dict[str, int] = {"sessions": 0, "requests": 0}
     try:
-        counts = get_cache().clear_all()
+        for s in sessions:
+            origin = (s.get("origin") or "").strip()
+            destination = (s.get("destination") or "master").strip()
+            if not origin:
+                continue
+            before_s = cache._fetchone("SELECT COUNT(*) FROM init_sesion", ())[0]
+            before_r = cache._fetchone("SELECT COUNT(*) FROM request", ())[0]
+            cache.invalidate(
+                origin, destination,
+                {
+                    "repositories": {
+                        "excluded": sorted(s.get("exclude") or []),
+                        "prefixes": sorted(s.get("project_prefixes") or []),
+                    }
+                },
+            )
+            total["sessions"] += before_s - cache._fetchone("SELECT COUNT(*) FROM init_sesion", ())[0]
+            total["requests"] += before_r - cache._fetchone("SELECT COUNT(*) FROM request", ())[0]
     except Exception as exc:
         return JSONResponse(
-            {"ok": False, "error": f"No se pudo limpiar el cache: {exc}"},
+            {"ok": False, "error": f"No se pudo limpiar las sesiones: {exc}"},
             status_code=500,
         )
-    return {"ok": True, "cleared": counts}
+    return {"ok": True, "cleared": total}
 
 
 @router.delete("/session")

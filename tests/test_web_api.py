@@ -1398,3 +1398,51 @@ def test_spa_serves_build_when_present():
     assert resp.status_code == expected
     api = client.get("/api/health")
     assert api.status_code == 200
+
+
+def test_clear_cache_sin_body_limpia_todo():
+    from bbit_release.cache import get_cache
+    cache = get_cache()
+    cache.set_master("r1", "master", {("/config/a", "")})
+    cache.record_service_call(
+        source="bitbucket", method="GET", url="/2.0/me", params=None,
+        status=200, duration_ms=1.0, response="{}",
+    )
+    # crear una sesión en la DB del cache
+    cache.find_session("release/x", "master", {"repositories": {"excluded": [], "prefixes": []}})
+
+    resp = client.delete("/api/cache")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["cleared"]["request"] > 0
+    assert data["cleared"]["init_sesion"] > 0
+    assert data["cleared"]["service_call"] > 0
+    assert cache._fetchone("SELECT COUNT(*) FROM request", ())[0] == 0
+    assert cache._fetchone("SELECT COUNT(*) FROM init_sesion", ())[0] == 0
+    assert cache._fetchone("SELECT COUNT(*) FROM service_call", ())[0] == 0
+
+
+def test_clear_cache_con_sesion_filtra_solo_esa():
+    from bbit_release.cache import get_cache
+    cache = get_cache()
+    # dos sesiones distintas de la DB del cache
+    cache.find_session("release/x", "master", {"repositories": {"excluded": [], "prefixes": []}})
+    cache.find_session("release/otra", "master", {"repositories": {"excluded": [], "prefixes": []}})
+    cache.set_master("r1", "master", {("/config/a", "")})
+
+    resp = client.request("DELETE", "/api/cache", json={
+        "sessions": [{"origin": "release/x", "destination": "master"}],
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["cleared"]["sessions"] == 1
+    rows = cache._fetchall(
+        "SELECT is_source FROM init_sesion WHERE is_source = ?", ("release/x",)
+    )
+    assert rows == []
+    kept = cache._fetchall(
+        "SELECT is_source FROM init_sesion", ()
+    )
+    assert "release/otra" in [r[0] for r in kept]

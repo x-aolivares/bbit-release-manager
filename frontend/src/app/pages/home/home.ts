@@ -277,11 +277,22 @@ reportOpen = signal(false);
   }
 
   protected onSessionDeleted(id: string): void {
+    const session = this.sessionHistory.load(id);
     this.sessionHistory.delete(id);
     if (this.currentSessionId() === id) {
       this.currentSessionId.set(null);
     }
     this.refreshSessions();
+    if (session) {
+      this.http.delete<any>('/api/cache', { body: { sessions: [{
+        origin: session.origin,
+        destination: session.destination,
+        project_prefixes: session.projectPrefixes,
+        exclude: session.blacklisted,
+      }] } }).subscribe({
+        error: () => this.error.set('No se pudo limpiar la sesión del cache del backend.'),
+      });
+    }
   }
 
   protected onHistoryCleared(): void {
