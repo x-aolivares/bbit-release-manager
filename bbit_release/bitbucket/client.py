@@ -14,6 +14,7 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,7 @@ class BitbucketClient:
         url: str = "",
         timeout: float = 20.0,
         transport: httpx.BaseTransport | None = None,
+        recorder: Callable[[dict], None] | None = None,
     ):
         if not workspace:
             raise ValueError("workspace es obligatorio")
@@ -107,11 +109,20 @@ class BitbucketClient:
             raise ValueError("token es obligatorio")
         self.workspace = workspace
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+        hooks: dict[str, list[Callable]] = {}
+        if recorder is not None:
+            hooks = {
+                "request": [self._make_request_hook(recorder)],
+                "response": [self._make_response_hook(recorder)],
+            }
+
         self._client = httpx.Client(
             base_url=API_BASE,
             headers=headers,
             timeout=timeout,
             transport=transport,
+            event_hooks=hooks,
         )
 
     def __enter__(self) -> "BitbucketClient":
@@ -119,6 +130,37 @@ class BitbucketClient:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+    def close(self) -> None:
+        self._client.close()
+
+    def _make_request_hook(self, recorder: Callable[[dict], None]):
+        def hook(request: httpx.Request) -> None:
+            request.extensions["_bbit_start"] = time.perf_counter()
+
+        return hook
+
+    def _make_response_hook(self, recorder: Callable[[dict], None]):
+        def hook(response: httpx.Response) -> None:
+            try:
+                start = response.request.extensions.get("_bbit_start")
+                duration_ms = (time.perf_counter() - start) * 1000 if start else 0.0
+                url = response.request.url
+                recorder(
+                    {
+                        "source": "bitbucket",
+                        "method": response.request.method,
+                        "url": str(url.path) + (f"?{url.query}" if url.query else ""),
+                        "params": dict(url.params) if url.params else None,
+                        "status": response.status_code,
+                        "duration_ms": duration_ms,
+                        "response": response.text,
+                    }
+                )
+            except Exception:  # el hook nunca rompe el flujo del cliente
+                logger.exception("service_call recorder fallo en bitbucket")
+
+        return hook
 
     def close(self) -> None:
         self._client.close()

@@ -8,7 +8,9 @@ Requiere un token de usuario (Circle-Token) y el project slug de la forma
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
+from typing import Callable
 
 import httpx
 
@@ -44,6 +46,7 @@ class CircleCiClient:
         org: str = "",
         timeout: float = 15.0,
         transport: httpx.BaseTransport | None = None,
+        recorder: Callable[[dict], None] | None = None,
     ):
         if not token:
             raise ValueError("CIRCLECI_TOKEN es obligatorio")
@@ -51,11 +54,20 @@ class CircleCiClient:
             raise ValueError("org (CIRCLECI_ORG) es obligatorio")
         self.vcs = vcs
         self.org = org
+
+        hooks: dict[str, list[Callable]] = {}
+        if recorder is not None:
+            hooks = {
+                "request": [self._make_request_hook(recorder)],
+                "response": [self._make_response_hook(recorder)],
+            }
+
         self._client = httpx.Client(
             base_url=API_BASE,
             headers={"Circle-Token": token, "Accept": "application/json"},
             timeout=timeout,
             transport=transport,
+            event_hooks=hooks,
         )
 
     def __enter__(self) -> "CircleCiClient":
@@ -66,6 +78,34 @@ class CircleCiClient:
 
     def close(self) -> None:
         self._client.close()
+
+    def _make_request_hook(self, recorder: Callable[[dict], None]):
+        def hook(request: httpx.Request) -> None:
+            request.extensions["_bbit_start"] = time.perf_counter()
+
+        return hook
+
+    def _make_response_hook(self, recorder: Callable[[dict], None]):
+        def hook(response: httpx.Response) -> None:
+            try:
+                start = response.request.extensions.get("_bbit_start")
+                duration_ms = (time.perf_counter() - start) * 1000 if start else 0.0
+                url = response.request.url
+                recorder(
+                    {
+                        "source": "circleci",
+                        "method": response.request.method,
+                        "url": str(url.path) + (f"?{url.query}" if url.query else ""),
+                        "params": dict(url.params) if url.params else None,
+                        "status": response.status_code,
+                        "duration_ms": duration_ms,
+                        "response": response.text,
+                    }
+                )
+            except Exception:  # el hook nunca rompe el flujo del cliente
+                log.exception("service_call recorder fallo en circleci")
+
+        return hook
 
     def project_slug(self, repo: str) -> str:
         return f"{self.vcs}/{self.org}/{repo}"

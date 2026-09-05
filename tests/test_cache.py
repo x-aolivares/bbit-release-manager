@@ -330,6 +330,49 @@ def test_master_not_overwritten_by_different_slug(tmp_path):
     assert cache.get_master("r2", "master") == {("/config/b", "")}
 
 
+# -- service_call (auditoría raw) -------------------------------------------
+
+def test_record_service_call_insert(tmp_path):
+    cache = _make_cache(tmp_path)
+    sc_id = cache.record_service_call(
+        source="bitbucket",
+        method="GET",
+        url="/2.0/repositories/ws",
+        params={"pagelen": "50"},
+        status=200,
+        duration_ms=12.34,
+        response='{"values": []}',
+    )
+    assert sc_id > 0
+    row = cache._fetchone(
+        "SELECT sc_source, sc_method, sc_url, sc_params, sc_status, "
+        "sc_duration_ms, sc_response FROM service_call WHERE sc_id = ?",
+        (sc_id,),
+    )
+    assert row is not None
+    assert row[0] == "bitbucket"
+    assert row[1] == "GET"
+    assert row[2] == "/2.0/repositories/ws"
+    assert json.loads(row[3]) == {"pagelen": "50"}
+    assert row[4] == 200
+    assert row[5] == pytest.approx(12.34)
+    assert row[6] == '{"values": []}'
+
+
+def test_record_service_call_no_params(tmp_path):
+    cache = _make_cache(tmp_path)
+    sc_id = cache.record_service_call(
+        source="circleci",
+        method="GET",
+        url="/api/v2/me",
+        params=None,
+        status=401,
+        duration_ms=1.0,
+        response="{}",
+    )
+    assert sc_id > 0
+
+
 # -- concurrencia -----------------------------------------------------------
 
 def test_thread_safe_concurrent_access(tmp_path):

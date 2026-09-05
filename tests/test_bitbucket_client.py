@@ -515,3 +515,78 @@ def test_upsert_file_requires_write_scope():
             client.upsert_file("r1", "master", ".circleci/config.yml", "x: 1", "msg")
     finally:
         client.close()
+
+
+# -- service_call hook ------------------------------------------------------
+
+def test_response_hook_captures_raw():
+    recorded: list[dict] = []
+
+    def branch(request):
+        return httpx.Response(200, json={"name": "main", "target": {"hash": "abc"}})
+
+    client = BitbucketClient(
+        "ws", "tok",
+        transport=_transport({("GET", "/2.0/repositories/ws/r1/refs/branches/main"): branch}),
+        recorder=recorded.append,
+    )
+    try:
+        assert client.has_branch("r1", "main") is True
+    finally:
+        client.close()
+
+    assert len(recorded) == 1
+    entry = recorded[0]
+    assert entry["source"] == "bitbucket"
+    assert entry["method"] == "GET"
+    assert entry["url"] == "/2.0/repositories/ws/r1/refs/branches/main"
+    assert entry["status"] == 200
+    assert "target" in entry["response"]
+    assert entry["duration_ms"] >= 0
+
+
+def test_response_hook_captures_error_status():
+    recorded: list[dict] = []
+
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/refs/branches/nope"): lambda r: httpx.Response(
+            404, json={"error": {"message": "missing"}}
+        ),
+    }), recorder=recorded.append)
+    try:
+        client.has_branch("r1", "nope")
+    finally:
+        client.close()
+
+    assert len(recorded) == 1
+    assert recorded[0]["status"] == 404
+    assert "missing" in recorded[0]["response"]
+
+
+def test_recorder_failure_does_not_break_client():
+    def boom(_entry):
+        raise RuntimeError("recorder exploded")
+
+    def branch(request):
+        return httpx.Response(200, json={"name": "main"})
+
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/refs/branches/main"): branch,
+    }), recorder=boom)
+    try:
+        assert client.has_branch("r1", "main") is True
+    finally:
+        client.close()
+
+
+def test_no_recorder_returns_same_behavior():
+    def branch(request):
+        return httpx.Response(200, json={"name": "main"})
+
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/refs/branches/main"): branch,
+    }))
+    try:
+        assert client.has_branch("r1", "main") is True
+    finally:
+        client.close()

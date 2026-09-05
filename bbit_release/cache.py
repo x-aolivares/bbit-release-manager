@@ -154,6 +154,20 @@ class ReleaseCache:
                 ON request (rt_id, rq_created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_rq_init_sesion
                 ON request (is_id);
+
+            CREATE TABLE IF NOT EXISTS service_call (
+                sc_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sc_source TEXT NOT NULL,
+                sc_method TEXT NOT NULL,
+                sc_url TEXT,
+                sc_params TEXT,
+                sc_status INTEGER NOT NULL,
+                sc_duration_ms REAL NOT NULL,
+                sc_response TEXT,
+                sc_created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_sc_source_created
+                ON service_call (sc_source, sc_created_at);
             """
         )
         self._conn.commit()
@@ -329,6 +343,40 @@ class ReleaseCache:
             "(is_id, rt_id, rq_status, rq_details, rq_created_at, rq_updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (session_id, request_type_id, status, json.dumps(payload), now, now),
+        )
+
+    def record_service_call(
+        self,
+        *,
+        source: str,
+        method: str,
+        url: str,
+        params: dict | None,
+        status: int,
+        duration_ms: float,
+        response: str,
+    ) -> int:
+        """Registra una llamada HTTP externa cruda en ``service_call``.
+
+        Es una auditoría append-only para reprocesar/debuguear: guarda el raw
+        tal cual lo respondió el servicio, sin transformar.
+        """
+        now = time.time()
+        return self._insert(
+            "INSERT INTO service_call "
+            "(sc_source, sc_method, sc_url, sc_params, sc_status, sc_duration_ms, "
+            " sc_response, sc_created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                source,
+                method,
+                url,
+                json.dumps(params) if params is not None else None,
+                status,
+                round(duration_ms, 3),
+                response,
+                now,
+            ),
         )
 
     def is_expired(self, created_at: float, ttl_seconds: int) -> bool:

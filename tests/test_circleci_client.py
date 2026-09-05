@@ -198,3 +198,61 @@ def test_requires_token():
         CircleCiClient("", vcs="bb", org="o")
     with pytest.raises(ValueError):
         CircleCiClient("tok", vcs="bb", org="")
+
+
+# -- service_call hook ------------------------------------------------------
+
+def test_response_hook_captures_raw():
+    recorded: list[dict] = []
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/me"): lambda r: httpx.Response(
+            200, json={"name": "ada", "login": "ada"}
+        ),
+    }), recorder=recorded.append)
+    try:
+        client.me()
+    finally:
+        client.close()
+
+    assert len(recorded) == 1
+    entry = recorded[0]
+    assert entry["source"] == "circleci"
+    assert entry["method"] == "GET"
+    assert entry["url"] == "/api/v2/me"
+    assert entry["status"] == 200
+    assert "ada" in entry["response"]
+    assert entry["duration_ms"] >= 0
+
+
+def test_response_hook_captures_params_and_error():
+    recorded: list[dict] = []
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1"): lambda r: httpx.Response(
+            404, json={"message": "not found"}
+        ),
+    }), recorder=recorded.append)
+    try:
+        client.project_id("r1")
+    except CircleCiError:
+        pass
+    finally:
+        client.close()
+
+    assert len(recorded) >= 1
+    assert recorded[0]["status"] == 404
+    assert "not found" in recorded[0]["response"]
+
+
+def test_recorder_failure_does_not_break_client():
+    def boom(_entry):
+        raise RuntimeError("boom")
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/me"): lambda r: httpx.Response(200, json={"name": "ada"}),
+    }), recorder=boom)
+    try:
+        assert client.me()["name"] == "ada"
+    finally:
+        client.close()

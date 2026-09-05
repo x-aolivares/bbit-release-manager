@@ -10,6 +10,7 @@ import secrets
 from dataclasses import dataclass, field
 
 from ..bitbucket.client import BitbucketClient, BitbucketError, BitbucketAuthError
+from ..cache import get_cache
 
 
 @dataclass
@@ -24,8 +25,15 @@ class SessionData:
 _sessions: dict[str, SessionData] = {}
 
 
+def _recorder(entry: dict) -> None:
+    try:
+        get_cache().record_service_call(**entry)
+    except Exception:
+        pass
+
+
 def create_session(workspace: str, token: str, url: str = "") -> SessionData:
-    client = BitbucketClient(workspace, token, url=url)
+    client = BitbucketClient(workspace, token, url=url, recorder=_recorder)
     try:
         info, identity = client.session()
     except (BitbucketAuthError, BitbucketError):

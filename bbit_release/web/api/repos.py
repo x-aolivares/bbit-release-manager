@@ -12,7 +12,13 @@ from ...config import Config
 from ...circleci.client import CircleCiClient, CircleCiError
 from ...circleci.configyml import ensure_tag_workflows
 from ...scan.params import classify_ssm, extract_ssm_params
-from ..session import create_session, get_session, destroy_session, active_session_id
+from ..session import (
+    create_session,
+    get_session,
+    destroy_session,
+    active_session_id,
+    _recorder,
+)
 
 log = logging.getLogger("bbit.scan")
 
@@ -157,6 +163,7 @@ def _circleci() -> CircleCiClient | None:
         cfg.circleci_token,
         vcs=cfg.circleci_vcs,
         org=cfg.circleci_org or cfg.workspace,
+        recorder=_recorder,
     )
 
 
@@ -218,6 +225,7 @@ def api_session(body: dict):
             circleci_token,
             vcs=cfg.circleci_vcs or "bb",
             org=cfg.circleci_org or workspace,
+            recorder=_recorder,
         )
         try:
             ci.me()
