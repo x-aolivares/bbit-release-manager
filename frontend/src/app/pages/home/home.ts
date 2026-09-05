@@ -288,6 +288,10 @@ reportOpen = signal(false);
     this.sessionHistory.clear();
     this.currentSessionId.set(null);
     this.refreshSessions();
+    this.http.delete<any>('/api/cache').subscribe({
+      next: () => this.repos.set([]),
+      error: () => this.error.set('No se pudo limpiar el cache del backend.'),
+    });
   }
 
   private loadSession(session: SessionConfig): void {

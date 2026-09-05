@@ -373,6 +373,29 @@ def test_record_service_call_no_params(tmp_path):
     assert sc_id > 0
 
 
+def test_clear_all_vacia_request_sesion_y_service_call(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_master("r1", "master", {("/config/a", "")})
+    cache._insert(
+        "INSERT INTO init_sesion (is_source, is_target, is_details, is_created_at, is_updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("release/x", "master", '{"config": {"repositories": {}}}', time.time(), time.time()),
+    )
+    cache.record_service_call(
+        source="bitbucket", method="GET", url="/2.0/me", params=None,
+        status=200, duration_ms=1.0, response="{}",
+    )
+
+    counts = cache.clear_all()
+
+    assert counts["request"] > 0
+    assert counts["init_sesion"] > 0
+    assert counts["service_call"] > 0
+    assert cache._fetchone("SELECT COUNT(*) FROM request", ())[0] == 0
+    assert cache._fetchone("SELECT COUNT(*) FROM init_sesion", ())[0] == 0
+    assert cache._fetchone("SELECT COUNT(*) FROM service_call", ())[0] == 0
+
+
 # -- concurrencia -----------------------------------------------------------
 
 def test_thread_safe_concurrent_access(tmp_path):

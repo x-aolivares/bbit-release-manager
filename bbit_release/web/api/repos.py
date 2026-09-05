@@ -264,6 +264,19 @@ def api_session(body: dict):
     }
 
 
+@router.delete("/cache")
+def clear_cache():
+    """Vacía registros de request/init_sesion/service_call en la DB del cache."""
+    try:
+        counts = get_cache().clear_all()
+    except Exception as exc:
+        return JSONResponse(
+            {"ok": False, "error": f"No se pudo limpiar el cache: {exc}"},
+            status_code=500,
+        )
+    return {"ok": True, "cleared": counts}
+
+
 @router.delete("/session")
 def destroy(delete_credentials: bool = False):
     sid = active_session_id()

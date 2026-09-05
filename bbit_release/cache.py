@@ -442,16 +442,42 @@ class ReleaseCache:
         )
 
     def invalidate_all(self) -> None:
+        counts: dict[str, int] = {}
         with self._lock:
-            cur = self._conn.cursor()
-            try:
-                cur.execute("DELETE FROM request")
-                cur.execute("DELETE FROM init_sesion")
-                deleted = cur.rowcount
-            finally:
-                cur.close()
+            for table in ("request", "init_sesion"):
+                cur = self._conn.cursor()
+                try:
+                    cur.execute(f"DELETE FROM {table}")
+                    counts[table] = cur.rowcount
+                finally:
+                    cur.close()
             self._conn.commit()
-        log.info("cache invalidate_all: requests/sesiones borrados de SQLite (%d registros)", deleted)
+        log.info(
+            "cache invalidate_all: %d request(s), %d sesion(es) borrados de SQLite",
+            counts.get("request", 0),
+            counts.get("init_sesion", 0),
+        )
+
+    def clear_all(self) -> dict:
+        """Vacía las tablas de datos del cache, logueando cuántos registros se
+        eliminaron de cada una. Devuelve el desglose por tabla."""
+        counts: dict[str, int] = {}
+        with self._lock:
+            for table in ("request", "init_sesion", "service_call"):
+                cur = self._conn.cursor()
+                try:
+                    cur.execute(f"DELETE FROM {table}")
+                    counts[table] = cur.rowcount
+                finally:
+                    cur.close()
+            self._conn.commit()
+        log.info(
+            "cache clear_all: %d request(s), %d sesion(es), %d service_call(s) borrados de SQLite",
+            counts.get("request", 0),
+            counts.get("init_sesion", 0),
+            counts.get("service_call", 0),
+        )
+        return counts
 
     def close(self) -> None:
         with self._lock:
