@@ -232,16 +232,22 @@ reportOpen = signal(false);
           this.connected.set(true);
           this.identity.set(r.identity ?? '');
           this.repoCount.set(r.repo_count ?? 0);
+          this.loadLatestSession();
         } else if (r.stored) {
-          this.storedCreds.set(true);
+          // Auto-reuse tras reiniciar el server: recupera la sesión guardada
+          // ANTES de cargar la última sesión, para no disparar /scan sin sesión.
+          this.reuseSession(() => this.loadLatestSession());
+        } else {
+          this.storedCreds.set(false);
         }
       },
     });
 
     // Cargar historial de sesiones
     this.refreshSessions();
-    
-    // Cargar última sesión al iniciar
+  }
+
+  private loadLatestSession(): void {
     const latest = this.sessionHistory.getLatest();
     if (latest) {
       this.loadSession(latest);
@@ -316,7 +322,7 @@ reportOpen = signal(false);
     this.loadRepos();
   }
 
-  reuseSession() {
+  reuseSession(onSuccess?: () => void) {
     this.loading.set(true);
     this.error.set(null);
     this.http.post<any>('/api/session/reuse', {}).subscribe({
@@ -326,6 +332,9 @@ reportOpen = signal(false);
           this.identity.set(r.identity ?? '');
           this.repoCount.set(r.repo_count ?? 0);
           this.storedCreds.set(false);
+          if (onSuccess) {
+            onSuccess();
+          }
         } else {
           this.error.set(r.error ?? 'Error al reutilizar la sesión.');
           this.storedCreds.set(false);
