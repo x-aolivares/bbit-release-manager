@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from bbit_release._version import read_version
-from bbit_release.cache import reset_cache
+from bbit_release.cache import get_cache, reset_cache
 from bbit_release.web import session as session_mod
 from bbit_release.web.api import repos as repos_mod
 from bbit_release.web.main import FRONTEND_DIST, app
@@ -23,9 +23,19 @@ class FakeConfig:
     ssm_prefixes = ["/config", "/common"]
     project_prefixes: list[str] = []
     exclude_repos: list[str] = []
+    aws_profile = ""
+    aws_region = ""
+    bitbucket_url = "https://bitbucket.org"
+    client_alias = "local"
+    client_id = "00000000-0000-0000-0000-000000000000"
+    is_configured = False
 
     def save_tokens(self, **kw):
         return None
+
+    def save_service(self, provider_name, env, expires_at=None):
+        self.bitbucket_token = env.get("BITBUCKET_TOKEN") or self.bitbucket_token
+        return len(self.bitbucket_token)
 
     def remove_credentials(self):
         return None
@@ -35,6 +45,13 @@ class FakeConfig:
 
     def clear_filters(self):
         return None
+
+    def service_states(self):
+        return {
+            "bitbucket": {"stored": bool(self.bitbucket_token), "expires_at": None, "warning": None},
+            "circleci": {"stored": bool(self.circleci_token), "expires_at": None, "warning": None},
+            "aws": {"stored": bool(self.aws_profile), "expires_at": None, "warning": None},
+        }
 
 
 @pytest.fixture(autouse=True)
@@ -103,8 +120,13 @@ def test_session_rejects_bad_token(monkeypatch):
 
 def test_session_status_without_saved_tokens():
     resp = client.get("/api/session")
+    body = resp.json()
     assert resp.status_code == 200
-    assert resp.json() == {"active": False, "needs_tokens": True, "stored": False}
+    assert body["active"] is False
+    assert body["needs_tokens"] is True
+    assert body["stored"] is False
+    assert body["client_alias"] == "local"
+    assert body["services"]["aws"]["stored"] is False
 
 
 def test_session_create_with_stub(monkeypatch):
@@ -161,6 +183,77 @@ def test_openapi_exposed():
     assert "/api/repos" in paths
     assert "/api/session" in paths
     assert "/api/diff" in paths
+    assert "/api/client" in paths
+    assert "/api/auth/{service}" in paths
+    assert "/api/auth/{service}/validate" in paths
+
+
+def test_client_status_after_login(monkeypatch, tmp_path):
+    """GET /api/client con Config real: alias + estado de servicios."""
+    from bbit_release.config import Config as RealConfig
+
+    monkeypatch.setenv("BBIT_CLIENT_MARKER", str(tmp_path / "client_id"))
+    monkeypatch.setattr(repos_mod, "Config", RealConfig)
+
+    resp = client.get("/api/client")
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body["client"]["alias"] == "local"
+    assert body["configured"] is False
+    assert body["services"]["bitbucket"]["stored"] is False
+    assert body["settings"]["ssm_prefixes"] == ["/config", "/common"]
+
+    cash = get_cache().get_client_by_alias("local")
+    assert cash is not None
+
+
+def test_auth_validates_aws(monkeypatch):
+    def fake_probe(profile, region):
+        return (True, f"STS OK {profile}")
+    monkeypatch.setattr(repos_mod, "_aws_probe", fake_probe)
+    resp = client.post("/api/auth/aws/validate", json={"profile": "prod", "region": "us-east-1"})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "service": "aws", "detail": "STS OK prod"}
+
+
+def test_auth_unknown_service_404():
+    resp = client.post("/api/auth/github/validate", json={})
+    assert resp.status_code == 404
+
+
+def test_auth_save_bitbucket_requires_creds():
+    resp = client.post("/api/auth/bitbucket", json={"workspace": "ws"})
+    assert resp.status_code == 401
+
+
+def test_auth_save_service_persists(monkeypatch, tmp_path):
+    """POST /api/auth/{service}: valida y guarda la credencial del cliente."""
+    from bbit_release.config import Config as RealConfig
+
+    monkeypatch.setenv("BBIT_CLIENT_MARKER", str(tmp_path / "client_id"))
+    monkeypatch.setattr(repos_mod, "Config", RealConfig)
+    monkeypatch.setattr(
+        repos_mod, "_bb_probe",
+        lambda ws, tok, url: (True, "Jane (@jane)"),
+    )
+    resp = client.post(
+        "/api/auth/bitbucket",
+        json={"workspace": "ws", "token": "tok", "username": "u"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["stored"] is True
+
+    cfg = RealConfig()
+    assert cfg.bitbucket_token == "tok"
+    saved = get_cache().get_authentication(cfg.client_id, "Bitbucket")
+    assert saved["env"]["BITBUCKET_WORKSPACE"] == "ws"
+    assert saved["env"]["BITBUCKET_USERNAME"] == "u"
+
+
+def test_auth_save_requires_valid_credentials(monkeypatch):
+    monkeypatch.setattr(repos_mod, "_bb_probe", lambda ws, tok, url: (False, "invalid"))
+    resp = client.post("/api/auth/bitbucket", json={"workspace": "ws", "token": "malo"})
+    assert resp.status_code == 401
 
 
 def test_scan_returns_repos_with_pr_and_params(monkeypatch):

@@ -10,7 +10,7 @@ import typer
 from ._version import read_version
 from .cache import get_cache
 from .config import Config, win_to_posix
-from .logger import info, success, warn, die
+from .logger import console, info, success, warn, die
 
 app = typer.Typer(
     name="bbit",
@@ -37,11 +37,14 @@ def config():
     if get_cache().get_connection() is None:
         warn("Sin conexión guardada — ejecutá 'bbit login' o conectate desde la web.")
         return
+    states = cfg.service_states()
     info("[bold]=== CONEXIÓN (data/cache.db) ===[/bold]")
+    info(f"  Cliente:        {cfg.client_alias or '(sin alias)'} — {cfg.client_id[:8]}…")
     info(f"  Bitbucket URL:  {cfg.bitbucket_url}")
     info(f"  Workspace:      {cfg.workspace or '(no set)'}")
-    info(f"  Token BB:       {'set' if cfg.bitbucket_token else 'no'}")
-    info(f"  Token Circle:   {'set' if cfg.circleci_token else 'no'}")
+    info(f"  Token BB:       {'set' if states['bitbucket']['stored'] else 'no'}{_expiry_suffix(states['bitbucket']['expires_at'])}")
+    info(f"  Token Circle:   {'set' if states['circleci']['stored'] else 'no'}{_expiry_suffix(states['circleci']['expires_at'])}")
+    info(f"  AWS:            {'profile %s · %s' % (cfg.aws_profile, cfg.aws_region) if states['aws']['stored'] else 'no'}{_expiry_suffix(states['aws']['expires_at'])}")
     info(f"  Default branch: {cfg.default_branch}")
     info(f"  Repos filter:   {', '.join(cfg.repos) or '(all)'}")
     info(f"  Proj prefixes:  {', '.join(cfg.project_prefixes) or '(all)'}")
@@ -49,6 +52,16 @@ def config():
     info(f"  SSM prefixes:   {', '.join(cfg.ssm_prefixes)}")
     info(f"  Deploy envs:    {', '.join(cfg.deploy_prefixes)}")
     info(f"  Frontend:       {win_to_posix(str(cfg.frontend_root))}")
+
+
+def _expiry_suffix(expires_at: float | None) -> str:
+    """Sufijo legible del vencimiento opcional de credenciales TLS."""
+    from datetime import datetime
+
+    if not expires_at:
+        return ""
+    dt = datetime.fromtimestamp(expires_at)
+    return f" (vence {dt.strftime('%Y-%m-%d %H:%M')})"
 
 
 def _probe_bitbucket(workspace: str, token: str, url: str = "") -> tuple[bool, str, str, int]:
@@ -64,29 +77,73 @@ def _probe_bitbucket(workspace: str, token: str, url: str = "") -> tuple[bool, s
     return True, detail, "", 0
 
 
+def _probe_circleci(token: str, vcs: str, org: str) -> tuple[bool, str]:
+    """Valida un token de CircleCI (GET /me). Devuelve (ok, error)."""
+    from .circleci.client import CircleCiClient, CircleCiError
+
+    ci = CircleCiClient(token, vcs=vcs, org=org)
+    try:
+        ci.me()
+    except (CircleCiError, ValueError) as exc:
+        return False, str(exc)
+    finally:
+        ci.close()
+    return True, ""
+
+
+def _probe_aws(profile: str, region: str) -> tuple[bool, str]:
+    """Valida credenciales AWS por STS GetCallerIdentity. Devuelve (ok, detalle)."""
+    from .aws.client import validate_credentials
+
+    return validate_credentials(profile, region)
+
+
 @app.command()
 def login(
+    alias: str = typer.Option("", "--alias", help="Alias del cliente (default: 'local')"),
     workspace: str = typer.Option("", "--workspace", help="Workspace de Bitbucket"),
     token: str = typer.Option("", "--token", help="App password o PAT de Bitbucket"),
     circleci_token: str = typer.Option(
         "", "--circleci-token", help="Token de CircleCI (opcional)"
     ),
+    aws_profile: str = typer.Option(
+        "", "--aws-profile", help="Profile AWS a validar por STS (opcional)"
+    ),
+    aws_region: str = typer.Option(
+        "", "--aws-region", help="Región AWS (opcional, default us-east-1)"
+    ),
 ):
-    """Guardar credenciales en la fila de conexión (data/cache.db).
+    """Guardar credenciales por servicio (data/cache.db), validando cada uno.
 
-    Sin opciones, pregunta interactivamente por workspace, token de
-    Bitbucket y token de CircleCI. Valida contra la API antes de guardar.
+    Carrusel: Bitbucket (requerido) → CircleCI (opcional) → AWS (opcional,
+    credenciales en ~/.aws o env; se valida por STS GetCallerIdentity).
+
+    Con claves opcionales (--token/--circleci-token/--aws-profile) corre en
+    modo no interactivo. Sin opciones, pregunta paso a paso.
     """
     cfg = Config()
+    non_interactive = bool(token or circleci_token or aws_profile)
+
+    if alias:
+        cfg = cfg.set_client_alias(alias)
+
+    # -- paso Bitbucket (requerido) -----------------------------------------
     ws = workspace or cfg.workspace
+    bb_url = cfg.bitbucket_url
+    bb_username = cfg.bitbucket_username
     tok = token
-    cci = circleci_token
-    if not tok:
+    if not tok and not non_interactive:
         try:
+            prompt_alias = cfg.client_alias or "local"
+            user_alias = input(f"Alias del cliente [{prompt_alias}]: ").strip()
+            if user_alias:
+                cfg = cfg.set_client_alias(user_alias)
             ws = input(f"Workspace [{ws or ''}]: ").strip() or ws
+            bb_url = input(f"Bitbucket URL [{bb_url}]: ").strip() or bb_url
+            bb_username = input(
+                f"Bitbucket username (opcional, actual: {bb_username or 'ninguno'}): "
+            ).strip() or bb_username
             tok = input("Bitbucket token (app password o PAT): ").strip()
-            if not cci:
-                cci = input("CircleCI token (opcional, Enter para omitir): ").strip()
         except (EOFError, KeyboardInterrupt):
             die("Login cancelado.")
     if not ws:
@@ -94,21 +151,64 @@ def login(
     if not tok:
         die("Token de Bitbucket obligatorio.")
 
-    if cci:
-        from .circleci.client import CircleCiClient, CircleCiError
-        ci = CircleCiClient(cci, vcs=cfg.circleci_vcs or "bb", org=cfg.circleci_org or ws)
-        try:
-            ci.me()
-        except (CircleCiError, ValueError) as exc:
-            die(f"Token de CircleCI inválido: {exc}")
-        finally:
-            ci.close()
-
-    ok, detail, err, _ = _probe_bitbucket(ws, tok, cfg.bitbucket_url)
+    with console.status("Ahora validando credenciales de Bitbucket..."):
+        ok, detail, err, _ = _probe_bitbucket(ws, tok, bb_url)
     if not ok:
-        die(err)
-    cfg.save_tokens(bitbucket_token=tok, circleci_token=cci, workspace=ws)
-    success(f"Conexión guardada — {detail}")
+        die(f"Token de Bitbucket inválido: {err}")
+    info(f"[green]Bitbucket OK[/green] — {detail}")
+
+    # -- paso CircleCI (opcional) --------------------------------------------
+    cci = circleci_token
+    vcs = cfg.circleci_vcs or "bb"
+    org = cfg.circleci_org or ws
+    if not cci and not non_interactive:
+        try:
+            raw = input("CircleCI token (opcional, Enter para omitir): ").strip()
+            if raw:
+                cci = raw
+                vcs = input(f"CircleCI VCS [{vcs}]: ").strip() or vcs
+                org = input(f"CircleCI org [{org}]: ").strip() or org
+        except (EOFError, KeyboardInterrupt):
+            die("Login cancelado.")
+    if cci:
+        with console.status("Ahora validando credenciales de CircleCI..."):
+            ok_c, err_c = _probe_circleci(cci, vcs, org)
+        if not ok_c:
+            die(f"Token de CircleCI inválido: {err_c}")
+        info("[green]CircleCI OK[/green] — sesión válida")
+
+    # -- paso AWS (opcional, STS) --------------------------------------------
+    aws_prof = aws_profile
+    aws_reg = aws_region
+    if not aws_prof and not non_interactive:
+        try:
+            current_prof = cfg.aws_profile or "ninguno"
+            raw = input(f"AWS profile (opcional, actual: {current_prof}; Enter para omitir): ").strip()
+            if raw:
+                aws_prof = raw
+                aws_reg = input(f"AWS region [{aws_reg or 'us-east-1'}]: ").strip() or aws_reg or "us-east-1"
+        except (EOFError, KeyboardInterrupt):
+            die("Login cancelado.")
+    if aws_prof:
+        with console.status("Ahora validando credenciales de AWS (STS)..."):
+            ok_a, detail_a = _probe_aws(aws_prof, aws_reg or "us-east-1")
+        if not ok_a:
+            die(f"Credenciales AWS inválidas: {detail_a}")
+        info(f"[green]AWS OK[/green] — {detail_a}")
+
+    cfg.save_tokens(
+        bitbucket_token=tok,
+        workspace=ws,
+        bitbucket_username=bb_username or "",
+        bitbucket_url=bb_url,
+        circleci_token=cci,
+        circleci_vcs=vcs,
+        circleci_org=org or ws,
+        aws_profile=aws_prof,
+        aws_region=aws_reg,
+    )
+    alias_name = cfg.client_alias or "local"
+    success(f"Conexión guardada para '{alias_name}' ({cfg.client_id[:8]}…)")
     info("Siguiente paso: 'bbit session' para listar repos o 'bbit web' para la UI.")
 
 

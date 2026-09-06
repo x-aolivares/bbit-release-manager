@@ -39,7 +39,145 @@ def test_seeds_providers(tmp_path):
     ci = cache.get_provider("CircleCi")
     assert ci is not None
     assert ci["details"]["vcs"] == "bb"
+    aws = cache.get_provider("AWS")
+    assert aws is not None
+    assert "us-east-1" in aws["details"]["regions"]
     assert cache.get_provider("NoExiste") is None
+
+
+def test_seed_upserts_existing_aws_regions(tmp_path):
+    cache = _make_cache(tmp_path)
+    provider = cache.get_provider("AWS")
+    cache._conn.execute(
+        "UPDATE service_provider SET sp_details = ? WHERE sp_id = ?",
+        ('{"regions": ["us-east-1"]}', provider["id"]),
+    )
+    cache._conn.commit()
+    fresh = _make_cache(tmp_path)
+    assert fresh.get_provider("AWS")["details"]["regions"] == [
+        "us-east-1", "us-east-2", "us-west-1", "us-west-2",
+        "eu-west-1", "eu-central-1", "sa-east-1",
+    ]
+
+
+# -- esquema (estándar: sin REFERENCES, nombre = PK referenciada) -------------
+
+def test_schema_without_references(tmp_path):
+    """El esquema no usa claves foráneas (REQUIREMENTS del equipo)."""
+    cache = _make_cache(tmp_path)
+    rows = cache._fetchall(
+        "SELECT type, sql FROM sqlite_master WHERE sql IS NOT NULL AND sql LIKE '%REFERENCES%'"
+    )
+    assert rows == []
+
+
+def _cols(table: str, cache) -> list[str]:
+    return [r[1] for r in cache._fetchall(f"PRAGMA table_info({table})")]
+
+
+def test_schema_request_type_uses_sp_id(tmp_path):
+    cache = _make_cache(tmp_path)
+    cols = _cols("request_type", cache)
+    assert "sp_id" in cols
+    assert "rt_service_provider_id" not in cols
+
+
+def test_migrates_legacy_request_type_column(tmp_path):
+    """Una DB guardada con el nombre viejo se renombra a sp_id al abrir."""
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE service_provider (
+            sp_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sp_name TEXT NOT NULL UNIQUE,
+            sp_details TEXT NOT NULL
+        );
+        CREATE TABLE request_type (
+            rt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rt_service_provider_id INTEGER NOT NULL,
+            rt_name TEXT NOT NULL UNIQUE,
+            rt_ttl_seconds INTEGER NOT NULL DEFAULT 300,
+            rt_service_url TEXT NOT NULL,
+            rt_details TEXT NOT NULL,
+            rt_created_at REAL NOT NULL,
+            rt_updated_at REAL NOT NULL
+        );
+        CREATE INDEX idx_rt_service_provider ON request_type (rt_service_provider_id);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    cache = ReleaseCache(db_path=path)
+    assert "sp_id" in _cols("request_type", cache)
+    assert "rt_service_provider_id" not in _cols("request_type", cache)
+    idx = [r[0] for r in cache._fetchall(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='request_type'"
+    )]
+    assert "idx_rt_sp_id" in idx
+    assert not cache._fetchone(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_rt_service_provider'", ()
+    )
+
+
+# -- clientes y autenticación -----------------------------------------------
+
+def test_client_create_and_resolve_by_alias(tmp_path):
+    cache = _make_cache(tmp_path)
+    assert cache.get_client_by_alias("local") is None
+    c = cache.get_or_create_client("local")
+    assert len(c["id"]) == 36  # uuid
+    assert cache.get_client_by_alias("local")["id"] == c["id"]
+    # idempotente
+    again = cache.get_or_create_client("local")
+    assert again["id"] == c["id"]
+
+
+def test_client_alias_unique(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.get_or_create_client("alice")
+    dup = cache.get_or_create_client("alice")
+    assert dup["alias"] == "alice"
+
+
+def test_auth_save_get_list_clear(tmp_path):
+    cache = _make_cache(tmp_path)
+    c = cache.get_or_create_client("local")
+    sid = cache.save_authentication(c["id"], "Bitbucket", {"BITBUCKET_TOKEN": "t", "_x": ""}, expires_at=123.0)
+    assert sid > 0
+    auth = cache.get_authentication(c["id"], "Bitbucket")
+    assert auth["env"] == {"BITBUCKET_TOKEN": "t"}  # valores vacíos se filtran
+    assert auth["expires_at"] == pytest.approx(123.0)
+
+    listed = cache.list_authentications(c["id"])
+    assert [a["provider"] for a in listed] == ["Bitbucket"]
+
+    cache.save_authentication(c["id"], "AWS", {"AWS_PROFILE": "prod", "AWS_REGION": "us-east-1"})
+    assert len(cache.list_authentications(c["id"])) == 2
+
+    cache.clear_authentications(c["id"])
+    assert cache.list_authentications(c["id"]) == []
+    assert cache.get_client(c["id"]) is not None  # la fila client sobrevive
+
+
+def test_auth_scoped_by_client(tmp_path):
+    cache = _make_cache(tmp_path)
+    alice = cache.get_or_create_client("alice")
+    bob = cache.get_or_create_client("bob")
+    cache.save_authentication(alice["id"], "Bitbucket", {"BITBUCKET_TOKEN": "a"})
+    assert cache.get_authentication(bob["id"], "Bitbucket") is None
+    cache.clear_authentications(alice["id"])
+    assert cache.get_authentication(alice["id"], "Bitbucket") is None
+
+
+def test_auth_unknown_provider_raises(tmp_path):
+    cache = _make_cache(tmp_path)
+    c = cache.get_or_create_client("local")
+    with pytest.raises(ValueError):
+        cache.save_authentication(c["id"], "NoExiste", {})
 
 
 def test_seeds_request_types(tmp_path):

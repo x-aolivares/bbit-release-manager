@@ -25,6 +25,7 @@ import logging
 import sqlite3
 import threading
 import time
+import uuid
 from pathlib import Path
 
 log = logging.getLogger("bbit.cache")
@@ -38,10 +39,24 @@ _CIRCLECI_BASE = "https://circleci.com/api/v2"
 CONN_SOURCE = "config"
 CONN_TARGET = "connection"
 
+# Alias del cliente local por defecto (multi-usuario en VPS se resuelve por alias).
+DEFAULT_CLIENT_ALIAS = "local"
+
 # Catálogo inicial de proveedores.
 _SEED_PROVIDERS = {
     "Bitbucket": {"base_url": _BITBUCKET_BASE},
     "CircleCi": {"vcs": "bb"},
+    "AWS": {
+        "regions": [
+            "us-east-1",
+            "us-east-2",
+            "us-west-1",
+            "us-west-2",
+            "eu-west-1",
+            "eu-central-1",
+            "sa-east-1",
+        ]
+    },
 }
 
 # name -> (provider, ttl_seconds, service_url, details)
@@ -127,6 +142,7 @@ class ReleaseCache:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._create_tables()
+            self._migrate_schema()
             self._drop_legacy_tables()
             self._seed_catalog()
 
@@ -156,10 +172,28 @@ class ReleaseCache:
                 sp_details TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS client (
+                c_id TEXT PRIMARY KEY,              -- uuid, no adivinable
+                c_alias TEXT NOT NULL UNIQUE,
+                c_details TEXT NOT NULL,            -- JSON flexible
+                c_created_at REAL NOT NULL,
+                c_updated_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS service_authentication (
+                sa_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                c_id TEXT NOT NULL,                 -- = client.c_id (uuid)
+                sp_id INTEGER NOT NULL,             -- = service_provider.sp_id
+                sa_details TEXT NOT NULL,           -- JSON {"env": {...}, "expires_at"?: epoch}
+                sa_created_at REAL NOT NULL,
+                sa_updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS uuidx_sa_c_id_sp_id
+                ON service_authentication (c_id, sp_id);
+
             CREATE TABLE IF NOT EXISTS request_type (
                 rt_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                rt_service_provider_id INTEGER NOT NULL
-                    REFERENCES service_provider(sp_id),
+                sp_id INTEGER NOT NULL,
                 rt_name TEXT NOT NULL UNIQUE,
                 rt_ttl_seconds INTEGER NOT NULL DEFAULT 300,
                 rt_service_url TEXT NOT NULL,
@@ -167,13 +201,11 @@ class ReleaseCache:
                 rt_created_at REAL NOT NULL,
                 rt_updated_at REAL NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_rt_service_provider
-                ON request_type (rt_service_provider_id);
 
             CREATE TABLE IF NOT EXISTS request (
                 rq_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                is_id INTEGER NOT NULL REFERENCES init_sesion(is_id),
-                rt_id INTEGER NOT NULL REFERENCES request_type(rt_id),
+                is_id INTEGER NOT NULL,
+                rt_id INTEGER NOT NULL,
                 rq_status TEXT NOT NULL DEFAULT 'PENDING',
                 rq_details TEXT,
                 rq_created_at REAL NOT NULL,
@@ -201,6 +233,39 @@ class ReleaseCache:
         )
         self._conn.commit()
 
+    def _migrate_schema(self) -> None:
+        """Ajustes de esquema para bases existentes (idempotente).
+
+        - ``request_type.rt_service_provider_id`` -> ``sp_id`` (estándar:
+          la columna de referencia usa el nombre de la PK que referencia).
+          SQLite renombra también los índices que apuntaban a esa columna.
+        """
+        with self._lock:
+            cur = self._conn.cursor()
+            try:
+                cols = {row[1] for row in cur.execute("PRAGMA table_info(request_type)").fetchall()}
+            finally:
+                cur.close()
+            if "rt_service_provider_id" in cols and "sp_id" not in cols:
+                cur = self._conn.cursor()
+                try:
+                    cur.execute(
+                        "ALTER TABLE request_type RENAME COLUMN rt_service_provider_id TO sp_id"
+                    )
+                finally:
+                    cur.close()
+            cur = self._conn.cursor()
+            try:
+                cur.execute("DROP INDEX IF EXISTS idx_rt_service_provider")
+            finally:
+                cur.close()
+            cur = self._conn.cursor()
+            try:
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_rt_sp_id ON request_type (sp_id)")
+            finally:
+                cur.close()
+            self._conn.commit()
+
     def _drop_legacy_tables(self) -> None:
         """Elimina las tablas del esquema plano anterior (si existen)."""
         for table in _LEGACY_TABLES:
@@ -211,7 +276,9 @@ class ReleaseCache:
         now = time.time()
         for name, details in _SEED_PROVIDERS.items():
             self._conn.execute(
-                "INSERT OR IGNORE INTO service_provider (sp_name, sp_details) VALUES (?, ?)",
+                "INSERT INTO service_provider (sp_name, sp_details) VALUES (?, ?) "
+                "ON CONFLICT(sp_name) DO UPDATE SET "
+                " sp_details = excluded.sp_details",
                 (name, json.dumps(details)),
             )
         self._conn.commit()
@@ -224,7 +291,7 @@ class ReleaseCache:
                 continue
             self._conn.execute(
                 "INSERT INTO request_type "
-                "(rt_service_provider_id, rt_name, rt_ttl_seconds, rt_service_url, "
+                "(sp_id, rt_name, rt_ttl_seconds, rt_service_url, "
                 " rt_details, rt_created_at, rt_updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(rt_name) DO UPDATE SET "
@@ -304,6 +371,135 @@ class ReleaseCache:
             "service_url": row[3],
             "details": json.loads(row[4]),
         }
+
+    # -- clientes y autenticación ---------------------------------------------
+
+    def get_client(self, c_id: str) -> dict | None:
+        row = self._fetchone(
+            "SELECT c_id, c_alias, c_details, c_created_at, c_updated_at "
+            "FROM client WHERE c_id = ?",
+            (c_id,),
+        )
+        if row is None:
+            return None
+        return {
+            "id": row[0],
+            "alias": row[1],
+            "details": json.loads(row[2]) if row[2] else {},
+            "created_at": row[3],
+            "updated_at": row[4],
+        }
+
+    def get_client_by_alias(self, alias: str) -> dict | None:
+        row = self._fetchone(
+            "SELECT c_id, c_alias, c_details FROM client WHERE c_alias = ?",
+            (alias,),
+        )
+        if row is None:
+            return None
+        return {"id": row[0], "alias": row[1], "details": json.loads(row[2]) if row[2] else {}}
+
+    def get_or_create_client(self, alias: str) -> dict:
+        """Devuelve el cliente con ese alias; si no existe, lo crea (uuid)."""
+        client = self.get_client_by_alias(alias)
+        if client is not None:
+            return client
+        now = time.time()
+        cid = str(uuid.uuid4())
+        self._insert(
+            "INSERT INTO client (c_id, c_alias, c_details, c_created_at, c_updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (cid, alias, "{}", now, now),
+        )
+        return {"id": cid, "alias": alias, "details": {}}
+
+    def save_authentication(
+        self,
+        c_id: str,
+        provider_name: str,
+        env: dict,
+        expires_at: float | None = None,
+    ) -> int:
+        """Upsert de credenciales por (cliente, proveedor) en ``sa_details``.
+
+        ``env`` es el bloque de variables de entorno del servicio (claves como
+        ``BITBUCKET_TOKEN``, ``AWS_PROFILE``, ...). Los valores vacíos se
+        descartan. Conserva ``sa_created_at``; actualiza contenido y
+        ``sa_updated_at``.
+        """
+        provider = self.get_provider(provider_name)
+        if provider is None:
+            raise ValueError(f"Provider desconocido: {provider_name}")
+        clean_env = {k: v for k, v in env.items() if v is not None and str(v) != ""}
+        details = {"env": clean_env}
+        if expires_at is not None:
+            details["expires_at"] = float(expires_at)
+        now = time.time()
+        fp = self._session_fingerprint(sa=details)
+        row = self._fetchone(
+            "SELECT sa_id FROM service_authentication WHERE c_id = ? AND sp_id = ?",
+            (c_id, provider["id"]),
+        )
+        if row is not None:
+            self._execute(
+                "UPDATE service_authentication SET sa_details = ?, sa_updated_at = ? "
+                "WHERE sa_id = ?",
+                (fp, now, row[0]),
+            )
+            return row[0]
+        return self._insert(
+            "INSERT INTO service_authentication "
+            "(c_id, sp_id, sa_details, sa_created_at, sa_updated_at) VALUES (?, ?, ?, ?, ?)",
+            (c_id, provider["id"], fp, now, now),
+        )
+
+    def get_authentication(self, c_id: str, provider_name: str) -> dict | None:
+        """Devuelve el bloque ``env`` (+ ``expires_at``) de un proveedor."""
+        provider = self.get_provider(provider_name)
+        if provider is None:
+            return None
+        row = self._fetchone(
+            "SELECT sa_id, sa_details FROM service_authentication "
+            "WHERE c_id = ? AND sp_id = ?",
+            (c_id, provider["id"]),
+        )
+        if row is None:
+            return None
+        try:
+            parsed = json.loads(row[1]).get("sa") or {}
+        except (ValueError, TypeError):
+            parsed = {}
+        return {
+            "sa_id": row[0],
+            "env": parsed.get("env", {}),
+            "expires_at": parsed.get("expires_at"),
+        }
+
+    def list_authentications(self, c_id: str) -> list[dict]:
+        rows = self._fetchall(
+            "SELECT sp.sp_name, sa.sa_details, sa.sa_updated_at "
+            "FROM service_authentication sa "
+            "JOIN service_provider sp ON sp.sp_id = sa.sp_id "
+            "WHERE sa.c_id = ?",
+            (c_id,),
+        )
+        out = []
+        for name, details, updated in rows:
+            try:
+                parsed = json.loads(details).get("sa") or {}
+            except (ValueError, TypeError):
+                parsed = {}
+            out.append({
+                "provider": name,
+                "env": parsed.get("env", {}),
+                "expires_at": parsed.get("expires_at"),
+                "updated_at": updated,
+            })
+        return out
+
+    def clear_authentications(self, c_id: str) -> None:
+        """Elimina todas las credenciales del cliente (no toca su fila)."""
+        self._execute("DELETE FROM service_authentication WHERE c_id = ?", (c_id,))
 
     # -- sesiones --------------------------------------------------------------
 
