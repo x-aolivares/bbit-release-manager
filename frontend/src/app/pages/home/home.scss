@@ -2,6 +2,15 @@
   border-bottom: 1px solid var(--bb-border);
 }
 
+/* El header debe ganar su propio stacking context frente a ion-content
+   (que crea contain: size style y pintaría por encima de un simple
+   z-index:10 del ion-header de iOS). Sin esto, el menú desplegable del
+   perfil queda atrapado bajo el área de scroll. */
+.bb-nav {
+  position: relative;
+  z-index: 101;
+}
+
 .bb-mark {
   color: var(--bb-blue);
   font-weight: 800;
