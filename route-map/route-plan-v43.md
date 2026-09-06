@@ -75,6 +75,6 @@ tag (feature que estaba muda) y agrega estado del job de deploy + gate.
 - [x] Tests actualizados y agregados
 - [x] `0.29.0`
 - [x] `pytest tests/ -q` verde
-- [ ] Probe real del pipeline de tag (prod-18)
+- [x] Probe real del pipeline de tag (prod-18 → success/job=deploy-prod; uat-12 → success)
 
 Estado: implementado
