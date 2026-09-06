@@ -16,41 +16,26 @@ Before committing any changes, bump the version in `pyproject.toml`:
 - **Retrocompatible** — no romper comandos existentes. Si un cambio altera comportamiento, version mayor
 - **Versionable** — todo cambio se versiona, se commitea y se pushea
 
-## Route Map (carpeta `route-map/`)
+## Issues GitHub — nomenclatura BBIT-N
 
-La carpeta `route-map/` en la raíz contiene el plan de desarrollo de cada tema
-que se discuta del proyecto. Reglas:
+Cada tema/HU se registra como un issue en GitHub con nomenclatura de JIRA:
 
-- **Un archivo por tema/iteración**: cada plan identifica un solo tema pendiente o en curso, con objetivo, contexto, cambios, criterios de aceptación, alcance, orden de implementación, verificación y nota de versión.
-- **Numeración monotónica**: `route-plan-v{N}.md` con `N` incremental; cada tema nuevo que se discuta recibe `v{N+1}` (nunca se reutiliza un número).
-- **Antes de trabajar un tema**: leer el `route-plan` correspondiente más reciente; si el tema todavía no tiene plan, crearlo con el próximo número antes de implementar.
-- **Tema completado**: marcar con `[x]` los puntos del checklist y agregar al final `Estado: implementado` una vez verificado (tests verdes + criterios de aceptación).
-- **Los plan files se versionan**: se commitean junto con el trabajo que describen (`docs:` si es plan únicamente, o junto al `feat:`/`fix:` correspondiente).
-
-Template de cada `route-plan-v{N}.md`:
-
-```markdown
-# Route Plan — v{N} · <tema>
-
-## Objetivo
-## Contexto          <estado actual, flujo, piso/límites>
-## Cambios propuestos
-## Criterios de aceptación
-## Alcance            <tabla archivo → cambio>
-## Orden de implementación
-## Verificación
-## Nota de versión
-## Estado            <checklist [ ]/[x] + "Estado: implementado" al cerrar>
-```
+- **Tag del issue**: `BBIT-{N}` con `N` = número del issue en GitHub (BBIT-1, BBIT-2, …). Va como prefijo del título y como scope del commit.
+- **Un issue por tema**: cada issue identifica un solo tema pendiente o en curso, con objetivo, contexto, criterios de aceptación, alcance y nota de versión en su body.
+- **El body del issue es el plan de ejecución**: no hay carpeta `route-map/`; el plan vive en el issue y se actualiza ahí.
+- **Tema completado**: al dar luz verde y mergear el PR a `main`, se cierra el issue.
 
 ## Workflow
 
 When a user requests an adjustment:
 
-1. Make the code change
-2. Update `version` in `pyproject.toml`
-3. `git add -A && git commit -m "tipo: descripción concisa"`
-4. `git push`
+1. Abrir/crear un issue con tag `BBIT-{N}` (si el tema aún no lo tiene) y escribir el plan en su body.
+2. Crear la branch `bbit-{N}` desde `main` (una branch por issue; varios temas conviven en paralelo).
+3. Make the code change
+4. Update `version` in `pyproject.toml`
+5. `git add -A && git commit -m "tipo(BBIT-N): descripción concisa"`
+6. `git push`
+7. Solo al dar **luz verde**: PR `bbit-{N}` → `main`, merge y cierre del issue (el PR referencias el issue: "closes #N").
 
 ## Commit message format
 
@@ -63,12 +48,12 @@ Use conventional commits (tipo en inglés, descripción en español):
 
 El mensaje debe ser descriptivo: sujeto corto en español (ej: `feat: bbit web con dev loop por HMR`) y, si el cambio es grande, un cuerpo con viñetas detallando qué se tocó.
 
-Todo commit que implementa un route-plan lleva el identificador `(RMV-{N})`,
-donde `N` es el número del `route-plan-v{N}` correspondiente, como scope del
-tipo. Sujeto corto y descriptivo, sin emojis:
+Todo commit del trabajo de un issue lleva el identificador `(BBIT-{N})`,
+donde `N` es el número del issue en GitHub, como scope del tipo. Sujeto corto
+y descriptivo, sin emojis:
 
-- `fix(RMV-41): list_files por nombre de rama evita 404 en /src`
-- `feat(RMV-40): optimización de consultas a APIs externas en el scan`
+- `fix(BBIT-1): list_files por nombre de rama evita 404 en /src`
+- `feat(BBIT-2): optimización de consultas a APIs externas en el scan`
 
 ## Config files
 
