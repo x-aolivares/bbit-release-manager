@@ -3,11 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - 'main'
-      - 'feature/BBIT-*'
-  pull_request:
-    branches:
-      - 'main'
+      - 'feature/**'
 
 jobs:
   backend:

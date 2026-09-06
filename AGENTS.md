@@ -38,10 +38,10 @@ When a user requests an adjustment:
 7. Solo al dar **luz verde**: PR `feature/BBIT-{N}` → `main`, merge y cierre del issue (el PR referencias el issue: "closes #N").
 
 > **CI automático**: el GitHub Action `.github/workflows/ci.yml` corre
-> pytest (backend) y `ng build` + `ng test` (frontend) en cada push a
-> `main`/`feature/BBIT-*` y en cada PR hacia `main`. No es necesario correr
-> los tests en local antes de empujar: el CI valida por vos. Solo commitear
-> cuando el estado sea razonable y dejar que el PR muestre el resultado.
+> pytest (backend) y `ng build` + `ng test` (frontend) en cada push a ramas
+> `feature/**`. No es necesario correr los tests en local antes de empujar:
+> el CI valida por vos. Solo commitear cuando el estado sea razonable y
+> dejar que el push muestre el resultado.
 
 ## Commit message format
 
