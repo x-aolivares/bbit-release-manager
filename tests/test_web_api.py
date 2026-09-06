@@ -169,6 +169,120 @@ def test_session_create_with_stub(monkeypatch):
     assert status["identity"] == "Jane (@jane)"
 
 
+def test_session_register_with_alias_seeds_uuid(monkeypatch, tmp_path):
+    """Registrar con alias crea cliente con uuid5 y persiste el alias."""
+    from bbit_release.config import Config as RealConfig
+    import uuid as _uuid
+
+    monkeypatch.setenv("BBIT_CLIENT_MARKER", str(tmp_path / "client_id_marker"))
+    monkeypatch.setattr(repos_mod, "Config", RealConfig)
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="a1b2", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    resp = client.post("/api/session", json={
+        "alias": "aolivares", "workspace": "bg-ti", "token": "tok-seed",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert resp.json()["client_alias"] == "aolivares"
+
+    cfg = RealConfig()
+    assert cfg.client_alias == "aolivares"
+    assert _uuid.UUID(cfg.client_id).version == 5  # uuid5 por semilla
+    saved_id = cfg.client_id
+
+    # reentrar con el mismo alias (nuevo login, token distinto)
+    # NO regenera el id: el cliente ya existe por alias UNIQUE
+    client.post("/api/session", json={
+        "alias": "aolivares", "workspace": "bg-ti", "token": "tok-renovado",
+    })
+    assert RealConfig().client_id == saved_id
+
+
+def test_session_reuse_by_alias(monkeypatch, tmp_path):
+    """Volver a iniciar sesión con SOLO el alias resuelve el cliente guardado."""
+    from bbit_release.config import Config as RealConfig
+    import uuid as _uuid
+
+    monkeypatch.setenv("BBIT_CLIENT_MARKER", str(tmp_path / "client_id_alt"))
+    monkeypatch.setattr(repos_mod, "Config", RealConfig)
+
+    class StubClient:
+        last_ws = None
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+            StubClient.last_ws = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="a1b2", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+
+    # registrar "bg-ti" con alias
+    r = client.post("/api/session", json={
+        "alias": "aolivares", "workspace": "bg-ti", "token": "tok",
+    })
+    assert r.status_code == 200
+
+    # desconectar para simular reinicio (drops active session state global)
+    # reuse con alias
+    client.delete("/api/session")
+    reuse = client.post("/api/session/reuse", json={"alias": "aolivares"})
+    assert reuse.status_code == 200
+    assert reuse.json()["ok"] is True
+    assert StubClient.last_ws == "bg-ti"
+    assert _uuid.UUID(RealConfig().client_id).version == 5
+
+
+def test_session_reuse_unknown_alias_400(monkeypatch):
+    resp = client.post("/api/session/reuse", json={"alias": "nadie"})
+    assert resp.status_code == 400
+    assert "Registrate" in resp.json()["error"]
+
+
+def test_session_reuse_expired_401(monkeypatch, tmp_path):
+    """Reuse con alias cuyas credenciales vencieron devuelve 401 con aviso."""
+    from bbit_release.config import Config as RealConfig
+    from bbit_release.bitbucket.client import BitbucketAuthError
+
+    monkeypatch.setenv("BBIT_CLIENT_MARKER", str(tmp_path / "client_exp"))
+    monkeypatch.setattr(repos_mod, "Config", RealConfig)
+
+    class VencidoClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            raise BitbucketAuthError("expired")
+        def close(self):
+            pass
+
+    # el primer registro falla (credenciales malas) -> no se guarda
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", VencidoClient)
+    first = client.post("/api/session", json={
+        "alias": "aolivares", "workspace": "bg-ti", "token": "tok",
+    })
+    assert first.status_code == 401
+
+    # sin credenciales guardadas, reuse -> 400 pidiendo registrarse
+    client.delete("/api/session")
+    reuse = client.post("/api/session/reuse", json={"alias": "aolivares"})
+    assert reuse.status_code == 400
+
+
 def test_session_rejects_bad_circleci_token(monkeypatch):
     class BadCi:
         def __init__(self, *a, **k):
@@ -209,6 +323,7 @@ def test_client_status_after_login(monkeypatch, tmp_path):
     body = resp.json()
     assert resp.status_code == 200
     assert body["client"]["alias"] == "local"
+    assert "id" not in body["client"]  # el uuid NO se expone al front
     assert body["configured"] is False
     assert body["services"]["bitbucket"]["stored"] is False
     assert body["settings"]["ssm_prefixes"] == ["/config", "/common"]

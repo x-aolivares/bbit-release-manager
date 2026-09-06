@@ -436,13 +436,23 @@ class ReleaseCache:
             return None
         return {"id": row[0], "alias": row[1], "details": json.loads(row[2]) if row[2] else {}}
 
-    def get_or_create_client(self, alias: str) -> dict:
-        """Devuelve el cliente con ese alias; si no existe, lo crea (uuid)."""
+    def get_or_create_client(self, alias: str, seed: str = "") -> dict:
+        """Devuelve el cliente con ese alias; si no existe, lo crea.
+
+        El ``c_id`` se genera UNA sola vez (el alias es UNIQUE): con ``seed``
+        deriva un ``uuid5`` (alias+fecha+token del momento de creación); sin
+        seed usa ``uuid4`` (fallback retrocompatible). Nunca se regenera: al
+        actualizar credenciales el id del cliente no cambia.
+        """
         client = self.get_client_by_alias(alias)
         if client is not None:
             return client
         now = time.time()
-        cid = str(uuid.uuid4())
+        cid = (
+            str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
+            if seed
+            else str(uuid.uuid4())
+        )
         self._insert(
             "INSERT INTO client (c_id, c_alias, c_details, c_created_at, c_updated_at) "
             "VALUES (?, ?, ?, ?, ?)",

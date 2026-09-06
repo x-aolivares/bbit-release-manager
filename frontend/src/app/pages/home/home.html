@@ -99,8 +99,12 @@
         <p class="bb-auth-title">Conectar a Bitbucket</p>
         <div class="bb-auth-form">
           <div class="bb-auth-field">
+            <label class="bb-auth-label">Alias</label>
+            <input class="bb-input" [(ngModel)]="alias" placeholder="aolivares"/>
+          </div>
+          <div class="bb-auth-field">
             <label class="bb-auth-label">Workspace</label>
-            <input class="bb-input" [(ngModel)]="workspace" placeholder="my_org_web_dev"/>
+            <input class="bb-input" [(ngModel)]="workspace" placeholder="bg-ti"/>
           </div>
           <div class="bb-auth-field">
             <div class="bb-auth-label-row">
@@ -110,11 +114,16 @@
             <input class="bb-input" [(ngModel)]="token" type="password" placeholder="ATATT..."/>
           </div>
           <div class="bb-auth-field">
+            <button type="button" class="bb-auth-plain" (click)="circleciOpen = !circleciOpen">
+              {{ circleciOpen ? 'Ocultar' : 'Opcional' }} — Token de CircleCI
+            </button>
+            @if (circleciOpen) {
             <div class="bb-auth-label-row">
               <label class="bb-auth-label">Token de CircleCI</label>
               <a class="bb-auth-link" [href]="cciTokenUrl" target="_blank">Generar token</a>
             </div>
             <input class="bb-input" [(ngModel)]="circleciToken" type="password" placeholder="CCIPAT..."/>
+            }
           </div>
           <button class="bb-btn-primary" (click)="connect()" [disabled]="loading() || !token">
             @if (loading()) {
@@ -132,17 +141,23 @@
       <div class="bb-auth-card">
         <p class="bb-auth-title">Ya hay credenciales guardadas</p>
         <p class="bb-auth-text">
-          Las credenciales de la <code class="bb-auth-code">fila de conexión</code> (data/cache.db) siguen funcionando.
+          Ingresá tu usuario para volver a iniciar sesión.
         </p>
-        <div class="bb-auth-actions">
-          <button class="bb-btn-primary" (click)="reuseSession()" [disabled]="loading()">
-            @if (loading()) {
-            <span class="bb-spinner-inline"></span>
-            } @else {
-            Volver a iniciar sesión
-            }
-          </button>
-          <button class="bb-auth-plain" (click)="storedCreds.set(false)">Usar otro token</button>
+        <div class="bb-auth-form">
+          <div class="bb-auth-field">
+            <label class="bb-auth-label">Usuario</label>
+            <input class="bb-input" [(ngModel)]="alias" placeholder="aolivares"/>
+          </div>
+          <div class="bb-auth-actions">
+            <button class="bb-btn-primary" (click)="reuseSession()" [disabled]="loading()">
+              @if (loading()) {
+              <span class="bb-spinner-inline"></span>
+              } @else {
+              Entrar
+              }
+            </button>
+            <button class="bb-auth-plain" (click)="storedCreds.set(false)">Usar otro token</button>
+          </div>
         </div>
       </div>
       }

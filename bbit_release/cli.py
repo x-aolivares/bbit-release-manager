@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import typer
@@ -125,7 +126,8 @@ def login(
     non_interactive = bool(token or circleci_token or aws_profile)
 
     if alias:
-        cfg = cfg.set_client_alias(alias)
+        seed = f"{alias}|{time.time()}|{token}" if token else ""
+        cfg = cfg.set_client_alias(alias, seed=seed)
 
     # -- paso Bitbucket (requerido) -----------------------------------------
     ws = workspace or cfg.workspace

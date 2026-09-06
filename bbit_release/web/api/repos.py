@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import logging
 import re
+import time
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
@@ -275,7 +276,7 @@ def client_status():
     """
     cfg = Config()
     return {
-        "client": {"alias": cfg.client_alias or "local", "id": cfg.client_id},
+        "client": {"alias": cfg.client_alias or "local"},
         "services": cfg.service_states(),
         "auth": {
             "bitbucket": {
@@ -372,10 +373,19 @@ def session_status():
 
 
 @router.post("/session/reuse")
-def session_reuse():
+def session_reuse(body: dict | None = None):
     if active_session_id():
         return session_status()
+    body = body or {}
+    alias = (body.get("alias") or "").strip()
     cfg = Config()
+    if alias and alias != cfg.client_alias:
+        if get_cache().get_client_by_alias(alias) is None:
+            return JSONResponse(
+                {"ok": False, "error": "No hay un cliente con ese alias. Registrate con alias, workspace y token."},
+                status_code=400,
+            )
+        cfg = cfg.set_client_alias(alias)
     tok = cfg.bitbucket_token
     ws = cfg.workspace
     if not (tok and ws):
@@ -414,7 +424,9 @@ def api_session(body: dict):
 
     cfg = Config()
     if body.get("alias"):
-        cfg = cfg.set_client_alias((body.get("alias") or "").strip())
+        alias = (body.get("alias") or "").strip()
+        seed = f"{alias}|{time.time()}|{token}"
+        cfg = cfg.set_client_alias(alias, seed=seed)
 
     if circleci_token:
         ci = CircleCiClient(
