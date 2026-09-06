@@ -118,6 +118,17 @@ export class Home implements OnInit {
   loading = signal(false);
   error = signal<string | null>(null);
 
+  private readonly busyMinMs = 2000;
+
+  private releaseBusy(startedAt: number, done: () => void): void {
+    const remaining = this.busyMinMs - (Date.now() - startedAt);
+    if (remaining <= 0) {
+      done();
+      return;
+    }
+    window.setTimeout(done, remaining);
+  }
+
   workspace = 'my_org_web_dev';
   token = '';
   circleciToken = '';
@@ -413,6 +424,8 @@ reportOpen = signal(false);
     this.error.set(null);
     this.creatingPr.set(null);
     this.tableLoaded.set(true);
+    const startedAt = Date.now();
+    const done = () => this.releaseBusy(startedAt, () => this.reposLoading.set(false));
     // Limpiar params al cambiar de rama origen (nueva consulta = nueva cache)
     this.params.set([]);
     this.removed.set([]);
@@ -444,9 +457,12 @@ reportOpen = signal(false);
           this.error.set(r.error ?? `Ningún repo contiene la rama '${this.origin}'.`);
         }
       },
-      error: () => this.error.set('Error al cargar la tabla.'),
+      error: () => {
+        this.error.set('Error al cargar la tabla.');
+        done();
+      },
       complete: () => {
-        this.reposLoading.set(false);
+        done();
         // Auto-guardar sesión tras carga exitosa
         this.saveCurrentSession();
       },
@@ -458,6 +474,8 @@ reportOpen = signal(false);
     this.paramsLoading.set(true);
     this.error.set(null);
     this.paramsLoaded.set(true);
+    const startedAt = Date.now();
+    const done = () => this.releaseBusy(startedAt, () => this.paramsLoading.set(false));
     const dest = this.projectsDest();
     const exclude = this.blacklisted().join(',');
     const force = this.forceCache() ? 1 : 0;
@@ -467,8 +485,11 @@ reportOpen = signal(false);
           this.params.set(r.params ?? []);
           this.removed.set(r.removed ?? []);
         },
-        error: () => this.error.set('Error al obtener parámetros SSM.'),
-        complete: () => this.paramsLoading.set(false),
+        error: () => {
+          this.error.set('Error al obtener parámetros SSM.');
+          done();
+        },
+        complete: () => done(),
       });
   }
 
