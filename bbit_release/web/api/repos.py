@@ -156,6 +156,17 @@ def _require_session():
     return data
 
 
+def _session_config(data) -> "Config":
+    """Config del cliente de la sesión (multi-usuario-ready).
+
+    Si la sesión trae `client_id`, usa `Config.for_client` para no pisar el
+    marker global; si no (sesiones previas), cae en el marker (mono-usuario).
+    """
+    if getattr(data, "client_id", ""):
+        return Config.for_client(data.client_id)
+    return Config()
+
+
 def _circleci() -> CircleCiClient | None:
     cfg = Config()
     if not cfg.circleci_token:
@@ -373,7 +384,7 @@ def session_reuse():
             status_code=400,
         )
     try:
-        data = create_session(ws, tok)
+        data = create_session(ws, tok, client_id=cfg.client_id)
     except (bb.BitbucketAuthError, bb.BitbucketError):
         return JSONResponse(
             {"ok": False, "error": "Las credenciales guardadas vencieron o ya no son válidas. Generá de nuevo."},
@@ -431,7 +442,7 @@ def api_session(body: dict):
             )
 
     try:
-        data = create_session(workspace, token)
+        data = create_session(workspace, token, client_id=cfg.client_id)
     except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=401)
 
@@ -982,7 +993,7 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
     nuevo que reutiliza parámetros ya productivos no los marque como `nuevo`.
     """
     data = _require_session()
-    cfg = Config()
+    cfg = _session_config(data)
     prefixes = cfg.ssm_prefixes
     proj = _project_prefixes(cfg, project_prefixes)
     blocked = _exclude_repos(cfg, exclude)
@@ -991,10 +1002,30 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
 
     if force:
         cache.invalidate(origin, destination, {"repositories": {"excluded": sorted(blocked), "prefixes": sorted(proj or [])}})
-    elif cache.get_diff(origin, destination, proj, blocked, ssm_prefixes=prefixes) is not None:
-        return cache.get_diff(origin, destination, proj, blocked, ssm_prefixes=prefixes)
+        result = None
+    else:
+        result = cache.get_diff(origin, destination, proj, blocked, ssm_prefixes=prefixes)
 
-    master_repos = _apply_filters(_branch_repos_cached(data.client, origin, destination, proj, blocked), proj, blocked)
+    if result is None:
+        result = _compute_diff(data.client, origin, destination, mode, proj, blocked, prefixes, cache)
+        cache.set_diff(origin, destination, proj, blocked, result, ssm_prefixes=prefixes)
+
+    enriched = _enrich_diff_ssm(result, cfg)
+    return enriched
+
+
+def _compute_diff(
+    client,
+    origin: str,
+    destination: str,
+    mode: str,
+    proj: list[str] | None,
+    blocked: set[str],
+    prefixes: list[str],
+    cache,
+) -> dict:
+    """Computa el payload del diff (sin valores SSM; esos van por overlay)."""
+    master_repos = _apply_filters(_branch_repos_cached(client, origin, destination, proj, blocked), proj, blocked)
     branch_repos = master_repos
     by_slug = {r.slug: r for r in branch_repos}
 
@@ -1042,7 +1073,7 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
             return slug, origin_params, dest_params
 
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(master_repos) or 1)) as ex:
-            futures = {ex.submit(_scan_all, data.client, r): r for r in master_repos}
+            futures = {ex.submit(_scan_all, client, r): r for r in master_repos}
             for fut, repo in futures.items():
                 slug, origin_params, dest_params = fut.result()
                 dest_by_repo[slug] = {p for p, _ in dest_params}
@@ -1054,20 +1085,20 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
 
         # Master params de TODOS los repos (cache o lectura completa).
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(master_repos) or 1)) as ex:
-            futures = {ex.submit(_resolve_master, data.client, r): r.slug for r in master_repos}
+            futures = {ex.submit(_resolve_master, client, r): r.slug for r in master_repos}
             for fut, slug in futures.items():
                 dest_by_repo[slug] = {p for p, _ in fut.result()}
 
         # Etapa A: diffs y selección de archivos con indicio SSM (solo branch repos).
         candidates: list[tuple[str, str, str, str]] = []
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(branch_repos) or 1)) as ex:
-            futures = {ex.submit(_run_repo_diff, data.client, r): r for r in branch_repos}
+            futures = {ex.submit(_run_repo_diff, client, r): r for r in branch_repos}
             for fut, repo in futures.items():
                 slug, d = fut.result()
                 pending = [f for f in d.files if _suggests_ssm(f, prefixes)]
                 if not pending:
                     continue
-                origin_ref, dest_ref = _repo_refs(data.client, repo)
+                origin_ref, dest_ref = _repo_refs(client, repo)
                 for f in pending:
                     candidates.append((slug, f.path, origin_ref, dest_ref))
 
@@ -1081,7 +1112,7 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
 
         if candidates:
             with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(candidates) or 1)) as ex:
-                results = [ex.submit(_file_params, data.client, c).result() for c in candidates]
+                results = [ex.submit(_file_params, client, c).result() for c in candidates]
             for (slug, _path, _o, _d), origin_params in zip(candidates, results):
                 release_by_repo.setdefault(slug, set()).update({p for p, _ in origin_params})
 
@@ -1129,7 +1160,7 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
         }
         for slug in sorted(by_slug)
     ]
-    result = {
+    return {
         "origin": origin,
         "destination": destination,
         "prefixes": [p.rstrip("/") for p in prefixes],
@@ -1138,5 +1169,23 @@ def diff(origin: str, destination: str = "master", mode: str = "diff", project_p
         "params": params,
         "removed": removed,
     }
-    cache.set_diff(origin, destination, proj, blocked, result, ssm_prefixes=prefixes)
-    return result
+
+
+def _enrich_diff_ssm(result: dict, cfg: Config) -> dict:
+    """Overlay de valores SSM por cliente sobre el diff cacheado.
+
+    El payload cacheado es compartido entre sesiones: aca se resuelven
+    `qa_value` + `aws_status` para el cliente del request y se devuelve una
+    copia enriquecida (sin escribir valores a la cache del diff).
+    """
+    import copy
+
+    from ...aws.session import AwsSession
+    from ...aws.ssm import enrich_diff_params
+
+    out = copy.deepcopy(result)
+    params = out.get("params", [])
+    session = AwsSession.from_config(cfg)
+    decrypt = str(cfg.aws_env.get("SSM_DECRYPT") or "").strip().lower() in {"1", "true", "yes"}
+    out["params"] = enrich_diff_params(params, session, decrypt=decrypt, cache=get_cache())
+    return out

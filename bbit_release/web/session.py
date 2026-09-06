@@ -20,6 +20,7 @@ class SessionData:
     workspace: str
     identity: str
     repo_count: int
+    client_id: str = ""
 
 
 _sessions: dict[str, SessionData] = {}
@@ -32,7 +33,7 @@ def _recorder(entry: dict) -> None:
         pass
 
 
-def create_session(workspace: str, token: str, url: str = "") -> SessionData:
+def create_session(workspace: str, token: str, url: str = "", client_id: str = "") -> SessionData:
     client = BitbucketClient(workspace, token, url=url, recorder=_recorder)
     try:
         info, identity = client.session()
@@ -46,6 +47,7 @@ def create_session(workspace: str, token: str, url: str = "") -> SessionData:
         workspace=info.slug,
         identity=identity,
         repo_count=0,
+        client_id=client_id,
     )
     _sessions[sid] = data
     return data

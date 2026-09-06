@@ -229,6 +229,18 @@ class ReleaseCache:
             );
             CREATE INDEX IF NOT EXISTS idx_sc_source_created
                 ON service_call (sc_source, sc_created_at);
+
+            CREATE TABLE IF NOT EXISTS ssm_value (
+                sv_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                c_id TEXT NOT NULL,                -- = client.c_id
+                sv_path TEXT NOT NULL,
+                sv_decrypt INTEGER NOT NULL DEFAULT 0,
+                sv_value TEXT NOT NULL,
+                sv_encrypted INTEGER NOT NULL DEFAULT 0,
+                sv_created_at REAL NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS uuidx_ssm_c_path_decrypt
+                ON ssm_value (c_id, sv_path, sv_decrypt);
             """
         )
         self._conn.commit()
@@ -940,6 +952,92 @@ class ReleaseCache:
 
     def set_circleci_workflow_jobs(self, workflow_id: str, items: list[dict]) -> None:
         self._set_cached("circleci_workflow_jobs", workflow_id, "", {}, items)
+
+    # -- valores SSM (per cliente + decrypt) ------------------------------------
+
+    def get_ssm_values(
+        self, c_id: str, paths: list[str], *, decrypt: bool = False, ttl: float = 3600
+    ) -> dict[str, dict]:
+        """Valores SSM cacheados de un cliente (solo no expirados).
+
+        La key es ``(c_id, path, decrypt)``: el valor desencriptado de un
+        cliente nunca entra en la vista de otro (evita escalada de privilegios
+        via cache compartida entre usuarios).
+        """
+        out: dict[str, dict] = {}
+        if not paths:
+            return out
+        now = time.time()
+        rows = self._fetchall(
+            "SELECT sv_path, sv_value, sv_encrypted, sv_created_at "
+            "FROM ssm_value WHERE c_id = ? AND sv_decrypt = ?",
+            (c_id, 1 if decrypt else 0),
+        )
+        for path, value, encrypted, created in rows:
+            if path not in paths:
+                continue
+            if self.is_expired(created, ttl):
+                continue
+            out[path] = {"value": value, "encrypted": bool(encrypted)}
+        return out
+
+    def set_ssm_values(
+        self,
+        c_id: str,
+        values: dict[str, dict],
+        *,
+        decrypt: bool = False,
+        ttl: float = 3600,
+    ) -> None:
+        """Guarda valores SSM de un cliente (upsert por (c_id, path, decrypt)).
+
+        Los viejos quedan y expiran por TTL al leer; insertar marca
+        ``sv_encrypted`` si el valor venía encriptado, así la vista de
+        ``decrypt=False`` conoce el flag sin exponer nada.
+        """
+        if not values:
+            return
+        now = time.time()
+        with self._lock:
+            cur = self._conn.cursor()
+            try:
+                for path, info in values.items():
+                    cur.execute(
+                        "INSERT INTO ssm_value "
+                        "(c_id, sv_path, sv_decrypt, sv_value, sv_encrypted, sv_created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(c_id, sv_path, sv_decrypt) DO UPDATE SET "
+                        "  sv_value = excluded.sv_value, "
+                        "  sv_encrypted = excluded.sv_encrypted, "
+                        "  sv_created_at = excluded.sv_created_at",
+                        (
+                            c_id,
+                            path,
+                            1 if decrypt else 0,
+                            info.get("value", ""),
+                            1 if info.get("encrypted") else 0,
+                            now,
+                        ),
+                    )
+            finally:
+                cur.close()
+            self._conn.commit()
+
+    def clear_ssm_values(self, c_id: str | None = None) -> int:
+        """Elimina valores SSM (de un cliente o de todos). Devuelve borrados."""
+        if c_id:
+            sql, params = "DELETE FROM ssm_value WHERE c_id = ?", (c_id,)
+        else:
+            sql, params = "DELETE FROM ssm_value", ()
+        with self._lock:
+            cur = self._conn.cursor()
+            try:
+                cur.execute(sql, params)
+                n = cur.rowcount
+            finally:
+                cur.close()
+            self._conn.commit()
+        return n
 
 
 _global_cache: ReleaseCache | None = None

@@ -260,8 +260,24 @@ class Config:
         except OSError:
             pass
 
+    @classmethod
+    def for_client(cls, c_id: str) -> "Config":
+        """Config de un cliente específico (multi-usuario web).
+
+        Resuelve credenciales/settings para el cliente provisto sin tocar el
+        marker global ``data/client_id`` (modo CLI / mono-usuario intacto).
+        La instancia queda fijada a ese cliente.
+        """
+        obj = cls.__new__(cls)
+        obj._reload_for(c_id)
+        return obj
+
     def reload(self) -> "Config":
-        self._c_id = _resolve_client_id()
+        self._reload_for(_resolve_client_id())
+        return self
+
+    def _reload_for(self, c_id: str) -> None:
+        self._c_id = c_id
         cache = get_cache()
 
         settings = _default_settings()
@@ -333,6 +349,11 @@ class Config:
     @property
     def aws_region(self) -> str:
         return self._aws.get("AWS_REGION") or ""
+
+    @property
+    def aws_env(self) -> dict:
+        """Bloque env completo de AWS (profile/region/SSM_DECRYPT...)."""
+        return dict(self._aws)
 
     def stored_services(self) -> dict:
         """Credenciales no vacías por proveedor: {provider: {env, expires_at}}."""
