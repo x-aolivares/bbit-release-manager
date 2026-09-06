@@ -399,6 +399,8 @@ def _serialize_deploy(deploy) -> dict | None:
         "status": deploy.status,
         "created_at": deploy.created_at,
         "url": deploy.url,
+        "job": deploy.job,
+        "approval": deploy.approval,
     }
 
 

@@ -92,6 +92,9 @@ def test_deploy_job_for_pipeline():
     try:
         job = client.deploy_job_for_pipeline("r1", pipeline, "stgp")
         assert job.workflow == "deploy-stgp"
+        assert job.status == "on_hold"  # approval sin aprobar -> esperando aprobación
+        assert job.job == ""  # sin job de deploy real
+        assert job.approval == ""
         assert job.url == (
             "https://app.circleci.com/pipelines/bb/o/r1/7/details?useNewPipelines=true"
             "&job=jobuuid&workflowId=wf1&buildNumber=5&jobType=approval"
@@ -121,7 +124,9 @@ def test_deploy_url_fallback_without_jobs():
 
 def test_deploy_for_tag():
     def pipelines(request):
-        assert request.url.params.get("branch") == "uat-7"
+        # Los pipelines de tag traen vcs.tag (sin vcs.branch); el filtro de
+        # tag es client-side, asi que NO debe enviarse branch al endpoint.
+        assert "branch" not in request.url.params
         return httpx.Response(200, json={
             "next_page_token": None,
             "items": [
@@ -141,7 +146,7 @@ def test_deploy_for_tag():
         return httpx.Response(200, json={
             "next_page_token": None,
             "items": [
-                {"id": "jobuuid", "type": "build", "number": 4, "name": "deploy-uat"},
+                {"id": "jobuuid", "type": "build", "number": 4, "name": "deploy-uat", "status": "running"},
             ],
         })
 
@@ -154,6 +159,9 @@ def test_deploy_for_tag():
     try:
         job = client.deploy_for_tag("r1", "uat-7", "abc", "uat")
         assert job is not None and job.workflow == "deploy-uat"
+        assert job.status == "running"  # estado del job de deploy real
+        assert job.job == "deploy-uat"
+        assert job.approval == ""
         assert job.url == (
             "https://app.circleci.com/pipelines/bb/o/r1/12/details?useNewPipelines=true"
             "&job=jobuuid&workflowId=wf1&buildNumber=4&jobType=build"
@@ -164,11 +172,73 @@ def test_deploy_for_tag():
         client.close()
 
 
+def test_deploy_status_selecciona_job_por_prefijo():
+    def workflows(request):
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [{"id": "wf1", "name": "prod-deploy-on-tag", "status": "success", "created_at": "x"}],
+        })
+
+    def jobs(request):
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [
+                {"id": "ap", "type": "approval", "name": "approve", "status": "success"},
+                {"id": "jsetup", "type": "build", "name": "setup", "status": "success"},
+                {"id": "jdep", "type": "build", "name": "deploy-prod", "status": "success"},
+            ],
+        })
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/pipeline/p1/workflow"): workflows,
+        ("GET", "/api/v2/workflow/wf1/job"): jobs,
+    }))
+    pipeline = {"id": "p1", "number": 7}
+    try:
+        job = client.deploy_job_for_pipeline("r1", pipeline, "prod")
+    finally:
+        client.close()
+    assert job.workflow == "prod-deploy-on-tag"
+    assert job.status == "success"
+    assert job.job == "deploy-prod"  # no el setup, el job que contiene el env
+    assert job.approval == "success"
+    assert "job=jdep" in job.url  # approval ya aprobado, link al job de deploy
+
+def test_deploy_status_approval_pendiente():
+    def workflows(request):
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [{"id": "wf1", "name": "uat-deploy-on-tag", "status": "on_hold", "created_at": "x"}],
+        })
+
+    def jobs(request):
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [
+                {"id": "ap", "type": "approval", "name": "approve", "status": "on_hold"},
+                {"id": "jdep", "type": "build", "name": "deploy-uat", "status": "not_run"},
+            ],
+        })
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/pipeline/p1/workflow"): workflows,
+        ("GET", "/api/v2/workflow/wf1/job"): jobs,
+    }))
+    pipeline = {"id": "p1", "number": 7}
+    try:
+        job = client.deploy_job_for_pipeline("r1", pipeline, "uat")
+    finally:
+        client.close()
+    assert job.status == "on_hold"  # esperando aprobación, aun con deploy not_run
+    assert job.job == "deploy-uat"
+    assert job.approval == "on_hold"
+    assert "job=ap" in job.url  # deep-link al gate de aprobación
+
+
 def test_deploys_for_tags():
     def pipelines(request):
-        items = []
-        if request.url.params.get("branch") == "v1":
-            items = [{"id": "t1", "number": 3, "vcs": {"tag": "v1"}}]
+        assert "branch" not in request.url.params
+        items = [{"id": "t1", "number": 3, "vcs": {"tag": "v1", "revision": "x"}}]
         return httpx.Response(200, json={"next_page_token": None, "items": items})
 
     def workflows(request):
@@ -178,7 +248,10 @@ def test_deploys_for_tags():
         })
 
     def jobs(request):
-        return httpx.Response(200, json={"next_page_token": None, "items": []})
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [{"id": "jd", "type": "build", "name": "deploy", "status": "running"}],
+        })
 
     client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
         ("GET", "/api/v2/project/bb/o/r1/pipeline"): pipelines,
@@ -190,6 +263,7 @@ def test_deploys_for_tags():
     finally:
         client.close()
     assert found["v1"].status == "running"
+    assert found["v1"].job == "deploy"
     assert found["v2"] is None
 
 
@@ -292,15 +366,13 @@ def test_pipelines_cache_distinguishes_branch_and_tag(tmp_path):
     calls: list[str] = []
 
     def pipelines(request):
-        calls.append(request.url.params.get("branch", "?"))
         branch = request.url.params.get("branch", "")
-        vcs = {"revision": "abc"}
+        calls.append(branch if branch else "<<tag>>")
         if branch:
-            vcs["tag"] = branch
-        return httpx.Response(200, json={
-            "next_page_token": None,
-            "items": [{"id": "p", "number": 1, "vcs": vcs}],
-        })
+            items = [{"id": "p", "number": 1, "vcs": {"revision": "abc", "branch": branch}}]
+        else:
+            items = [{"id": "p", "number": 1, "vcs": {"revision": "abc", "tag": "v1.0"}}]
+        return httpx.Response(200, json={"next_page_token": None, "items": items})
 
     cache = _make_cache(tmp_path)
     client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
@@ -311,7 +383,7 @@ def test_pipelines_cache_distinguishes_branch_and_tag(tmp_path):
         assert [p["id"] for p in client.pipelines("r1", branch="release")] == ["p"]
         assert calls == ["release"]  # 2do pega en el cache
         assert [p["id"] for p in client.pipelines("r1", tag="v1.0")] == ["p"]
-        assert calls == ["release", "v1.0"]  # tag no colisiona con branch
+        assert calls == ["release", "<<tag>>"]  # tag no colisiona con branch
         rt = cache.get_rt("circleci_pipelines")
         assert rt is not None
         total = cache._fetchone(

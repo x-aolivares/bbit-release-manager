@@ -289,10 +289,10 @@ def test_scan_deploys_from_tag(monkeypatch):
     class StubCi:
         vcs = "bb"
         def deploys_for_tags(self, repo, tags):
-            return {"uat-7": SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7")}
+            return {"uat-7": SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7", job="deploy-uat", approval="success")}
         def deploy_for_tag(self, repo, tag, commit, prefix):
             if tag == "uat-7" and commit == "abc123" and prefix == "uat":
-                return SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7")
+                return SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7", job="deploy-uat", approval="success")
             return None
         def project_id(self, repo):
             return "9beb07c8-cc3b-4da1-8bc4-e9121667fbb7"
@@ -304,7 +304,7 @@ def test_scan_deploys_from_tag(monkeypatch):
     body = client.get("/api/scan", params={"origin": "release/x", "prefixes": "uat,stgp"}).json()
     repo = body["repos"][0]
     assert repo["match_tag"] == {"uat": "uat-7", "stgp": None}
-    assert repo["deploys"]["uat"] == {"workflow": "deploy-uat", "status": "success", "created_at": "x", "url": "http://cci/7"}
+    assert repo["deploys"]["uat"] == {"workflow": "deploy-uat", "status": "success", "created_at": "x", "url": "http://cci/7", "job": "deploy-uat", "approval": "success"}
     assert repo["deploys"]["stgp"] is None
     assert repo["ci_project"] == "9beb07c8-cc3b-4da1-8bc4-e9121667fbb7"
     assert repo["ci_vcs"] == "bb"
@@ -344,7 +344,7 @@ def test_scan_resolves_full_hash_with_pr(monkeypatch):
             return {}
         def deploy_for_tag(self, repo, tag, commit, prefix):
             assert commit == "abc123456789000000000000000000000000000000"
-            return SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7")
+            return SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7", job="deploy-uat", approval="success")
         def project_id(self, repo):
             return None
 

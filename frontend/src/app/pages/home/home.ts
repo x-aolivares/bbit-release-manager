@@ -25,6 +25,8 @@ interface DeployInfo {
   status: string;
   created_at: string;
   url: string;
+  job?: string;
+  approval?: string;
 }
 
 interface TagRow {
@@ -646,9 +648,13 @@ reportOpen = signal(false);
   envTagTitle(repo: ScanRepo, prefix: string): string {
     const tag = this.envTag(repo, prefix);
     const deploy = repo.deploys[prefix];
-    return deploy
-      ? `${tag} · ${deploy.workflow} · ${deploy.status}`
-      : `${tag} · sin deploy validado`;
+    if (!deploy) {
+      return `${tag} · sin deploy validado`;
+    }
+    const bits = [tag, deploy.workflow];
+    if (deploy.job) bits.push(deploy.job);
+    bits.push(deploy.status);
+    return bits.join(' · ');
   }
 
   envTag(repo: ScanRepo, prefix: string): string | null {
@@ -664,12 +670,18 @@ reportOpen = signal(false);
     }
     const s = deploy.status;
     if (s === 'success') {
-      return { label: `${tag} · ${s}`, cls: 'bb-deploy--ok' };
+      return { label: `${tag} · ok`, cls: 'bb-deploy--ok' };
     }
     if (s === 'failed' || s === 'error') {
       return { label: `${tag} · falló`, cls: 'bb-deploy--danger' };
     }
-    if (s === 'on-hold' || s === 'running' || s === 'queued' || s === 'not_run') {
+    if (s === 'on_hold') {
+      return { label: `${tag} · esperando aprobación`, cls: 'bb-deploy--pending' };
+    }
+    if (s === 'blocked' || s === 'canceled') {
+      return { label: `${tag} · ${s}`, cls: 'bb-deploy--pending' };
+    }
+    if (s === 'running' || s === 'queued' || s === 'not_run') {
       return { label: `${tag} · ${s}`, cls: 'bb-deploy--pending' };
     }
     return { label: `${tag} · ${s}`, cls: 'bb-deploy--pending' };

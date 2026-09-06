@@ -39,6 +39,8 @@ class DeployJob:
     status: str
     created_at: str
     url: str
+    job: str = ""
+    approval: str = ""
 
 
 class CircleCiClient:
@@ -158,7 +160,12 @@ class CircleCiClient:
         return items
 
     def pipelines(self, repo: str, branch: str | None = None, tag: str | None = None) -> list[dict]:
-        """Pipelines del proyecto, opcionalmente filtrados por rama o tag."""
+        """Pipelines del proyecto, opcionalmente filtrados por rama o tag.
+
+        El endpoint v2 solo filtra por nombre de rama (`branch`); los pipilines
+        de tag traen ``vcs.branch=null`` y ``vcs.tag=<tag>``, asi que para tags
+        se pagina todo el proyecto y se filtra client-side por ``vcs.tag``.
+        """
         params: dict = {"limit": 100}
         key = ""
         kind = ""
@@ -166,7 +173,6 @@ class CircleCiClient:
             params["branch"] = branch
             key, kind = branch, "branch"
         elif tag:
-            params["branch"] = tag
             key, kind = tag, "tag"
         if self._cache is not None and key:
             cached = self._cache.get_circleci_pipelines(self.project_slug(repo), key, kind)
@@ -200,7 +206,29 @@ class CircleCiClient:
             self._cache.set_circleci_workflow_jobs(workflow_id, items)
         return items
 
-    def _deploy_from_workflow(self, repo: str, pipeline: dict, workflow: dict) -> DeployJob:
+    def _pick_deploy_job(self, jobs: list[dict], prefix: str) -> dict | None:
+        """Job de deploy real: el que contenga el env (prefix) o el último no-approval."""
+        deployables = [j for j in jobs if j.get("type") != "approval"]
+        if not deployables:
+            return None
+        if prefix:
+            for job in deployables:
+                if prefix.lower() in (job.get("name") or "").lower():
+                    return job
+        return deployables[-1]
+
+    @staticmethod
+    def _deploy_status(approval: dict | None, deploy_job: dict | None) -> str:
+        """Estado del deploy mirando el job real (y el gate de aprobación)."""
+        if approval:
+            astatus = approval.get("status") or ""
+            if astatus == "canceled":
+                return "canceled"
+            if astatus not in ("success",):
+                return "on_hold"
+        return (deploy_job or {}).get("status") or ""
+
+    def _deploy_from_workflow(self, repo: str, pipeline: dict, workflow: dict, prefix: str = "") -> DeployJob:
         slug = self.project_slug(repo)
         number = (pipeline.get("number") or 0)
         wf_id = workflow.get("id", "")
@@ -209,26 +237,33 @@ class CircleCiClient:
             jobs = self.workflow_jobs(wf_id)
         except CircleCiError:
             jobs = []
-        # Preferimos el job de aprobación del workflow de deploy; si no hay,
-        # usamos el primer job como destino del deep-link.
-        job = next((j for j in jobs if j.get("type") == "approval"), None)
-        if job is None and jobs:
-            job = jobs[0]
-        if job and job.get("id"):
-            job_type = job.get("type") or "build"
-            build_number = job.get("number") or job.get("job_number") or ""
+        approval = next((j for j in jobs if j.get("type") == "approval"), None)
+        deploy_job = self._pick_deploy_job(jobs, prefix)
+        status = self._deploy_status(approval, deploy_job)
+        # Deep-link: al gate de aprobación mientras esté pendiente; si ya se
+        # aprobó (o no hay gate), al job de deploy real.
+        link = None
+        if approval and approval.get("id") and approval.get("status") != "success":
+            link = approval
+        if link is None:
+            link = deploy_job
+        if link and link.get("id"):
+            job_type = link.get("type") or "build"
+            build_number = link.get("number") or link.get("job_number") or ""
             url = (
                 f"{WEB_BASE}/{slug}/{number}/details?useNewPipelines=true"
-                f"&job={job['id']}&workflowId={wf_id}"
+                f"&job={link['id']}&workflowId={wf_id}"
                 f"&buildNumber={build_number}&jobType={job_type}"
             )
         return DeployJob(
             workflow=workflow.get("name", ""),
             pipeline_id=pipeline.get("id", ""),
             pipeline_number=number,
-            status=workflow.get("status", ""),
+            status=status,
             created_at=workflow.get("created_at", ""),
             url=url,
+            job=deploy_job.get("name", "") if deploy_job else "",
+            approval=approval.get("status", "") if approval else "",
         )
 
     def pipeline_id_for_commit(self, repo: str, branch: str, commit: str) -> int | None:
@@ -296,7 +331,7 @@ class CircleCiClient:
         for workflow in workflows:
             name = workflow.get("name", "")
             if prefix and prefix.lower() in name.lower():
-                return self._deploy_from_workflow(repo, pipeline, workflow)
+                return self._deploy_from_workflow(repo, pipeline, workflow, prefix)
         log.warning(
             "deploy_job_for_pipeline: %s pipeline=%s prefix=%s sin workflow que contenga %r (workflows=%s)",
             repo, pipeline.get("id"), prefix, prefix,
