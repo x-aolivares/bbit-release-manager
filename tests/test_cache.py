@@ -1,5 +1,6 @@
 import json
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -141,6 +142,26 @@ def test_client_alias_unique(tmp_path):
     cache.get_or_create_client("alice")
     dup = cache.get_or_create_client("alice")
     assert dup["alias"] == "alice"
+
+
+def test_client_seeded_uuid_deterministic_and_stable(tmp_path):
+    cache = _make_cache(tmp_path)
+    seed = "alice|1720000000.0|tok-alice"
+    c = cache.get_or_create_client("alice", seed=seed)
+    assert uuid.UUID(c["id"]).version == 5  # uuid5 derivado del seed
+    # mismo seed + alias -> mismo id
+    again = cache.get_or_create_client("alice", seed=seed)
+    assert again["id"] == c["id"]
+    # cliente existente SOLO se resume: un seed distinto (p.ej. token nuevo)
+    # NO regenera el id
+    renewed = cache.get_or_create_client("alice", seed="alice|1720000000.0|tok-nuevo")
+    assert renewed["id"] == c["id"]
+    # distintos alias/token -> ids distintos
+    bob = cache.get_or_create_client("bob", seed="bob|1720000000.0|tok-bob")
+    assert bob["id"] != c["id"]
+    # sin seed conserva uuid4 heredado
+    plain = cache.get_or_create_client("sin-seed")
+    assert uuid.UUID(plain["id"]).version == 4
 
 
 def test_auth_save_get_list_clear(tmp_path):

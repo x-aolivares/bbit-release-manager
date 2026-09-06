@@ -306,9 +306,13 @@ class Config:
         client = get_cache().get_client(self._c_id)
         return client["alias"] if client else ""
 
-    def set_client_alias(self, alias: str) -> "Config":
-        """Cambia/crea el cliente activo por alias y lo vuelve el default local."""
-        client = get_cache().get_or_create_client(alias or DEFAULT_CLIENT_ALIAS)
+    def set_client_alias(self, alias: str, seed: str = "") -> "Config":
+        """Cambia/crea el cliente activo por alias y lo vuelve el default local.
+
+        ``seed`` se usa solo en la creación del cliente (uuid5 determinístico);
+        los clientes existentes conservan su id. Sin seed, uuid4 (fallback).
+        """
+        client = get_cache().get_or_create_client(alias or DEFAULT_CLIENT_ALIAS, seed=seed)
         _write_client_id(client["id"])
         return self.reload()
 

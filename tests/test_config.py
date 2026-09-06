@@ -40,6 +40,18 @@ def test_default_client_local(tmp_path):
     assert client["alias"] == DEFAULT_CLIENT_ALIAS
 
 
+def test_set_client_alias_seeded_creates_deterministic_id(tmp_path):
+    import uuid as _uuid
+
+    seed = "aolivares|1720000000.0|tok-seed"
+    cfg = _cfg().set_client_alias("aolivares", seed=seed)
+    assert cfg.client_alias == "aolivares"
+    assert _uuid.UUID(cfg.client_id).version == 5
+    # reentrar con el mismo alias + seed nuevo (token actualizado) NO cambia el id
+    again = _cfg().set_client_alias("aolivares", seed="aolivares|1720000000.0|tok-renovado")
+    assert again.client_id == cfg.client_id
+
+
 def test_save_tokens_persists_to_authentication(tmp_path):
     cfg = _cfg()
     cfg.save_tokens(bitbucket_token="tok", circleci_token="cci", workspace="ws")

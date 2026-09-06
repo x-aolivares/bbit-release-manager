@@ -143,6 +143,7 @@ export class Home implements OnInit {
     window.setTimeout(done, remaining);
   }
 
+  alias = '';
   workspace = 'my_org_web_dev';
   token = '';
   circleciToken = '';
@@ -174,6 +175,7 @@ export class Home implements OnInit {
   ciConfigured = signal(true);
   ciError = signal<string | null>(null);
   storedCreds = signal(false);
+  circleciOpen = false;
   askDisconnect = signal(false);
   syncingPrs = signal(false);
 
@@ -497,7 +499,11 @@ reportOpen = signal(false);
   reuseSession(onSuccess?: () => void) {
     this.loading.set(true);
     this.error.set(null);
-    this.http.post<any>('/api/session/reuse', {}).subscribe({
+    const body: Record<string, string> = {};
+    if (this.alias.trim()) {
+      body['alias'] = this.alias.trim();
+    }
+    this.http.post<any>('/api/session/reuse', body).subscribe({
       next: (r) => {
         if (r.ok) {
           this.connected.set(true);
@@ -531,6 +537,9 @@ reportOpen = signal(false);
       project_prefixes: this.projectPrefixParam(),
       exclude_repos: this.blacklisted().join(','),
     };
+    if (this.alias.trim()) {
+      body['alias'] = this.alias.trim();
+    }
     if (this.circleciToken) {
       body['circleci_token'] = this.circleciToken;
     }
