@@ -103,6 +103,40 @@ def test_save_service_aws(tmp_path):
     assert cfg.aws_region == "us-east-1"
 
 
+def test_aws_direct_credentials_and_endpoint(tmp_path):
+    """BBIT-15: bloque AWS con endpoint + credenciales directas opcionales."""
+    cfg = _cfg()
+    cfg.save_tokens(
+        aws_endpoint_url="http://localhost:4566",
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+        aws_session_token="",
+    )
+    assert cfg.aws_endpoint_url == "http://localhost:4566"
+    assert cfg.aws_access_key_id == "test"
+    assert cfg.aws_secret_access_key == "test"
+    assert cfg.aws_session_token == ""
+    # access key cuenta como credencial almacenada (sin profile)
+    stored = cfg.stored_services()
+    assert "AWS" in stored
+    assert cfg.service_states()["aws"]["stored"] is True
+
+    # la track guarda el bloque completo canonical
+    auth = get_cache().get_authentication(cfg.client_id, "AWS")
+    env = auth["env"]
+    assert env["AWS_ENDPOINT_URL"] == "http://localhost:4566"
+    assert env["AWS_ACCESS_KEY_ID"] == "test"
+    assert env["AWS_SECRET_ACCESS_KEY"] == "test"
+
+
+def test_aws_saves_profile_when_no_direct_credentials(tmp_path):
+    cfg = _cfg()
+    cfg.save_tokens(aws_profile="prod", aws_region="us-east-1")
+    assert cfg.aws_profile == "prod"
+    assert cfg.aws_access_key_id == ""
+    assert "AWS" in cfg.stored_services()
+
+
 def test_stored_services_and_states(tmp_path):
     cfg = _cfg()
     assert cfg.stored_services() == {}

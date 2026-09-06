@@ -535,8 +535,8 @@ def _aws_session_from(cfg: Config | None = None):
 def aws_status():
     """Estado de la sesión AWS del cliente actual (STS, sin secretos)."""
     cfg = Config()
-    if not cfg.aws_profile:
-        warn("Sin AWS_PROFILE configurado para este cliente — ejecutá 'bbit login'.")
+    if not (cfg.aws_profile or cfg.aws_access_key_id):
+        warn("Sin credenciales AWS para este cliente (AWS_PROFILE o access key) — ejecutá 'bbit login'.")
         raise typer.Exit(1)
     session = _aws_session_from(cfg)
     from .aws.session import AwsSessionError
@@ -547,6 +547,7 @@ def aws_status():
         die(str(exc))
     info(f"  Profile:     {st['profile']}")
     info(f"  Region:      {st['region']}")
+    info(f"  Endpoint:    {cfg.aws_endpoint_url or '(default AWS)'}")
     info(f"  Account:     {st['account']}")
     info(f"  Role/ARN:    {st['arn']}")
     success("Sesión AWS válida.")
