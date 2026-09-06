@@ -42,7 +42,9 @@
             <ion-icon class="bb-user-caret" name="chevron-down-outline"></ion-icon>
           </button>
           @if (userMenuOpen()) {
-          <div class="bb-user-menu" role="menu">
+          <div class="bb-user-menu" role="menu"
+               [style.top.px]="userMenuPosition().top"
+               [style.right.px]="userMenuPosition().right">
             <div class="bb-user-menu-head">
               <div class="bb-user-menu-name">{{ identity() }}</div>
               <div class="bb-user-menu-meta bb-muted">

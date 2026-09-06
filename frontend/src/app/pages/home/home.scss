@@ -1109,16 +1109,15 @@ button.bb-link {
 }
 
 .bb-user-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
+  position: fixed;
   min-width: 230px;
+  max-width: 80vw;
   background: var(--bb-elevated);
   border: 1px solid var(--bb-border);
   border-radius: var(--bb-radius-lg);
   box-shadow: 0 8px 24px rgba(9, 30, 66, 0.18);
   padding: 6px;
-  z-index: 1001;
+  z-index: 1300;
 }
 
 .bb-user-menu-head {
@@ -1174,11 +1173,6 @@ button.bb-link {
 }
 
 @media (max-width: 768px) {
-  .bb-user-menu {
-    right: auto;
-    left: 0;
-  }
-
   .bb-user-menu-trigger {
     max-width: 40vw;
   }

@@ -182,6 +182,7 @@ export class Home implements OnInit {
   clientAlias = signal('local');
   savingService = signal<string | null>(null);
   configMessage = signal<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  userMenuPosition = signal<{ top: number; right: number }>({ top: 0, right: 0 });
 
   readonly serviceKeys = ['bitbucket', 'circleci', 'aws'];
   readonly serviceFields: Record<string, ConfigField[]> = {
@@ -212,12 +213,36 @@ export class Home implements OnInit {
   }
 
   toggleUserMenu(): void {
-    this.userMenuOpen.update((v) => !v);
+    if (this.userMenuOpen()) {
+      this.userMenuOpen.set(false);
+      return;
+    }
+    const trigger = (document.querySelector('.bb-user-menu-trigger') as HTMLElement | null);
+    if (trigger) {
+      const rect = trigger.getBoundingClientRect();
+      this.userMenuPosition.set({ top: rect.bottom + 6, right: Math.round(window.innerWidth - rect.right) });
+    }
+    this.userMenuOpen.set(true);
   }
 
   @HostListener('document:click', ['$event'])
   onDocClick(event: Event): void {
-    if (this.userMenuOpen() && !(event.target as HTMLElement).closest('.bb-user-menu-wrap')) {
+    const t = event.target as HTMLElement;
+    if (this.userMenuOpen() && !t.closest('.bb-user-menu-wrap') && !t.closest('.bb-user-menu')) {
+      this.userMenuOpen.set(false);
+    }
+  }
+
+  @HostListener('window:scroll')
+  onWindowScroll(): void {
+    if (this.userMenuOpen()) {
+      this.userMenuOpen.set(false);
+    }
+  }
+
+  @HostListener('window:resize')
+  onWindowResize(): void {
+    if (this.userMenuOpen()) {
       this.userMenuOpen.set(false);
     }
   }
