@@ -30,6 +30,16 @@ class FakeConfig:
     client_id = "00000000-0000-0000-0000-000000000000"
     is_configured = False
 
+    @classmethod
+    def for_client(cls, c_id):
+        self = cls.__new__(cls)
+        self.client_id = c_id
+        return self
+
+    @property
+    def aws_env(self):
+        return {}
+
     def save_tokens(self, **kw):
         return None
 
@@ -682,7 +692,7 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
     assert "app.py" not in [c[2] for c in raw_calls]
     assert body["mode"] == "diff"
     assert body["params"] == [
-        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"], "count": 1},
+        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
     ]
     assert body["removed"] == [{"param": "/config/gone", "repos": ["r1"]}]
     assert body["repos"][0]["added"] == ["/config/app/key"]
@@ -728,7 +738,7 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
     assert seen["list"] == [("r1", "headOrigin"), ("r1", "headDest")]
     assert ("r1", "headOrigin", "logo.png") not in seen["raw"]
     assert body["params"] == [
-        {"param": "/config/a/b", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"], "count": 1},
+        {"param": "/config/a/b", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
     ]
     assert body["repos"][0]["added"] == ["/config/a/b"]
 
@@ -777,7 +787,7 @@ def test_diff_resolve_master_lista_por_sha(monkeypatch):
     assert list_refs == ["headDest"]
     assert {"headOrigin", "headDest"} <= set(raw_refs)
     assert body["params"] == [
-        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"], "count": 1},
+        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
     ]
 
 
@@ -835,7 +845,7 @@ def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
     assert list_calls == [True]
     # r1 master no tiene params → el param se considera 'nuevo' (r2 quedó fuera)
     assert body["params"] == [
-        {"param": "/config/shared/secret", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"], "count": 1},
+        {"param": "/config/shared/secret", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
     ]
 
     # 2da consulta con la misma rama: cache hits, no vuelve a list_repos
@@ -883,7 +893,7 @@ def test_diff_cache_key_incluye_ssm_prefixes(monkeypatch):
     FakeConfig.ssm_prefixes = ["/config"]
     first = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
     assert first["params"] == [
-        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "repos": ["r1"], "count": 1},
+        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
     ]
 
     FakeConfig.ssm_prefixes = ["/config", "/extra"]
@@ -938,7 +948,7 @@ def test_diff_reutilizado_cuando_path_esta_en_master_del_mismo_repo(monkeypatch)
     body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
     # el path está en release y master → reutilizado (no 'nuevo', ni desaparecido)
     assert body["params"] == [
-        {"param": "/config/shared/secret", "arn": "", "tipo": "reutilizado", "qa_value": None, "repos": ["r1"], "count": 1},
+        {"param": "/config/shared/secret", "arn": "", "tipo": "reutilizado", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
     ]
 
 
@@ -989,7 +999,7 @@ def test_diff_reutilizado_y_count_multirepo(monkeypatch):
 
     body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
     assert body["params"] == [
-        {"param": "/config/dup", "arn": "", "tipo": "reutilizado", "qa_value": None, "repos": ["r1", "r2"], "count": 2},
+        {"param": "/config/dup", "arn": "", "tipo": "reutilizado", "qa_value": None, "aws_status": "skipped", "repos": ["r1", "r2"], "count": 2},
     ]
 
 
@@ -1589,3 +1599,88 @@ def test_clear_cache_con_sesion_filtra_solo_esa():
         "SELECT is_source FROM init_sesion", ()
     )
     assert "release/otra" in [r[0] for r in kept]
+
+
+def test_diff_enrich_aws_ok_and_missing(monkeypatch):
+    """Con sesión AWS (AwsSession mockeado) el diff marca ok/missing."""
+    FakeConfig.aws_profile = "prof"
+    FakeConfig.aws_region = "us-east-1"
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def diff(self, repo, destination, origin):
+            f = SimpleNamespace(
+                path="config/x.yaml", status="modified",
+                added_lines=("a: {{resolve:ssm:/config/a}}",),
+                removed_lines=(),
+            )
+            return SimpleNamespace(files=[f])
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "headO" if branch == "release/x" else "headM"
+        def list_files(self, repo, ref):
+            return ["config/x.yaml"]
+        def raw_file(self, repo, ref, path):
+            if ref == "headM":
+                return ""
+            return "a: {{resolve:ssm:/config/a}}\nb: {{resolve:ssm:/config/nope}}"
+
+    class FakeSsmClient:
+        def __init__(self):
+            self.calls = []
+        def get_parameters(self, **kw):
+            self.calls.append(kw)
+            values = {
+                "/config/a": {"Name": "/config/a", "Value": "valor-qa", "Type": "String"},
+            }
+            return {
+                "Parameters": [values[n] for n in kw.get("Names", []) if n in values],
+                "InvalidParameters": [n for n in kw.get("Names", []) if n not in values],
+            }
+
+    class FakeAwsSession:
+        def __init__(self, profile="prof", region="us-east-1", client_id="", **kw):
+            self.profile = profile
+            self.region = region
+            self.client_id = client_id
+            self.available = bool(self.profile)
+            self._ssm = FakeSsmClient()
+        @classmethod
+        def from_config(cls, cfg=None):
+            return cls(profile=getattr(cfg, "aws_profile", ""),
+                       region=getattr(cfg, "aws_region", ""),
+                       client_id=getattr(cfg, "client_id", ""))
+        def client(self, service):
+            return self._ssm
+        def close(self):
+            pass
+
+    monkeypatch.setattr("bbit_release.aws.session.AwsSession", FakeAwsSession)
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    assert body["params"] == [
+        {"param": "/config/a", "arn": "", "tipo": "nuevo", "qa_value": "valor-qa", "aws_status": "ok", "repos": ["r1"], "count": 1},
+        {"param": "/config/nope", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "missing", "repos": ["r1"], "count": 1},
+    ]
+    # la cache del diff NO guardó los valores SSM (van por overlay por cliente)
+    cached = get_cache().get_diff("release/x", "master", None, set(), ssm_prefixes=["/config", "/common"])
+    assert cached is not None
+    assert cached["params"][0]["qa_value"] is None
+    FakeConfig.aws_profile = ""
+    FakeConfig.aws_region = ""

@@ -414,7 +414,13 @@
           <div class="bb-repos-row">
             <span class="bb-mono">{{ p.param }}</span>
             <span class="bb-badge {{ tipoClass(p.estado) }}">{{ estadoLabel(p.estado) }}</span>
-            <span class="bb-mono bb-qa-val">------</span>
+            @if (p.awsStatus === 'ok') {
+            <span class="bb-mono bb-qa-val" [title]="p.qaValue">{{ p.qaValue }}</span>
+            } @else if (p.awsStatus === 'missing') {
+            <span class="bb-badge bb-badge--danger">no existe en QA</span>
+            } @else {
+            <span class="bb-mono bb-qa-val bb-qa-val--empty">------</span>
+            }
           </div>
           }
         </div>

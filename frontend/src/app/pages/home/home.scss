@@ -247,6 +247,10 @@
 
 .bb-qa-val {
   color: var(--bb-text-secondary);
+}
+
+.bb-qa-val--empty {
+  color: var(--bb-text-muted, var(--bb-text-secondary));
   letter-spacing: 0.1em;
 }
 

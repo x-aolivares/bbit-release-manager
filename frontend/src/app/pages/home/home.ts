@@ -76,6 +76,7 @@ interface SsmParam {
   arn: string;
   tipo: 'nuevo' | 'reutilizado' | string;
   qa_value: string | null;
+  aws_status: 'ok' | 'missing' | 'skipped';
   repos: string[];
 }
 
@@ -664,17 +665,17 @@ reportOpen = signal(false);
     this.loadRepos();
   }
 
-  paramRows(): { param: string; estado: string }[] {
-    const rows: { param: string; estado: string }[] = [];
+  paramRows(): { param: string; estado: string; qaValue: string | null; awsStatus: string }[] {
+    const rows: { param: string; estado: string; qaValue: string | null; awsStatus: string }[] = [];
     for (const p of this.filteredParams()) {
       if (!this.repoInProjects(p.repos)) continue;
-      rows.push({ param: p.param, estado: p.tipo });
+      rows.push({ param: p.param, estado: p.tipo, qaValue: p.qa_value ?? null, awsStatus: p.aws_status ?? 'skipped' });
     }
     for (const p of this.removed()) {
       if (!this.repoInProjects(p.repos)) continue;
       const estado = 'solo destino';
       if (!this.estadoFilterActive(estado)) continue;
-      rows.push({ param: p.param, estado });
+      rows.push({ param: p.param, estado, qaValue: null, awsStatus: 'skipped' });
     }
     return rows.sort((a, b) => a.param.localeCompare(b.param));
   }

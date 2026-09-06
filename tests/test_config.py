@@ -120,6 +120,37 @@ def test_set_client_alias_switches(tmp_path):
     assert back.bitbucket_token == "t2"
 
 
+def test_for_client_resolves_credentials_without_marker(tmp_path):
+    """Config.for_client resuelve credenciales del cliente indicado sin tocar
+    el marker global (multi-usuario web)."""
+    a = _cfg().set_client_alias("cliente-a")
+    a.save_tokens(bitbucket_token="tA", aws_profile="profA", workspace="wA")
+    b = _cfg().set_client_alias("cliente-b")
+    b.save_tokens(bitbucket_token="tB", aws_profile="profB", workspace="wB")
+
+    cfg_a = Config.for_client(a.client_id)
+    cfg_b = Config.for_client(b.client_id)
+
+    assert cfg_a.bitbucket_token == "tA"
+    assert cfg_a.aws_profile == "profA"
+    assert cfg_b.bitbucket_token == "tB"
+    assert cfg_b.aws_profile == "profB"
+    assert cfg_a.client_id == a.client_id
+    assert cfg_b.client_id == b.client_id
+
+    # no toca el marker: _cfg() sigue en cliente-b (ultimo set)
+    assert _cfg().bitbucket_token == "tB"
+
+
+def test_for_client_aws_env_exposes_ssm_decrypt(tmp_path):
+    cfg = _cfg()
+    cfg.save_service("AWS", {"AWS_PROFILE": "prod", "AWS_REGION": "us-east-1", "SSM_DECRYPT": "true"})
+    for_client = Config.for_client(cfg.client_id)
+    assert for_client.aws_env.get("SSM_DECRYPT") == "true"
+    assert for_client.aws_profile == "prod"
+    assert for_client.aws_region == "us-east-1"
+
+
 def test_save_filters_persists(tmp_path):
     cfg = _cfg()
     cfg.save_tokens(bitbucket_token="t", workspace="w")

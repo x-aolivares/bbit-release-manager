@@ -509,5 +509,166 @@ def setup(
     info("Siguiente paso: 'bbit web --dev' para levantar la web con live reload.")
 
 
+# -- AWS ------------------------------------------------------------------------
+
+aws_app = typer.Typer(
+    name="aws",
+    help="Sesión AWS (SSO) y valores SSM — identidad por cliente de Config()",
+    no_args_is_help=True,
+)
+
+
+def _home_aws() -> Path:
+    """Directorio `~/.aws` del usuario actual (config + credentials + sso cache)."""
+    return Path(os.path.expanduser("~")) / ".aws"
+
+
+def _aws_session_from(cfg: Config | None = None):
+    from .aws.session import AwsSession
+
+    return AwsSession.from_config(cfg)
+
+
+@aws_app.command("status")
+def aws_status():
+    """Estado de la sesión AWS del cliente actual (STS, sin secretos)."""
+    cfg = Config()
+    if not cfg.aws_profile:
+        warn("Sin AWS_PROFILE configurado para este cliente — ejecutá 'bbit login'.")
+        raise typer.Exit(1)
+    session = _aws_session_from(cfg)
+    from .aws.session import AwsSessionError
+
+    try:
+        st = session.status()
+    except AwsSessionError as exc:
+        die(str(exc))
+    info(f"  Profile:     {st['profile']}")
+    info(f"  Region:      {st['region']}")
+    info(f"  Account:     {st['account']}")
+    info(f"  Role/ARN:    {st['arn']}")
+    success("Sesión AWS válida.")
+
+
+@aws_app.command("export-session")
+def aws_export_session(
+    output: Path = typer.Option(Path("aws-session.tar.gz"), "--output", "-o", help="Archivo a generar"),
+    no_refresh: bool = typer.Option(False, "--no-refresh", help="No refrescar el accessToken antes de exportar"),
+):
+    """Empaqueta `~/.aws` (config + credentials + sso cache) en un tar.gz 0600."""
+    import tarfile
+    from datetime import datetime
+
+    home = _home_aws()
+    if not home.exists():
+        die(f"No hay {home} — no hay sesión AWS que exportar.")
+    if output.exists():
+        output.unlink()
+
+    def _add(root: Path, arc: str) -> None:
+        with tarfile.open(str(output), "w:gz") as tar:
+            for f in sorted(root.rglob("*")):
+                if f.is_file():
+                    tar.add(f, arcname=f"{arc}/{f.relative_to(root).as_posix()}")
+                    os.chmod(f, 0o600)
+
+    # Si no usamos refresh no tocamos el cache; exportamos tal cual.
+    tmp = home
+    _add(tmp, ".aws")
+
+    os.chmod(output, 0o600)
+    size = output.stat().st_size
+    dt = datetime.now().strftime("%Y-%m-%d %H:%M")
+    warn("El archivo contiene credenciales (0600). No subir a git ni compartir por canales inseguros.")
+    success(f"Sesión exportada a {win_to_posix(str(output))} ({size} bytes, {dt}) — importala en el VPS con 'bbit aws import-session'.")
+
+
+@aws_app.command("import-session")
+def aws_import_session(
+    bundle: Path = typer.Option(Path("aws-session.tar.gz"), "--bundle", "-b", help="tar.gz generado con export-session"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="No preguntar (instala y valida)"),
+):
+    """Instala `~/.aws` desde el bundle y valida con STS."""
+    import tarfile
+
+    if not bundle.exists():
+        die(f"No existe el bundle {win_to_posix(str(bundle))} — ejecutá 'bbit aws export-session' en la máquina local primero.")
+    home = _home_aws()
+    home.mkdir(parents=True, exist_ok=True)
+    first = not any(home.iterdir()) or not (home / "config").exists()
+    if not yes and not first:
+        keep = input(f"  ~/.aws ya tiene contenido. ¿Reemplazar? (y/N): ").strip().lower()
+        if keep != "y":
+            info("Importación cancelada.")
+            return
+    with tarfile.open(str(bundle), "r:gz") as tar:
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+            dest = home / member.name.removeprefix(".aws/")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with tar.extractfile(member) as src, open(dest, "wb") as out:
+                out.write(src.read())
+            os.chmod(dest, 0o600)
+    success(f"Config instalada en {win_to_posix(str(home))}.")
+
+    cfg = Config()
+    profile = cfg.aws_profile
+    if not profile:
+        warn("No hay AWS_PROFILE en la config de este cliente — 'bbit aws import-session' terminó sin validar (setealo con 'bbit login').")
+        return
+    from .aws.session import AwsSessionError
+
+    try:
+        st = _aws_session_from(cfg).status()
+    except AwsSessionError as exc:
+        die(str(exc))
+    success(f"Sesión importada y validada: {st['arn']} (account {st['account']})")
+
+
+@aws_app.command("params")
+def aws_params(
+    paths: list[str] = typer.Argument(None, help="Paths SSM a leer (ej: /config/app/url). Sin args: lee de un diff simulado."),
+    decrypt: bool = typer.Option(False, "--decrypt", help="Descifrar SecureString"),
+    force: bool = typer.Option(False, "--force", help="Ignorar cache"),
+):
+    """Valores reales de paths SSM (cache por cliente, batches de 10)."""
+    from .aws.ssm import fetch_values
+
+    cfg = Config()
+    session = _aws_session_from(cfg)
+    if not session.available:
+        warn("Sin AWS_PROFILE configurado — ejecutá 'bbit login' o importá la sesión.")
+        raise typer.Exit(1)
+    if not paths:
+        die("Indicá al menos un path SSM (ej: bbit aws params /config/app/url).")
+    values = fetch_values(session, paths, decrypt=decrypt, cache=get_cache(), force=force)
+    if not values:
+        warn("Ningún parámetro resuelto (¿no existen? revisá con --decrypt o el path exacto).")
+        return
+    from rich.table import Table
+    from rich import box
+
+    table = Table(box=box.SIMPLE)
+    table.add_column("Path", style="cyan")
+    table.add_column("Valor")
+    table.add_column("Tipo")
+    missing = []
+    for p in paths:
+        info = values.get(p)
+        if info is None:
+            missing.append(p)
+            continue
+        table.add_row(p, info.get("value", ""), "SecureString" if info.get("encrypted") else "String")
+    if table.row_count:
+        from .logger import console as _console
+        _console.print(table)
+    if missing:
+        warn(f"Missing: {', '.join(missing)}")
+
+
+app.add_typer(aws_app, name="aws")
+
+
 if __name__ == "__main__":
     app()

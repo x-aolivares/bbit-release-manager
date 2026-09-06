@@ -618,3 +618,61 @@ def test_thread_safe_concurrent_access(tmp_path):
 
     for i in range(n):
         assert cache.get_master(f"r{i}", "master") == {(f"/config/{i}", "")}
+
+
+# -- valores SSM (per cliente + decrypt) ------------------------------------
+
+def test_ssm_values_upsert_by_client_path_decrypt(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_ssm_values("juan", {"/config/a": {"value": "1"}}, decrypt=False)
+    cache.set_ssm_values("juan", {"/config/a": {"value": "2"}}, decrypt=False)
+
+    got = cache.get_ssm_values("juan", ["/config/a"])
+    assert got["/config/a"]["value"] == "2"
+    assert got["/config/a"]["encrypted"] is False
+    row = cache._fetchone("SELECT COUNT(*) FROM ssm_value", ())
+    assert row[0] == 1  # upsert, no duplica
+
+
+def test_ssm_values_isolation_per_client_and_decrypt(tmp_path):
+    cache = _make_cache(tmp_path)
+    # Juan descifra; María no
+    cache.set_ssm_values("juan", {"/config/secret": {"value": "S", "encrypted": True}}, decrypt=True)
+    cache.set_ssm_values("maria", {"/config/secret": {"value": "M", "encrypted": False}}, decrypt=False)
+
+    juan_dec = cache.get_ssm_values("juan", ["/config/secret"], decrypt=True)
+    assert juan_dec["/config/secret"]["value"] == "S"
+
+    maria_plain = cache.get_ssm_values("maria", ["/config/secret"], decrypt=False)
+    assert maria_plain["/config/secret"]["value"] == "M"
+
+    # María NO ve la fila de Juan (decrypt=True) aunque pida el mismo path
+    maria_dec = cache.get_ssm_values("maria", ["/config/secret"], decrypt=True)
+    assert "/config/secret" not in maria_dec
+
+    # Juan NO ve la fila de María (decrypt=False)
+    juan_plain = cache.get_ssm_values("juan", ["/config/secret"], decrypt=False)
+    assert "/config/secret" not in juan_plain
+
+
+def test_ssm_values_ttl_expires(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_ssm_values("juan", {"/config/a": {"value": "1"}}, decrypt=False)
+    # ttl<=0 -> nunca expira
+    got = cache.get_ssm_values("juan", ["/config/a"], ttl=0)
+    assert got["/config/a"]["value"] == "1"
+    # ttl chico -> expira tras dormir
+    time.sleep(0.02)
+    got_expired = cache.get_ssm_values("juan", ["/config/a"], ttl=0.005)
+    assert got_expired == {}
+
+
+def test_ssm_values_clear_per_client_and_all(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_ssm_values("juan", {"/config/a": {"value": "1"}}, decrypt=False)
+    cache.set_ssm_values("maria", {"/config/a": {"value": "2"}}, decrypt=False)
+
+    assert cache.clear_ssm_values("juan") == 1
+    assert cache._fetchone("SELECT COUNT(*) FROM ssm_value", ())[0] == 1
+    assert cache.clear_ssm_values() == 1
+    assert cache._fetchone("SELECT COUNT(*) FROM ssm_value", ())[0] == 0
