@@ -188,7 +188,7 @@ class ReleaseCache:
                 sa_created_at REAL NOT NULL,
                 sa_updated_at REAL NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS uuidx_sa_c_id_sp_id
+            CREATE UNIQUE INDEX IF NOT EXISTS uuidx_sa_c_id_sp_id
                 ON service_authentication (c_id, sp_id);
 
             CREATE TABLE IF NOT EXISTS request_type (
@@ -239,6 +239,8 @@ class ReleaseCache:
         - ``request_type.rt_service_provider_id`` -> ``sp_id`` (estándar:
           la columna de referencia usa el nombre de la PK que referencia).
           SQLite renombra también los índices que apuntaban a esa columna.
+        - ``service_authentication`` -> UNIQUE index en ``(c_id, sp_id)``
+          (dedupe previo de filas repetidas que hayan quedado de antes).
         """
         with self._lock:
             cur = self._conn.cursor()
@@ -262,6 +264,29 @@ class ReleaseCache:
             cur = self._conn.cursor()
             try:
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_rt_sp_id ON request_type (sp_id)")
+            finally:
+                cur.close()
+
+            cur = self._conn.cursor()
+            try:
+                cur.execute(
+                    "DELETE FROM service_authentication "
+                    "WHERE sa_id NOT IN ("
+                    "  SELECT MAX(sa_id) FROM service_authentication GROUP BY c_id, sp_id)"
+                )
+            finally:
+                cur.close()
+            cur = self._conn.cursor()
+            try:
+                cur.execute("DROP INDEX IF EXISTS uuidx_sa_c_id_sp_id")
+            finally:
+                cur.close()
+            cur = self._conn.cursor()
+            try:
+                cur.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uuidx_sa_c_id_sp_id "
+                    "ON service_authentication (c_id, sp_id)"
+                )
             finally:
                 cur.close()
             self._conn.commit()
@@ -426,6 +451,9 @@ class ReleaseCache:
         ``BITBUCKET_TOKEN``, ``AWS_PROFILE``, ...). Los valores vacíos se
         descartan. Conserva ``sa_created_at``; actualiza contenido y
         ``sa_updated_at``.
+
+        Atómico gracias al UNIQUE index en ``(c_id, sp_id)`` + ``ON CONFLICT``
+        en un solo statement (sin race lookup/insert).
         """
         provider = self.get_provider(provider_name)
         if provider is None:
@@ -436,22 +464,24 @@ class ReleaseCache:
             details["expires_at"] = float(expires_at)
         now = time.time()
         fp = self._session_fingerprint(sa=details)
-        row = self._fetchone(
-            "SELECT sa_id FROM service_authentication WHERE c_id = ? AND sp_id = ?",
-            (c_id, provider["id"]),
-        )
-        if row is not None:
-            self._execute(
-                "UPDATE service_authentication SET sa_details = ?, sa_updated_at = ? "
-                "WHERE sa_id = ?",
-                (fp, now, row[0]),
-            )
-            return row[0]
-        return self._insert(
-            "INSERT INTO service_authentication "
-            "(c_id, sp_id, sa_details, sa_created_at, sa_updated_at) VALUES (?, ?, ?, ?, ?)",
-            (c_id, provider["id"], fp, now, now),
-        )
+        with self._lock:
+            cur = self._conn.cursor()
+            try:
+                cur.execute(
+                    "INSERT INTO service_authentication "
+                    "(c_id, sp_id, sa_details, sa_created_at, sa_updated_at) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(c_id, sp_id) DO UPDATE SET "
+                    "  sa_details = excluded.sa_details, "
+                    "  sa_updated_at = excluded.sa_updated_at "
+                    "RETURNING sa_id",
+                    (c_id, provider["id"], fp, now, now),
+                )
+                row = cur.fetchone()
+            finally:
+                cur.close()
+            self._conn.commit()
+        return row[0] if row is not None else 0
 
     def get_authentication(self, c_id: str, provider_name: str) -> dict | None:
         """Devuelve el bloque ``env`` (+ ``expires_at``) de un proveedor."""

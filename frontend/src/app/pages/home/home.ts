@@ -296,6 +296,7 @@ export class Home implements OnInit {
           kind: 'error',
           text: e.error?.error ?? e.error?.detail ?? 'Error de red al guardar.',
         });
+        this.savingService.set(null);
       },
       complete: () => this.savingService.set(null),
     });

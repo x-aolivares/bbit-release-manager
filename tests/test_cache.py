@@ -180,6 +180,56 @@ def test_auth_unknown_provider_raises(tmp_path):
         cache.save_authentication(c["id"], "NoExiste", {})
 
 
+def test_auth_unique_index_prevents_duplicates(tmp_path):
+    from sqlite3 import IntegrityError
+
+    cache = _make_cache(tmp_path)
+    c = cache.get_or_create_client("local")
+    cache.save_authentication(c["id"], "Bitbucket", {"BITBUCKET_TOKEN": "a"})
+    cache.save_authentication(c["id"], "Bitbucket", {"BITBUCKET_TOKEN": "b"})
+    listed = cache.list_authentications(c["id"])
+    assert len(listed) == 1
+    assert listed[0]["env"]["BITBUCKET_TOKEN"] == "b"
+
+    with pytest.raises(IntegrityError):
+        cache._conn.execute(
+            "INSERT INTO service_authentication "
+            "(c_id, sp_id, sa_details, sa_created_at, sa_updated_at) VALUES "
+            "(?, (SELECT sp_id FROM service_provider WHERE sp_name = 'Bitbucket'), ?, ?, ?)",
+            (c["id"], '{"sa": {"env": {"BITBUCKET_TOKEN": "dup"}}}', time.time(), time.time()),
+        )
+
+
+def test_auth_migration_dedupes_duplicates(tmp_path):
+    cache = _make_cache(tmp_path)
+    c = cache.get_or_create_client("local")
+    sp_id = cache._fetchone(
+        "SELECT sp_id FROM service_provider WHERE sp_name = 'Bitbucket'", ()
+    )[0]
+    cache._conn.execute("DROP INDEX IF EXISTS uuidx_sa_c_id_sp_id")
+    cache._conn.execute(
+        "CREATE INDEX IF NOT EXISTS uuidx_sa_c_id_sp_id "
+        "ON service_authentication (c_id, sp_id)"
+    )
+    now = time.time()
+    for tok in ("viejo", "nuevo"):
+        cache._conn.execute(
+            "INSERT INTO service_authentication "
+            "(c_id, sp_id, sa_details, sa_created_at, sa_updated_at) VALUES (?, ?, ?, ?, ?)",
+            (c["id"], sp_id, f'{{"sa": {{"env": {{"BITBUCKET_TOKEN": "{tok}"}}}}}}', now, now),
+        )
+    cache._conn.commit()
+    assert len(cache._fetchall(
+        "SELECT sa_id FROM service_authentication WHERE c_id = ?", (c["id"],)
+    )) == 2
+    cache._migrate_schema()
+    rows = cache._fetchall(
+        "SELECT sa_details FROM service_authentication WHERE c_id = ?", (c["id"],)
+    )
+    assert len(rows) == 1
+    assert "nuevo" in json.loads(rows[0][0])["sa"]["env"]["BITBUCKET_TOKEN"]
+
+
 def test_seeds_request_types(tmp_path):
     cache = _make_cache(tmp_path)
     for name, ttl in [

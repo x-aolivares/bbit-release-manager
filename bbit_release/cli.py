@@ -34,7 +34,7 @@ def version():
 def config():
     """Show the current connection (config stored in data/cache.db)."""
     cfg = Config()
-    if get_cache().get_connection() is None:
+    if not cfg.stored_services() and get_cache().get_connection() is None:
         warn("Sin conexión guardada — ejecutá 'bbit login' o conectate desde la web.")
         return
     states = cfg.service_states()
@@ -190,8 +190,10 @@ def login(
         except (EOFError, KeyboardInterrupt):
             die("Login cancelado.")
     if aws_prof:
+        if not aws_reg:
+            aws_reg = "us-east-1"
         with console.status("Ahora validando credenciales de AWS (STS)..."):
-            ok_a, detail_a = _probe_aws(aws_prof, aws_reg or "us-east-1")
+            ok_a, detail_a = _probe_aws(aws_prof, aws_reg)
         if not ok_a:
             die(f"Credenciales AWS inválidas: {detail_a}")
         info(f"[green]AWS OK[/green] — {detail_a}")
