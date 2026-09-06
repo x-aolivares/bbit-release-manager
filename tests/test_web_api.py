@@ -202,6 +202,8 @@ def test_client_status_after_login(monkeypatch, tmp_path):
     assert body["configured"] is False
     assert body["services"]["bitbucket"]["stored"] is False
     assert body["settings"]["ssm_prefixes"] == ["/config", "/common"]
+    assert body["auth"]["bitbucket"]["workspace"] == ""
+    assert body["auth"]["aws"]["region"] == ""
 
     cash = get_cache().get_client_by_alias("local")
     assert cash is not None

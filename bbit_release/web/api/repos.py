@@ -257,11 +257,32 @@ def _env_for(cfg: Config, service: str, body: dict) -> dict:
 
 @router.get("/client")
 def client_status():
-    """Cliente activo + estado de servicios + settings (para la UI)."""
+    """Cliente activo + estado de servicios + settings (para la UI).
+
+    Incluye el bloque ``auth`` con los valores actuales de cada servicio
+    (para precargar el formulario de configuración del frontend).
+    """
     cfg = Config()
     return {
         "client": {"alias": cfg.client_alias or "local", "id": cfg.client_id},
         "services": cfg.service_states(),
+        "auth": {
+            "bitbucket": {
+                "url": cfg.bitbucket_url,
+                "workspace": cfg.workspace,
+                "username": cfg.bitbucket_username,
+                "token": cfg.bitbucket_token,
+            },
+            "circleci": {
+                "token": cfg.circleci_token,
+                "vcs": cfg.circleci_vcs,
+                "org": cfg.circleci_org,
+            },
+            "aws": {
+                "profile": cfg.aws_profile,
+                "region": cfg.aws_region,
+            },
+        },
         "settings": {
             "project_prefixes": cfg.project_prefixes,
             "exclude_repos": cfg.exclude_repos,

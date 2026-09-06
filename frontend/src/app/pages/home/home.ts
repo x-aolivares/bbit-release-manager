@@ -269,6 +269,11 @@ export class Home implements OnInit {
       next: (r) => {
         this.services.set(r.services ?? {});
         this.clientAlias.set(r.client?.alias ?? 'local');
+        const auth = r.auth ?? {};
+        for (const svc of this.serviceKeys) {
+          const vals = auth[svc] ?? {};
+          this.configForm[svc] = { ...this.configForm[svc], ...vals };
+        }
       },
     });
   }
