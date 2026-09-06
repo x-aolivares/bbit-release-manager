@@ -41,33 +41,34 @@
             <span class="bb-topbar-username">{{ identity() }}</span>
             <ion-icon class="bb-user-caret" name="chevron-down-outline"></ion-icon>
           </button>
-          @if (userMenuOpen()) {
-          <div class="bb-user-menu" role="menu"
-               [style.top.px]="userMenuPosition().top"
-               [style.right.px]="userMenuPosition().right">
-            <div class="bb-user-menu-head">
-              <div class="bb-user-menu-name">{{ identity() }}</div>
-              <div class="bb-user-menu-meta bb-muted">
-                Cliente: <span class="bb-mono">{{ clientAlias() }}</span>
-              </div>
-            </div>
-            <button class="bb-user-menu-item" role="menuitem" (click)="openConfig()">
-              <ion-icon name="settings-outline"></ion-icon>
-              Configuración
-            </button>
-            <button class="bb-user-menu-item bb-user-menu-item--danger" role="menuitem"
-                    (click)="closeUserMenuAndDisconnect()">
-              <ion-icon name="log-out-outline"></ion-icon>
-              Cerrar sesión
-            </button>
-          </div>
-          }
         </div>
         }
       </div>
     </div>
   </ion-toolbar>
 </ion-header>
+
+@if (userMenuOpen()) {
+<div class="bb-user-menu" role="menu"
+     [style.top.px]="userMenuPosition().top"
+     [style.right.px]="userMenuPosition().right">
+  <div class="bb-user-menu-head">
+    <div class="bb-user-menu-name">{{ identity() }}</div>
+    <div class="bb-user-menu-meta bb-muted">
+      Cliente: <span class="bb-mono">{{ clientAlias() }}</span>
+    </div>
+  </div>
+  <button class="bb-user-menu-item" role="menuitem" (click)="openConfig()">
+    <ion-icon name="settings-outline"></ion-icon>
+    Configuración
+  </button>
+  <button class="bb-user-menu-item bb-user-menu-item--danger" role="menuitem"
+          (click)="closeUserMenuAndDisconnect()">
+    <ion-icon name="log-out-outline"></ion-icon>
+    Cerrar sesión
+  </button>
+</div>
+}
 
 <ion-content>
   <div class="bb-page-wrapper">
