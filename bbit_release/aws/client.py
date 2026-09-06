@@ -7,17 +7,38 @@ exista una sesión inválida de AWS (profile/región) antes de guardarla.
 from __future__ import annotations
 
 
-def validate_credentials(profile: str = "", region: str = "") -> tuple[bool, str]:
+def validate_credentials(
+    profile: str = "",
+    region: str = "",
+    endpoint_url: str = "",
+    access_key_id: str = "",
+    secret_access_key: str = "",
+    session_token: str = "",
+) -> tuple[bool, str]:
     """Valida credenciales AWS con STS ``GetCallerIdentity``.
 
     Devuelve ``(ok, detalle)``. Requiere ``boto3`` instalado y credenciales
-    resolubles (profile, env vars o default chain).
+    resolubles (profile, directas o default chain). Las credenciales directas
+    tienen precedencia cuando vienen definidas; ``endpoint_url`` opcional
+    apunta a un endpoint alternativo (LocalStack).
     """
     import boto3
 
     try:
-        session = boto3.Session(profile_name=profile or None, region_name=region or None)
-        sts = session.client("sts", region_name=region or "us-east-1")
+        session_kwargs = {"region_name": region or None}
+        if access_key_id and secret_access_key:
+            session_kwargs.update({
+                "aws_access_key_id": access_key_id,
+                "aws_secret_access_key": secret_access_key,
+                "aws_session_token": session_token or None,
+            })
+        else:
+            session_kwargs["profile_name"] = profile or None
+        session = boto3.Session(**session_kwargs)
+        client_kwargs = {"region_name": region or "us-east-1"}
+        if endpoint_url:
+            client_kwargs["endpoint_url"] = endpoint_url
+        sts = session.client("sts", **client_kwargs)
         identity = sts.get_caller_identity()
         arn = identity.get("Arn", "?")
         account = identity.get("Account", "?")

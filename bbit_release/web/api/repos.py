@@ -210,10 +210,18 @@ def _ci_probe(token: str, vcs: str, org: str) -> tuple[bool, str]:
     return True, ""
 
 
-def _aws_probe(profile: str, region: str) -> tuple[bool, str]:
+def _aws_probe(profile: str, region: str, *, endpoint_url: str = "",
+               access_key_id: str = "", secret_access_key: str = "",
+               session_token: str = "") -> tuple[bool, str]:
     from ...aws.client import validate_credentials
 
-    return validate_credentials(profile, region)
+    return validate_credentials(
+        profile, region,
+        endpoint_url=endpoint_url,
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        session_token=session_token,
+    )
 
 
 def _validate_service(service: str, body: dict, cfg: Config) -> tuple[bool, str]:
@@ -236,9 +244,17 @@ def _validate_service(service: str, body: dict, cfg: Config) -> tuple[bool, str]
     if service == "aws":
         profile = (body.get("profile") or "").strip()
         region = (body.get("region") or "").strip() or "us-east-1"
-        if not profile:
-            return False, "profile es obligatorio"
-        return _aws_probe(profile, region)
+        access_key_id = (body.get("access_key_id") or "").strip()
+        secret_access_key = (body.get("secret_access_key") or "").strip()
+        if not profile and not access_key_id:
+            return False, "profile o credenciales directas son obligatorias"
+        return _aws_probe(
+            profile, region,
+            endpoint_url=(body.get("endpoint_url") or "").strip(),
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key,
+            session_token=(body.get("session_token") or "").strip(),
+        )
     raise ValueError(f"Servicio desconocido: {service}")
 
 
@@ -263,6 +279,10 @@ def _env_for(cfg: Config, service: str, body: dict) -> dict:
         return _compact_env({
             "AWS_PROFILE": (body.get("profile") or "").strip(),
             "AWS_REGION": (body.get("region") or "").strip() or "us-east-1",
+            "AWS_ENDPOINT_URL": (body.get("endpoint_url") or "").strip(),
+            "AWS_ACCESS_KEY_ID": (body.get("access_key_id") or "").strip(),
+            "AWS_SECRET_ACCESS_KEY": (body.get("secret_access_key") or "").strip(),
+            "AWS_SESSION_TOKEN": (body.get("session_token") or "").strip(),
         })
     raise ValueError(f"Servicio desconocido: {service}")
 
@@ -293,6 +313,8 @@ def client_status():
             "aws": {
                 "profile": cfg.aws_profile,
                 "region": cfg.aws_region,
+                # endpoint no es secreto; credenciales directas NO se exponen
+                "endpoint_url": cfg.aws_endpoint_url,
             },
         },
         "settings": {
@@ -419,6 +441,10 @@ def api_session(body: dict):
     circleci_token = (body.get("circleci_token") or "").strip()
     aws_profile = (body.get("aws_profile") or "").strip()
     aws_region = (body.get("aws_region") or "").strip()
+    aws_endpoint_url = (body.get("aws_endpoint_url") or "").strip()
+    aws_access_key_id = (body.get("aws_access_key_id") or "").strip()
+    aws_secret_access_key = (body.get("aws_secret_access_key") or "").strip()
+    aws_session_token = (body.get("aws_session_token") or "").strip()
     if not workspace or not token:
         raise HTTPException(400, "workspace y token son obligatorios")
 
@@ -445,8 +471,14 @@ def api_session(body: dict):
         finally:
             ci.close()
 
-    if aws_profile:
-        ok_a, detail_a = _aws_probe(aws_profile, aws_region or "us-east-1")
+    if aws_profile or aws_access_key_id:
+        ok_a, detail_a = _aws_probe(
+            aws_profile, aws_region or "us-east-1",
+            endpoint_url=aws_endpoint_url,
+            access_key_id=aws_access_key_id,
+            secret_access_key=aws_secret_access_key,
+            session_token=aws_session_token,
+        )
         if not ok_a:
             return JSONResponse(
                 {"ok": False, "error": f"Credenciales AWS inválidas: {detail_a}"},
@@ -466,6 +498,10 @@ def api_session(body: dict):
             bitbucket_username=(body.get("username") or "").strip(),
             aws_profile=aws_profile,
             aws_region=aws_region,
+            aws_endpoint_url=aws_endpoint_url,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
         )
         cfg.save_filters(
             project_prefixes=",".join(_project_prefixes(cfg, body.get("project_prefixes", "")) or []),

@@ -62,8 +62,10 @@ class FakeBotoSession:
         self._sts = sts
         self.profile_name = None
         self.region_name = None
+        self.client_calls: list[tuple[str, dict]] = []
 
     def client(self, service, **kwargs):
+        self.client_calls.append((service, kwargs))
         self.region_name = kwargs.get("region_name")
         if service == "ssm":
             return self._ssm
@@ -129,6 +131,68 @@ def test_status_invalid_credentials_raises_hint(_clean_cache):
 def test_available_only_with_profile(_clean_cache):
     assert _session(profile="x").available is True
     assert _session(profile="").available is False
+
+
+def test_available_with_direct_credentials(_clean_cache):
+    s = _session(profile="", access_key_id="AK", secret_access_key="SK")
+    assert s.available is True
+    assert s.uses_direct_credentials is True
+
+
+def test_available_false_without_any_credential(_clean_cache):
+    assert _session(profile="", access_key_id="").available is False
+
+
+def test_client_passes_endpoint_url(_clean_cache):
+    session = _session(endpoint_url="http://localhost:4566")
+    fake = _inject(session)
+    session.client("ssm")
+    service, kwargs = fake.client_calls[-1]
+    assert service == "ssm"
+    assert kwargs["endpoint_url"] == "http://localhost:4566"
+
+
+def test_client_without_endpoint_omits_key(_clean_cache):
+    session = _session()
+    fake = _inject(session)
+    session.client("ssm")
+    _, kwargs = fake.client_calls[-1]
+    assert "endpoint_url" not in kwargs
+
+
+def test_boto_session_prefers_direct_credentials(monkeypatch, _clean_cache):
+    """BBIT-15: access key + secret mandan por sobre el profile."""
+    captured = {}
+
+    class FakeBoto3Session:
+        def __init__(self, **kw):
+            captured.update(kw)
+        def client(self, service, **kw):
+            return SimpleNamespace(get_caller_identity=lambda: {"Arn": "", "Account": ""})
+
+    monkeypatch.setattr("boto3.Session", FakeBoto3Session)
+    session = _session(profile="release-qa", access_key_id="AK", secret_access_key="SK", session_token="TOK")
+    session._boto_session()
+    assert captured["aws_access_key_id"] == "AK"
+    assert captured["aws_secret_access_key"] == "SK"
+    assert captured["aws_session_token"] == "TOK"
+    assert "profile_name" not in captured
+
+
+def test_boto_session_uses_profile_without_direct_credentials(monkeypatch, _clean_cache):
+    captured = {}
+
+    class FakeBoto3Session:
+        def __init__(self, **kw):
+            captured.update(kw)
+        def client(self, service, **kw):
+            return SimpleNamespace(get_caller_identity=lambda: {"Arn": "", "Account": ""})
+
+    monkeypatch.setattr("boto3.Session", FakeBoto3Session)
+    session = _session(profile="release-qa")
+    session._boto_session()
+    assert captured["profile_name"] == "release-qa"
+    assert "aws_access_key_id" not in captured
 
 
 def test_default_region_us_east_1(_clean_cache):

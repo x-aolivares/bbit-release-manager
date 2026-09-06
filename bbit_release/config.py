@@ -24,14 +24,21 @@ def _marker_path() -> Path:
 _SECRET_KEYS = {
     "Bitbucket": ("BITBUCKET_TOKEN",),
     "CircleCi": ("CIRCLECI_TOKEN",),
-    "AWS": ("AWS_PROFILE",),
+    "AWS": ("AWS_PROFILE", "AWS_ACCESS_KEY_ID"),
 }
 
 # Claves canónicas de env vars por proveedor (mismas que antes en env.*).
 _ENV_KEYS = {
     "Bitbucket": {"url": "BITBUCKET_URL", "workspace": "BITBUCKET_WORKSPACE", "username": "BITBUCKET_USERNAME", "token": "BITBUCKET_TOKEN"},
     "CircleCi": {"token": "CIRCLECI_TOKEN", "vcs": "CIRCLECI_VCS", "org": "CIRCLECI_ORG"},
-    "AWS": {"profile": "AWS_PROFILE", "region": "AWS_REGION"},
+    "AWS": {
+        "profile": "AWS_PROFILE",
+        "region": "AWS_REGION",
+        "endpoint": "AWS_ENDPOINT_URL",
+        "access_key": "AWS_ACCESS_KEY_ID",
+        "secret_key": "AWS_SECRET_ACCESS_KEY",
+        "session_token": "AWS_SESSION_TOKEN",
+    },
 }
 
 
@@ -355,6 +362,22 @@ class Config:
         return self._aws.get("AWS_REGION") or ""
 
     @property
+    def aws_endpoint_url(self) -> str:
+        return (self._aws.get("AWS_ENDPOINT_URL") or "").strip()
+
+    @property
+    def aws_access_key_id(self) -> str:
+        return (self._aws.get("AWS_ACCESS_KEY_ID") or "").strip()
+
+    @property
+    def aws_secret_access_key(self) -> str:
+        return (self._aws.get("AWS_SECRET_ACCESS_KEY") or "").strip()
+
+    @property
+    def aws_session_token(self) -> str:
+        return (self._aws.get("AWS_SESSION_TOKEN") or "").strip()
+
+    @property
     def aws_env(self) -> dict:
         """Bloque env completo de AWS (profile/region/SSM_DECRYPT...)."""
         return dict(self._aws)
@@ -442,12 +465,17 @@ class Config:
         circleci_org: str = "",
         aws_profile: str = "",
         aws_region: str = "",
+        aws_endpoint_url: str = "",
+        aws_access_key_id: str = "",
+        aws_secret_access_key: str = "",
+        aws_session_token: str = "",
         expires_at: float | None = None,
     ) -> int:
         """Upsert por proveedor con lo que venga. Devuelve el último sa_id o -1.
 
         Solo guarda un proveedor si llega (o ya había) su secreto
-        (token/profile): pasar solo workspace no crea una fila de token vacía.
+        (token/profile/access key): pasar solo workspace no crea una fila de
+        token vacía. AWS acepta profile **o** credenciales directas.
         """
         cache = get_cache()
         last = -1
@@ -466,10 +494,15 @@ class Config:
                 "CIRCLECI_ORG": circleci_org or self._ci.get("CIRCLECI_ORG") or "",
             })
             last = cache.save_authentication(self._c_id, "CircleCi", ci_env, expires_at)
-        if aws_profile or self._aws.get("AWS_PROFILE"):
+        if (aws_profile or aws_access_key_id
+                or self._aws.get("AWS_PROFILE") or self._aws.get("AWS_ACCESS_KEY_ID")):
             aws_env = _compact_env({
                 "AWS_PROFILE": aws_profile or self._aws.get("AWS_PROFILE") or "",
                 "AWS_REGION": aws_region or self._aws.get("AWS_REGION") or "",
+                "AWS_ENDPOINT_URL": aws_endpoint_url or self._aws.get("AWS_ENDPOINT_URL") or "",
+                "AWS_ACCESS_KEY_ID": aws_access_key_id or self._aws.get("AWS_ACCESS_KEY_ID") or "",
+                "AWS_SECRET_ACCESS_KEY": aws_secret_access_key or self._aws.get("AWS_SECRET_ACCESS_KEY") or "",
+                "AWS_SESSION_TOKEN": aws_session_token or self._aws.get("AWS_SESSION_TOKEN") or "",
             })
             last = cache.save_authentication(self._c_id, "AWS", aws_env, expires_at)
         if last != -1:

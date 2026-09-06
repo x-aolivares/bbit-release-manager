@@ -25,6 +25,10 @@ class FakeConfig:
     exclude_repos: list[str] = []
     aws_profile = ""
     aws_region = ""
+    aws_endpoint_url = ""
+    aws_access_key_id = ""
+    aws_secret_access_key = ""
+    aws_session_token = ""
     bitbucket_url = "https://bitbucket.org"
     client_alias = "local"
     client_id = "00000000-0000-0000-0000-000000000000"
@@ -334,13 +338,65 @@ def test_client_status_after_login(monkeypatch, tmp_path):
     assert cash is not None
 
 
+def test_client_status_aws_never_exposes_direct_credentials(monkeypatch, tmp_path):
+    """BBIT-15: client_status muestra endpoint pero NO access key/secret/token."""
+    from bbit_release.config import Config as RealConfig
+
+    monkeypatch.setenv("BBIT_CLIENT_MARKER", str(tmp_path / "client_id_aws"))
+    monkeypatch.setattr(repos_mod, "Config", RealConfig)
+    cfg = RealConfig()
+    cfg.save_tokens(
+        aws_endpoint_url="http://localhost:4566",
+        aws_access_key_id="AK",
+        aws_secret_access_key="SK",
+        aws_session_token="TOK",
+    )
+
+    body = client.get("/api/client").json()
+    aws_auth = body["auth"]["aws"]
+    assert aws_auth["endpoint_url"] == "http://localhost:4566"
+    assert "access_key_id" not in aws_auth
+    assert "secret_access_key" not in aws_auth
+    assert "session_token" not in aws_auth
+
+
 def test_auth_validates_aws(monkeypatch):
-    def fake_probe(profile, region):
+    def fake_probe(profile, region, **kw):
         return (True, f"STS OK {profile}")
     monkeypatch.setattr(repos_mod, "_aws_probe", fake_probe)
     resp = client.post("/api/auth/aws/validate", json={"profile": "prod", "region": "us-east-1"})
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "service": "aws", "detail": "STS OK prod"}
+
+
+def test_auth_validates_aws_with_direct_credentials(monkeypatch):
+    """BBIT-15: validate acepta endpoint + credenciales directas y las pasa."""
+    seen = {}
+
+    def fake_probe(profile, region, **kw):
+        seen.update(kw)
+        return (True, f"STS OK {profile}")
+
+    monkeypatch.setattr(repos_mod, "_aws_probe", fake_probe)
+    resp = client.post("/api/auth/aws/validate", json={
+        "region": "us-west-2",
+        "endpoint_url": "http://localhost:4566",
+        "access_key_id": "AK",
+        "secret_access_key": "SK",
+        "session_token": "TOK",
+    })
+    assert resp.status_code == 200
+    assert seen["endpoint_url"] == "http://localhost:4566"
+    assert seen["access_key_id"] == "AK"
+    assert seen["secret_access_key"] == "SK"
+    assert seen["session_token"] == "TOK"
+
+
+def test_auth_aws_requires_profile_or_access_key(monkeypatch):
+    resp = client.post("/api/auth/aws/validate", json={"region": "us-east-1"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+    assert "profile o credenciales directas" in resp.json()["detail"]
 
 
 def test_auth_unknown_service_404():
