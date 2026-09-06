@@ -55,11 +55,20 @@ y descriptivo, sin emojis:
 - `fix(BBIT-1): list_files por nombre de rama evita 404 en /src`
 - `feat(BBIT-2): optimización de consultas a APIs externas en el scan`
 
-## Config files
+## Config y credenciales
 
-Files under `config/env.*` (without `.example`) are gitignored.
-Never commit real credentials or environment-specific values.
-Always update the `.example` templates when the config shape changes.
+No hay archivos `config/env.*`. La configuración y las credenciales por
+servicio (bitbucket, circle, `aws` reservado para BBIT-1) viven en la **fila de
+conexión** de SQLite: `init_sesion` con `is_source='config'` e
+`is_target='connection'` en `data/cache.db` (`is_details` JSON canónico).
+Se persisten/leen desde `bbit_release/config.py` (`Config`) y se gestionan con
+`bbit login`, el endpoint `/api/session` de la web, o `DELETE /api/session`.
+
+Reglas:
+- Nunca commitees credenciales reales. La carpeta `config/` está gitignored y
+  no debe contener secretos.
+- La fila de conexión queda fuera de `DELETE /api/cache` (limpiar historial no
+  borra credenciales); `DELETE /api/session?delete_credentials=1` sí la borra.
 
 ## Dependencias compartidas (sync con yappy-cli-manager)
 

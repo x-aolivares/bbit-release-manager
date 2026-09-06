@@ -8,6 +8,7 @@ from pathlib import Path
 import typer
 
 from ._version import read_version
+from .cache import get_cache
 from .config import Config, win_to_posix
 from .logger import info, success, warn, die
 
@@ -30,36 +31,31 @@ def version():
 
 
 @app.command()
-def config(env: str = typer.Argument(None, help="Environment to show")):
-    """Show current configuration."""
-    known = Config.known_environments()
-    envs = [env] if env else known
-    for e in envs:
-        cfg = Config.with_env(e)
-        if env and len(envs) > 1:
-            print()
-        info(f"[bold]=== {e.upper()} ===[/bold]")
-        info(f"  Bitbucket URL:  {cfg.bitbucket_url or '(not set)'}")
-        info(f"  Workspace:      {cfg.workspace or '(not set)'}")
-        info(f"  Default branch: {cfg.default_branch}")
-        info(f"  Repos filter:   {', '.join(cfg.repos) or '(all)'}")
-        info(f"  Proj prefixes:  {', '.join(cfg.project_prefixes) or '(all)'}")
-        info(f"  SSM prefixes:   {', '.join(cfg.ssm_prefixes)}")
-
-    if not env:
-        base = Config()
-        print()
-        info("[bold]=== BASE ===[/bold]")
-        info(f"  Token set:      {'yes' if base.bitbucket_token else 'no'}")
-        info(f"  Config dir:     {win_to_posix(str(Config._get_config_dir()))}")
-        info(f"  Frontend:       {win_to_posix(str(base.frontend_root))}")
+def config():
+    """Show the current connection (config stored in data/cache.db)."""
+    cfg = Config()
+    if get_cache().get_connection() is None:
+        warn("Sin conexión guardada — ejecutá 'bbit login' o conectate desde la web.")
+        return
+    info("[bold]=== CONEXIÓN (data/cache.db) ===[/bold]")
+    info(f"  Bitbucket URL:  {cfg.bitbucket_url}")
+    info(f"  Workspace:      {cfg.workspace or '(no set)'}")
+    info(f"  Token BB:       {'set' if cfg.bitbucket_token else 'no'}")
+    info(f"  Token Circle:   {'set' if cfg.circleci_token else 'no'}")
+    info(f"  Default branch: {cfg.default_branch}")
+    info(f"  Repos filter:   {', '.join(cfg.repos) or '(all)'}")
+    info(f"  Proj prefixes:  {', '.join(cfg.project_prefixes) or '(all)'}")
+    info(f"  Excluidos:      {', '.join(cfg.exclude_repos) or '(none)'}")
+    info(f"  SSM prefixes:   {', '.join(cfg.ssm_prefixes)}")
+    info(f"  Deploy envs:    {', '.join(cfg.deploy_prefixes)}")
+    info(f"  Frontend:       {win_to_posix(str(cfg.frontend_root))}")
 
 
-def _probe_bitbucket(cfg) -> tuple[bool, str, str, int]:
+def _probe_bitbucket(workspace: str, token: str, url: str = "") -> tuple[bool, str, str, int]:
     """Abre sesión Bitbucket Cloud. Devuelve (ok, detalle, error, repo_count)."""
     from .bitbucket.client import BitbucketAuthError, BitbucketClient, BitbucketError
 
-    with BitbucketClient(cfg.workspace, cfg.bitbucket_token) as client:
+    with BitbucketClient(workspace, token, url=url) as client:
         try:
             info, identity = client.session()
         except (BitbucketAuthError, BitbucketError) as exc:
@@ -69,27 +65,76 @@ def _probe_bitbucket(cfg) -> tuple[bool, str, str, int]:
 
 
 @app.command()
+def login(
+    workspace: str = typer.Option("", "--workspace", help="Workspace de Bitbucket"),
+    token: str = typer.Option("", "--token", help="App password o PAT de Bitbucket"),
+    circleci_token: str = typer.Option(
+        "", "--circleci-token", help="Token de CircleCI (opcional)"
+    ),
+):
+    """Guardar credenciales en la fila de conexión (data/cache.db).
+
+    Sin opciones, pregunta interactivamente por workspace, token de
+    Bitbucket y token de CircleCI. Valida contra la API antes de guardar.
+    """
+    cfg = Config()
+    ws = workspace or cfg.workspace
+    tok = token
+    cci = circleci_token
+    if not tok:
+        try:
+            ws = input(f"Workspace [{ws or ''}]: ").strip() or ws
+            tok = input("Bitbucket token (app password o PAT): ").strip()
+            if not cci:
+                cci = input("CircleCI token (opcional, Enter para omitir): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            die("Login cancelado.")
+    if not ws:
+        die("Workspace obligatorio.")
+    if not tok:
+        die("Token de Bitbucket obligatorio.")
+
+    if cci:
+        from .circleci.client import CircleCiClient, CircleCiError
+        ci = CircleCiClient(cci, vcs=cfg.circleci_vcs or "bb", org=cfg.circleci_org or ws)
+        try:
+            ci.me()
+        except (CircleCiError, ValueError) as exc:
+            die(f"Token de CircleCI inválido: {exc}")
+        finally:
+            ci.close()
+
+    ok, detail, err, _ = _probe_bitbucket(ws, tok, cfg.bitbucket_url)
+    if not ok:
+        die(err)
+    cfg.save_tokens(bitbucket_token=tok, circleci_token=cci, workspace=ws)
+    success(f"Conexión guardada — {detail}")
+    info("Siguiente paso: 'bbit session' para listar repos o 'bbit web' para la UI.")
+
+
+@app.command()
 def session():
     """Abrir sesión contra Bitbucket Cloud: valida token y lista los repos."""
     cfg = Config()
     if not cfg.is_configured:
         die(
-            "Bitbucket no configurado. Completá BITBUCKET_WORKSPACE y "
-            "BITBUCKET_TOKEN en config/env.base (o usá la web)."
+            "Bitbucket no configurado. Ejecutá 'bbit login' (o conectate desde la web)."
         )
 
     info(
         f"Conectando a {cfg.bitbucket_url} "
         f"(workspace '{cfg.workspace}')..."
     )
-    ok, detail, err, count = _probe_bitbucket(cfg)
+    ok, detail, err, count = _probe_bitbucket(
+        cfg.workspace, cfg.bitbucket_token, cfg.bitbucket_url
+    )
     if not ok:
         die(err)
 
     success(f"Sesión OK — {detail}")
     info(f"Repos del workspace '{cfg.workspace}': {count}")
 
-    with BitbucketClient(cfg.workspace, cfg.bitbucket_token) as client:
+    with BitbucketClient(cfg.workspace, cfg.bitbucket_token, url=cfg.bitbucket_url) as client:
         repos = client.list_repos(filter_names=cfg.repos or None, prefixes=cfg.project_prefixes or None)
         if cfg.exclude_repos:
             blocked = {s.lower() for s in cfg.exclude_repos}
@@ -114,8 +159,8 @@ def repos(
     """Resolver repos que contienen la rama origen."""
     cfg = Config()
     if not cfg.is_configured:
-        die("Bitbucket no configurado. Configurá BITBUCKET_WORKSPACE y BITBUCKET_TOKEN.")
-    with BitbucketClient(cfg.workspace, cfg.bitbucket_token) as client:
+        die("Bitbucket no configurado. Ejecutá 'bbit login'.")
+    with BitbucketClient(cfg.workspace, cfg.bitbucket_token, url=cfg.bitbucket_url) as client:
         found = client.repos_with_branch(origin, prefixes=cfg.project_prefixes or None)
     if not found:
         warn(f"Ningún repo contiene la rama '{origin}'.")
@@ -142,8 +187,8 @@ def diff(
     """Mostrar diff de cada repo que tiene la rama origen contra destino."""
     cfg = Config()
     if not cfg.is_configured:
-        die("Bitbucket no configurado.")
-    with BitbucketClient(cfg.workspace, cfg.bitbucket_token) as client:
+        die("Bitbucket no configurado. Ejecutá 'bbit login'.")
+    with BitbucketClient(cfg.workspace, cfg.bitbucket_token, url=cfg.bitbucket_url) as client:
         found = client.repos_with_branch(origin, prefixes=cfg.project_prefixes or None)
         if not found:
             warn(f"Ningún repo contiene la rama '{origin}'.")
@@ -314,21 +359,15 @@ def setup(
     npm = _have_tool("npm")
     success("  npm encontrado") if npm else warn("  npm no encontrado")
 
-    # 2. Config files
+    # 2. Conexión (credenciales por servicio, sin archivos env)
     print()
-    info("Config:")
-    config_dir = Config._get_config_dir()
-    example = config_dir / "env.base.example"
-    target = config_dir / "env.base"
-    if target.exists() and target.read_text().strip():
-        success(f"  {target.name} already exists")
-    elif example.exists():
-        yn = "y" if yes else input("  Create config/env.base from example? (Y/n): ")
-        if yn.lower() != "n":
-            target.write_text(example.read_text())
-            success("  Created env.base — editá BITBUCKET_URL y BITBUCKET_TOKEN")
+    info("Conexión:")
+    if cfg.is_configured:
+        success(f"  {cfg.workspace} ({cfg.bitbucket_url}) — credenciales en data/cache.db")
     else:
-        warn("  No env.base.example found")
+        yn = "y" if yes else input("  ¿Guardar credenciales AHORA con 'bbit login'? (Y/n): ")
+        if yn.lower() != "n":
+            success("  Ejecutá: bbit login")
 
     # 3. Bitbucket conectividad
     print()
@@ -339,17 +378,19 @@ def setup(
         if cfg.bitbucket_token:
             success("  Token: presente")
             info("  Probando sesión...")
-            ok, detail, err, count = _probe_bitbucket(cfg)
+            ok, detail, err, count = _probe_bitbucket(
+                cfg.workspace, cfg.bitbucket_token, cfg.bitbucket_url
+            )
             if ok:
                 success(f"  Sesión OK — {detail} ({count} repos)")
             else:
                 warn(f"  Sesión fallida: {err}")
         else:
-            warn("  Token: no seteado — cargá BITBUCKET_TOKEN en config/env.base")
+            warn("  Token: no seteado — ejecutá 'bbit login' para guardarlo")
     else:
         warn(
-            "  BITBUCKET_URL/BITBUCKET_WORKSPACE vacíos — configuralos "
-            "en config/env.base y corré 'bbit session'"
+            "  BITBUCKET_URL/BITBUCKET_WORKSPACE vacíos — ejecutá 'bbit login' "
+            "y después 'bbit session'"
         )
 
     # 4. Frontend scaffold check

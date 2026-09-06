@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
-import glob
 import re
 import sys
+from copy import deepcopy
 from pathlib import Path
-from dotenv import dotenv_values
+
+from .cache import get_cache
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def win_to_posix(path: str) -> str:
@@ -24,185 +27,192 @@ def posix_to_win(path: str) -> str:
     return path
 
 
-def _package_root_config() -> Path:
-    return Path(__file__).resolve().parent.parent / "config"
+def _default_details() -> dict:
+    """Config canónica por defecto: credenciales por servicio + settings."""
+    return {
+        "bypass_cache": False,
+        "credentials": {
+            "bitbucket": {
+                "url": "https://bitbucket.org",
+                "workspace": "",
+                "username": "",
+                "token": "",
+            },
+            "circle": {"token": "", "vcs": "bb", "org": ""},
+            # Reservado para BBIT-1 (sesión SSO: profile/region/... de AWS).
+            "aws": {},
+        },
+        "settings": {
+            "repos": [],
+            "project_prefixes": [],
+            "exclude_repos": [],
+            "default_branch": "master",
+            "ssm_prefixes": ["/config", "/common"],
+            "deploy_prefixes": ["uat", "stgp", "prod"],
+        },
+    }
+
+
+_legacy_migration_done = False
+
+
+def _split_commas(raw: str) -> list[str]:
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _is_production_db() -> bool:
+    """True si la cache apunta al data/cache.db real (no una DB de test)."""
+    return get_cache().db_path == _PROJECT_ROOT / "data" / "cache.db"
+
+
+def _migrate_legacy_env_base(path: Path | None = None) -> bool:
+    """One-shot: importa ``config/env.base`` histórico a la fila de conexión y
+    elimina el archivo.
+
+    Solo corre sobre la base por defecto (data/cache.db); con una DB temporal
+    (tests) no toca archivos reales. Idempotente: si ya existe la fila de
+    conexión, solo se borra el archivo legacy.
+    """
+    global _legacy_migration_done
+    if _legacy_migration_done:
+        return False
+    _legacy_migration_done = True
+
+    legacy = path or (_PROJECT_ROOT / "config" / "env.base")
+    if not legacy.exists():
+        return False
+
+    from dotenv import dotenv_values
+
+    values = dotenv_values(legacy) or {}
+
+    cache = get_cache()
+    if cache.get_connection() is None:
+        details = _default_details()
+        bb = details["credentials"]["bitbucket"]
+        circle = details["credentials"]["circle"]
+        settings = details["settings"]
+        url = (values.get("BITBUCKET_URL") or "").strip()
+        if url:
+            bb["url"] = url
+        bb["workspace"] = (values.get("BITBUCKET_WORKSPACE") or "").strip()
+        bb["username"] = values.get("BITBUCKET_USERNAME") or ""
+        bb["token"] = values.get("BITBUCKET_TOKEN") or ""
+        circle["token"] = values.get("CIRCLECI_TOKEN") or ""
+        circle["vcs"] = (values.get("CIRCLECI_VCS") or "").strip() or "bb"
+        circle["org"] = (values.get("CIRCLECI_ORG") or "").strip()
+        settings["repos"] = _split_commas(values.get("BITBUCKET_REPOS") or "")
+        settings["project_prefixes"] = _split_commas(values.get("BITBUCKET_PROJECT_PREFIXES") or "")
+        settings["exclude_repos"] = _split_commas(values.get("BITBUCKET_EXCLUDE_REPOS") or "")
+        settings["default_branch"] = (values.get("BITBUCKET_DEFAULT_BRANCH") or "").strip() or "master"
+        settings["ssm_prefixes"] = _split_commas(values.get("SSM_PREFIXES") or "/config,/common")
+        settings["deploy_prefixes"] = _split_commas(values.get("DEPLOY_PREFIXES") or "uat,stgp,prod")
+        cache.save_connection(details)
+    try:
+        legacy.unlink()
+    except OSError:
+        pass
+    return True
 
 
 class Config:
-    _config_dir: Path | None = None
+    """Configuración y credenciales desde la fila de conexión en SQLite.
 
-    def __init__(self, env: str | None = None):
-        self._env = env
-        self._values: dict[str, str] = {}
+    Reemplaza los archivos ``config/env.*``: las credenciales por servicio
+    (bitbucket, circle, aws) y los settings viven en el JSON ``is_details`` de
+    la fila ``config/connection`` de ``init_sesion`` (data/cache.db).
+    """
 
-        config_dir = self._get_config_dir()
-        self._load_file(config_dir / "env.base")
-        if env:
-            env_file = config_dir / f"env.{env}"
-            if env_file.exists():
-                self._load_file(env_file)
-            else:
-                available = self.known_environments()
-                raise ValueError(
-                    f"No config for environment '{env}'. "
-                    f"Available: {', '.join(available) if available else 'none'}"
-                )
-
-        local_env = config_dir.parent / ".env"
-        if local_env.exists():
-            self._load_file(local_env)
-
-    @classmethod
-    def _get_config_dir(cls) -> Path:
-        if cls._config_dir:
-            return cls._config_dir
-
-        override = os.environ.get("BBIT_CONFIG_DIR")
-        if override and Path(override).is_dir():
-            cls._config_dir = Path(override)
-            return cls._config_dir
-
-        package_root = _package_root_config()
-        if package_root.is_dir():
-            cls._config_dir = package_root
-            return cls._config_dir
-
-        for parent in [Path.cwd(), *Path.cwd().parents]:
-            candidate = parent / "config"
-            if (candidate / "env.base").is_file():
-                cls._config_dir = candidate
-                return cls._config_dir
-
-        cls._config_dir = package_root
-        return cls._config_dir
-
-    @classmethod
-    def with_env(cls, env: str) -> Config:
-        return cls(env=env)
+    def __init__(self):
+        if _is_production_db():
+            _migrate_legacy_env_base()
+        self.reload()
 
     @classmethod
     def reset(cls):
-        cls._config_dir = None
+        """Limpia el flag de migración one-shot (para tests)."""
+        global _legacy_migration_done
+        _legacy_migration_done = False
 
-    def _load_file(self, path: Path):
-        if not path.exists():
-            return
-        values = dotenv_values(path)
-        if values:
-            self._values.update(values)
+    def reload(self) -> "Config":
+        """Recarga desde la fila de conexión (tras un save/clear)."""
+        details = _default_details()
+        conn = get_cache().get_connection()
+        if conn:
+            if isinstance(conn.get("credentials"), dict):
+                details["credentials"] = {**details["credentials"], **conn["credentials"]}
+            if isinstance(conn.get("settings"), dict):
+                details["settings"] = {**details["settings"], **conn["settings"]}
+        self._details = details
+        self._creds = details["credentials"]
+        self._settings = details["settings"]
+        return self
 
-    @classmethod
-    def known_environments(cls) -> list[str]:
-        config_dir = cls._get_config_dir()
-        pattern = str(config_dir / "env.*")
-        envs = []
-        for f in glob.glob(pattern):
-            name = Path(f).name[len("env."):]
-            if name in ("", "base") or name.endswith(".example"):
-                continue
-            envs.append(name)
-        return sorted(envs)
-
-    def get(self, key: str, default: str | None = None) -> str | None:
-        # Precedencia: (1) valor no vacío en config, (2) BBIT_<KEY> explicit,
-        # (3) os.environ. Un valor vacío en los archivos cuenta como "no
-        # seteado" para permitir overrides por entorno o test.
-        if key in self._values:
-            raw = self._values[key]
-            if raw is not None and str(raw).strip():
-                return raw
-        for env_key in (f"BBIT_{key}", key):
-            v = os.environ.get(env_key)
-            if v is not None and str(v).strip():
-                return v
-        return default
-
-    def require(self, key: str) -> str:
-        val = self.get(key)
-        if val is None or not str(val).strip():
-            raise ValueError(
-                f"Missing required config: {key} "
-                f"(check config/env.{self._env or 'base'} "
-                f"or set BBIT_{key})"
-            )
-        return val
-
-    @property
-    def env(self) -> str | None:
-        return self._env
+    # -- credenciales ----------------------------------------------------------
 
     @property
     def bitbucket_url(self) -> str:
-        return (self.get("BITBUCKET_URL") or "").rstrip("/")
+        return (self._creds["bitbucket"].get("url") or "https://bitbucket.org").rstrip("/")
 
     @property
     def bitbucket_token(self) -> str:
-        return self.get("BITBUCKET_TOKEN") or ""
+        return self._creds["bitbucket"].get("token") or ""
 
     @property
     def bitbucket_username(self) -> str:
-        return self.get("BITBUCKET_USERNAME") or ""
+        return self._creds["bitbucket"].get("username") or ""
 
     @property
     def workspace(self) -> str:
-        return (self.get("BITBUCKET_WORKSPACE") or "").strip()
-
-    @property
-    def repos(self) -> list[str]:
-        raw = self.get("BITBUCKET_REPOS") or ""
-        return [r.strip() for r in raw.split(",") if r.strip()] if raw else []
-
-    @property
-    def project_prefixes(self) -> list[str]:
-        """Prefijos de nombre de repo (workspace). Vacío = todos los repos.
-
-        Limita qué proyectos se escanean: solo los cuyo slug empieza con
-        alguno de estos prefijos. Se aplica en list_repos/repos_with_branch.
-        """
-        raw = self.get("BITBUCKET_PROJECT_PREFIXES") or ""
-        return [p.strip().lower() for p in raw.split(",") if p.strip()] if raw else []
-
-    @property
-    def exclude_repos(self) -> list[str]:
-        """Slugs de repo excluidos (blacklist). Se omiten del descubrimiento.
-        Minúsculas para comparar sin casos.
-        """
-        raw = self.get("BITBUCKET_EXCLUDE_REPOS") or ""
-        return [r.strip().lower() for r in raw.split(",") if r.strip()] if raw else []
-
-    @property
-    def default_branch(self) -> str:
-        return self.get("BITBUCKET_DEFAULT_BRANCH") or "master"
-
-    @property
-    def ssm_prefixes(self) -> list[str]:
-        raw = self.get("SSM_PREFIXES") or "/config,/common"
-        return [p.strip().rstrip("/") for p in raw.split(",") if p.strip()]
+        return (self._creds["bitbucket"].get("workspace") or "").strip()
 
     @property
     def circleci_token(self) -> str:
-        return self.get("CIRCLECI_TOKEN") or ""
+        return self._creds["circle"].get("token") or ""
 
     @property
     def circleci_vcs(self) -> str:
-        return (self.get("CIRCLECI_VCS") or "bb").strip()
+        return (self._creds["circle"].get("vcs") or "bb").strip()
 
     @property
     def circleci_org(self) -> str:
-        return self.get("CIRCLECI_ORG") or self.workspace
+        return self._creds["circle"].get("org") or self.workspace
+
+    # -- settings ----------------------------------------------------------------
+
+    @property
+    def repos(self) -> list[str]:
+        return list(self._settings.get("repos") or [])
+
+    @property
+    def project_prefixes(self) -> list[str]:
+        return [p.strip().lower() for p in (self._settings.get("project_prefixes") or [])]
+
+    @property
+    def exclude_repos(self) -> list[str]:
+        return [r.strip().lower() for r in (self._settings.get("exclude_repos") or [])]
+
+    @property
+    def default_branch(self) -> str:
+        return self._settings.get("default_branch") or "master"
+
+    @property
+    def ssm_prefixes(self) -> list[str]:
+        return [p.strip().rstrip("/") for p in (self._settings.get("ssm_prefixes") or [])]
 
     @property
     def deploy_prefixes(self) -> list[str]:
-        raw = self.get("DEPLOY_PREFIXES") or "uat,stgp,prod"
-        return [p.strip() for p in raw.split(",") if p.strip()]
+        return list(self._settings.get("deploy_prefixes") or [])
 
     @property
     def frontend_root(self) -> Path:
-        return Path(__file__).resolve().parent.parent / "frontend"
+        return _PROJECT_ROOT / "frontend"
 
     @property
     def is_configured(self) -> bool:
         return bool(self.bitbucket_url and self.workspace and self.bitbucket_token)
+
+    # -- persistencia -----------------------------------------------------------
 
     def save_tokens(
         self,
@@ -210,103 +220,47 @@ class Config:
         bitbucket_token: str = "",
         circleci_token: str = "",
         workspace: str = "",
-    ) -> Path:
-        """Persiste tokens (y workspace) en env.base, conservando comentarios y orden.
-
-        Reemplaza el valor de la clave si ya existe; si no, la agrega al final.
+    ) -> int:
+        """Persiste credenciales (BB token + workspace, Circle token) en la fila
+        de conexión. Devuelve el ``is_id`` de la fila; ``-1`` si no hay cambios.
         """
-        path = self._get_config_dir() / "env.base"
-
-        updates: dict[str, str] = {}
+        if not (bitbucket_token or circleci_token):
+            return -1
+        details = deepcopy(self._details)
+        bb = details["credentials"]["bitbucket"]
         if bitbucket_token:
-            updates["BITBUCKET_TOKEN"] = bitbucket_token
-            updates["BITBUCKET_WORKSPACE"] = workspace or self.workspace
+            bb["token"] = bitbucket_token
+            bb["workspace"] = workspace or bb.get("workspace") or ""
         if circleci_token:
-            updates["CIRCLECI_TOKEN"] = circleci_token
-        if not updates:
-            return path
+            details["credentials"]["circle"]["token"] = circleci_token
+        sid = get_cache().save_connection(details)
+        self.reload()
+        return sid
 
-        if path.exists():
-            lines = path.read_text(encoding="utf-8").splitlines()
-        else:
-            lines = ["# Shared defaults - loaded for all environments"]
-
-        out: list[str] = []
-        for line in lines:
-            m = re.match(r"^([A-Z0-9_]+)=", line)
-            if m and m.group(1) in updates:
-                out.append(f"{m.group(1)}={updates.pop(m.group(1))}")
-            else:
-                out.append(line.rstrip("\r"))
-        for key, value in updates.items():
-            out.append(f"{key}={value}")
-
-        with path.open("w", encoding="utf-8", newline="\n") as fh:
-            fh.write("\n".join(out) + "\n")
-        return path
-
-    def remove_credentials(self) -> Path:
-        """Elimina BITBUCKET_TOKEN y CIRCLECI_TOKEN de env.base (conserva lo demás)."""
-        path = self._get_config_dir() / "env.base"
-        if not path.exists():
-            return path
-        remove = {"BITBUCKET_TOKEN", "CIRCLECI_TOKEN"}
-        out = [
-            line.rstrip("\r")
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if not (line.startswith(("BITBUCKET_TOKEN=", "CIRCLECI_TOKEN=")))
-        ]
-        with path.open("w", encoding="utf-8", newline="\n") as fh:
-            fh.write("\n".join(out) + "\n")
-        return path
-
-    def _set_env_lines(
-        self,
-        updates: dict[str, str] | None = None,
-        remove: set[str] | None = None,
-    ) -> Path:
-        """Escribe/elimina claves en env.base conservando comentarios y orden.
-
-        `updates` reemplaza el valor de la clave si existe, si no la agrega al
-        final. `remove` elimina las claves (match por prefijo `KEY=`).
-        """
-        path = self._get_config_dir() / "env.base"
-        exists = path.exists()
-        if not exists and not updates:
-            return path
-        lines = path.read_text(encoding="utf-8").splitlines() if exists else []
-
-        updates = dict(updates or {})
-        remove = remove or set()
-        out: list[str] = []
-        for line in lines:
-            m = re.match(r"^([A-Z0-9_]+)=", line)
-            key = m.group(1) if m else None
-            if key and key in remove:
-                continue
-            if key and key in updates:
-                out.append(f"{key}={updates.pop(key)}")
-            else:
-                out.append(line.rstrip("\r"))
-        for key, value in updates.items():
-            out.append(f"{key}={value}")
-
-        with path.open("w", encoding="utf-8", newline="\n") as fh:
-            fh.write("\n".join(out) + "\n")
-        return path
-
-    def save_filters(self, project_prefixes: str = "", exclude_repos: str = "") -> Path:
-        """Persiste prefijos de proyecto y exclusiones de repos en env.base.
+    def save_filters(self, project_prefixes: str = "", exclude_repos: str = "") -> int:
+        """Persiste prefijos de proyecto y exclusiones de repos en la conexión.
 
         Solo escribe las claves cuyo valor no sea vacío.
         """
-        updates: dict[str, str] = {}
+        details = deepcopy(self._details)
+        settings = details["settings"]
         if project_prefixes:
-            updates["BITBUCKET_PROJECT_PREFIXES"] = project_prefixes
+            settings["project_prefixes"] = _split_commas(project_prefixes)
         if exclude_repos:
-            updates["BITBUCKET_EXCLUDE_REPOS"] = exclude_repos
-        return self._set_env_lines(updates=updates) if updates else self._get_config_dir() / "env.base"
+            settings["exclude_repos"] = _split_commas(exclude_repos)
+        sid = get_cache().save_connection(details)
+        self.reload()
+        return sid
 
-    def clear_filters(self) -> Path:
-        """Limpia BITBUCKET_PROJECT_PREFIXES y BITBUCKET_EXCLUDE_REPOS de env.base."""
-        return self._set_env_lines(remove={"BITBUCKET_PROJECT_PREFIXES", "BITBUCKET_EXCLUDE_REPOS"})
+    def clear_filters(self) -> None:
+        """Limpia prefijos de proyecto y exclusiones en la fila de conexión."""
+        details = deepcopy(self._details)
+        details["settings"]["project_prefixes"] = []
+        details["settings"]["exclude_repos"] = []
+        get_cache().save_connection(details)
+        self.reload()
+
+    def remove_credentials(self) -> None:
+        """Elimina la fila de conexión completa (credenciales + settings)."""
+        get_cache().clear_connection()
+        self.reload()
