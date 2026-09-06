@@ -357,6 +357,21 @@
       <div class="bb-section">
         <div class="bb-section-header">Parámetros SSM — respuesta</div>
         @if (params().length > 0 || removed().length > 0) {
+        <div class="bb-row-top bb-params-filters">
+          <span class="bb-muted">Filtrar por estado:</span>
+          @for (estado of estadoOptions; track estado) {
+          <button class="bb-chip" [class.bb-chip--active]="estadoFilterActive(estado)"
+                  (click)="toggleEstado(estado)">
+            @if (estado === 'solo destino') {
+            Solo destino
+            } @else if (estado === 'reutilizado') {
+            Reutilizado
+            } @else {
+            Nuevo
+            }
+          </button>
+          }
+        </div>
         @if (removed().length > 0) {
         <p class="bb-muted bb-hint bb-params-hint">
           "Solo destino" = existe en '{{ destination }}' pero ya no se referencias en '{{ origin }}'.

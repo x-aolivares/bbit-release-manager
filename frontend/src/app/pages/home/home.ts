@@ -177,6 +177,23 @@ reportOpen = signal(false);
   reportEnv = signal(0);
   reportCopied = signal(false);
 
+  estadoFilter = signal<string[]>([]);
+  readonly estadoOptions = ['nuevo', 'reutilizado', 'solo destino'];
+
+  toggleEstado(estado: string): void {
+    const cur = this.estadoFilter();
+    this.estadoFilter.set(cur.includes(estado) ? cur.filter((e) => e !== estado) : [...cur, estado]);
+  }
+
+  estadoFilterActive(estado: string): boolean {
+    const f = this.estadoFilter();
+    return f.length === 0 || f.includes(estado);
+  }
+
+  filteredParams(): SsmParam[] {
+    return this.params().filter((p) => this.estadoFilterActive(p.tipo));
+  }
+
   // Session history
   sidebarOpen = signal(false);
   currentSessionId = signal<string | null>(null);
@@ -500,13 +517,15 @@ reportOpen = signal(false);
 
   paramRows(): { param: string; estado: string }[] {
     const rows: { param: string; estado: string }[] = [];
-    for (const p of this.params()) {
+    for (const p of this.filteredParams()) {
       if (!this.repoInProjects(p.repos)) continue;
       rows.push({ param: p.param, estado: p.tipo });
     }
     for (const p of this.removed()) {
       if (!this.repoInProjects(p.repos)) continue;
-      rows.push({ param: p.param, estado: 'solo destino' });
+      const estado = 'solo destino';
+      if (!this.estadoFilterActive(estado)) continue;
+      rows.push({ param: p.param, estado });
     }
     return rows.sort((a, b) => a.param.localeCompare(b.param));
   }
@@ -558,7 +577,7 @@ reportOpen = signal(false);
 
   reportText(): string {
     if (this.reportMode === 'params') {
-      return this.params().map((p) => p.param).join('\n');
+      return this.filteredParams().map((p) => p.param).join('\n');
     }
     const repos = [...this.repos()].sort((a, b) => a.slug.localeCompare(b.slug));
     const lines: string[] = [];
