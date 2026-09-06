@@ -577,7 +577,7 @@ reportOpen = signal(false);
 
   reportText(): string {
     if (this.reportMode === 'params') {
-      return this.filteredParams().map((p) => p.param).join('\n');
+      return this.paramRows().map((r) => r.param).join('\n');
     }
     const repos = [...this.repos()].sort((a, b) => a.slug.localeCompare(b.slug));
     const lines: string[] = [];
