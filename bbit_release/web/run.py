@@ -17,7 +17,6 @@ import time
 import webbrowser
 from pathlib import Path
 
-from ..config import Config
 from ..logger import info, success, warn, die
 
 
@@ -59,7 +58,6 @@ def run_dev(
     open_browser: bool = True,
 ) -> None:
     """Interactive dev: Angular HMR + backend auto-reload, both tracked."""
-    cfg = Config()
     frontend = _frontend_root()
 
     if not (frontend / "package.json").exists():

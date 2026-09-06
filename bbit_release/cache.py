@@ -34,6 +34,10 @@ _DEFAULT_DB = _PROJECT_ROOT / "data" / "cache.db"
 _BITBUCKET_BASE = "https://api.bitbucket.org/2.0"
 _CIRCLECI_BASE = "https://circleci.com/api/v2"
 
+# Fila canónica de conexión: credenciales por servicio + settings, sin env.*
+CONN_SOURCE = "config"
+CONN_TARGET = "connection"
+
 # Catálogo inicial de proveedores.
 _SEED_PROVIDERS = {
     "Bitbucket": {"base_url": _BITBUCKET_BASE},
@@ -125,6 +129,10 @@ class ReleaseCache:
             self._create_tables()
             self._drop_legacy_tables()
             self._seed_catalog()
+
+    @property
+    def db_path(self) -> Path:
+        return self._db_path
 
     # -- schema ---------------------------------------------------------------
 
@@ -336,6 +344,57 @@ class ReleaseCache:
             return row[0]
         return self.create_session(source, target, details)
 
+    def save_connection(self, details: dict) -> int:
+        """Upsert de la fila de conexión (config/connection).
+
+        Guarda el JSON canónico con las credenciales por servicio (bitbucket,
+        circle, aws) y los settings. Conserva ``is_created_at`` de la fila
+        previa; actualiza solo su contenido e ``is_updated_at``.
+        """
+        now = time.time()
+        fp = self._session_fingerprint(config=details)
+        row = self._fetchone(
+            "SELECT is_id FROM init_sesion "
+            "WHERE is_source = ? AND is_target = ?",
+            (CONN_SOURCE, CONN_TARGET),
+        )
+        if row is not None:
+            self._execute(
+                "UPDATE init_sesion SET is_details = ?, is_updated_at = ? "
+                "WHERE is_id = ?",
+                (fp, now, row[0]),
+            )
+            return row[0]
+        return self._insert(
+            "INSERT INTO init_sesion "
+            "(is_source, is_target, is_details, is_created_at, is_updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (CONN_SOURCE, CONN_TARGET, fp, now, now),
+        )
+
+    def get_connection(self) -> dict | None:
+        """Devuelve el JSON canónico de la fila de conexión (o ``None``)."""
+        row = self._fetchone(
+            "SELECT is_details FROM init_sesion "
+            "WHERE is_source = ? AND is_target = ?",
+            (CONN_SOURCE, CONN_TARGET),
+        )
+        if row is None:
+            return None
+        try:
+            parsed = json.loads(row[0])
+        except (ValueError, TypeError):
+            return None
+        details = parsed.get("config") if isinstance(parsed, dict) else None
+        return details if isinstance(details, dict) else None
+
+    def clear_connection(self) -> None:
+        """Elimina la fila de conexión (no toca las sesiones de consulta)."""
+        self._execute(
+            "DELETE FROM init_sesion WHERE is_source = ? AND is_target = ?",
+            (CONN_SOURCE, CONN_TARGET),
+        )
+
     def get_session(self, session_id: int) -> dict | None:
         row = self._fetchone(
             "SELECT is_id, is_source, is_target, is_details, is_created_at, is_updated_at "
@@ -473,7 +532,14 @@ class ReleaseCache:
             for table in ("request", "init_sesion"):
                 cur = self._conn.cursor()
                 try:
-                    cur.execute(f"DELETE FROM {table}")
+                    if table == "init_sesion":
+                        cur.execute(
+                            "DELETE FROM init_sesion "
+                            "WHERE NOT (is_source = ? AND is_target = ?)",
+                            (CONN_SOURCE, CONN_TARGET),
+                        )
+                    else:
+                        cur.execute(f"DELETE FROM {table}")
                     counts[table] = cur.rowcount
                 finally:
                     cur.close()
@@ -492,7 +558,14 @@ class ReleaseCache:
             for table in ("request", "init_sesion", "service_call"):
                 cur = self._conn.cursor()
                 try:
-                    cur.execute(f"DELETE FROM {table}")
+                    if table == "init_sesion":
+                        cur.execute(
+                            "DELETE FROM init_sesion "
+                            "WHERE NOT (is_source = ? AND is_target = ?)",
+                            (CONN_SOURCE, CONN_TARGET),
+                        )
+                    else:
+                        cur.execute(f"DELETE FROM {table}")
                     counts[table] = cur.rowcount
                 finally:
                     cur.close()

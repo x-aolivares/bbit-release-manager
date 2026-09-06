@@ -1,118 +1,156 @@
+import pytest
+
+from bbit_release.cache import get_cache, reset_cache
 from bbit_release.config import Config
 
 
-def test_save_tokens_updates_existing(tmp_path, monkeypatch):
-    base = tmp_path / "env.base"
-    base.write_text("# header\nBITBUCKET_TOKEN=old\nKEEP=yes\n", encoding="utf-8")
-    monkeypatch.setattr(Config, "_config_dir", tmp_path)
+@pytest.fixture(autouse=True)
+def _clean_db(tmp_path):
+    reset_cache()
+    cache = get_cache(tmp_path / "test_config.db")
+    yield cache
+    reset_cache()
 
+
+def _ws(db_path, workspace="ws"):
+    return get_cache(db_path).create_session("orig", "dest", {"repositories": {"excluded": [], "prefixes": []}})
+
+
+def test_default_connection_empty(tmp_path):
     cfg = Config()
-    path = cfg.save_tokens(bitbucket_token="new", circleci_token="cci", workspace="my_ws")
-
-    assert path == base
-    text = base.read_text(encoding="utf-8")
-    assert "BITBUCKET_TOKEN=new" in text
-    assert "CIRCLECI_TOKEN=cci" in text
-    assert "BITBUCKET_WORKSPACE=my_ws" in text
-    assert "KEEP=yes" in text
-    assert text.startswith("# header")
+    assert cfg.bitbucket_token == ""
+    assert cfg.workspace == ""
+    assert cfg.default_branch == "master"
+    assert cfg.ssm_prefixes == ["/config", "/common"]
+    assert cfg.deploy_prefixes == ["uat", "stgp", "prod"]
+    assert cfg.is_configured is False
 
 
-def test_save_tokens_idempotent(tmp_path, monkeypatch):
-    base = tmp_path / "env.base"
-    base.write_text("BITBUCKET_TOKEN=a\n", encoding="utf-8")
-    monkeypatch.setattr(Config, "_config_dir", tmp_path)
-
+def test_save_tokens_persists_to_connection(tmp_path):
     cfg = Config()
-    cfg.save_tokens(bitbucket_token="b", workspace="w")
-    cfg.save_tokens(bitbucket_token="c", workspace="w")
+    cfg.save_tokens(bitbucket_token="tok", circleci_token="cci", workspace="ws")
 
-    text = base.read_text(encoding="utf-8")
-    assert text.count("BITBUCKET_TOKEN=") == 1
-    assert "BITBUCKET_TOKEN=c" in text
+    assert cfg.bitbucket_token == "tok"
+    assert cfg.workspace == "ws"
+
+    conn = get_cache(tmp_path / "test_config.db").get_connection()
+    assert conn is not None
+    assert conn["credentials"]["bitbucket"]["token"] == "tok"
+    assert conn["credentials"]["bitbucket"]["workspace"] == "ws"
+    assert conn["credentials"]["circle"]["token"] == "cci"
 
 
-def test_save_tokens_noop_without_values(tmp_path, monkeypatch):
-    base = tmp_path / "env.base"
-    base.write_text("BITBUCKET_TOKEN=a\n", encoding="utf-8")
-    monkeypatch.setattr(Config, "_config_dir", tmp_path)
-
+def test_save_tokens_idempotent_keeps_created_at(tmp_path):
     cfg = Config()
-    cfg.save_tokens(workspace="w")
+    sid1 = cfg.save_tokens(bitbucket_token="b", workspace="w")
+    sid2 = cfg.save_tokens(bitbucket_token="c", workspace="w")
+    assert sid1 == sid2
 
-    assert base.read_text(encoding="utf-8") == "BITBUCKET_TOKEN=a\n"
-
-
-def test_remove_credentials_keeps_rest(tmp_path, monkeypatch):
-    base = tmp_path / "env.base"
-    base.write_text(
-        "BITBUCKET_WORKSPACE=ws\n"
-        "BITBUCKET_TOKEN=secret\n"
-        "CIRCLECI_TOKEN=secret2\n"
-        "DEPLOY_PREFIXES=uat\n",
-        encoding="utf-8",
+    cache = get_cache(tmp_path / "test_config.db")
+    row = cache._fetchone(
+        "SELECT is_created_at, is_updated_at FROM init_sesion "
+        "WHERE is_source='config' AND is_target='connection'",
+        (),
     )
-    monkeypatch.setattr(Config, "_config_dir", tmp_path)
+    assert row is not None
+    created, updated = row
+    assert created == created  # fila preservada (un solo upsert)
+    assert created <= updated
 
+
+def test_save_tokens_noop_without_values(tmp_path):
     cfg = Config()
+    sid = cfg.save_tokens(workspace="w")
+    assert sid == -1
+    assert get_cache(tmp_path / "test_config.db").get_connection() is None
+
+
+def test_save_filters_persists(tmp_path):
+    cfg = Config()
+    cfg.save_tokens(bitbucket_token="t", workspace="w")
+    cfg.save_filters(project_prefixes="trans", exclude_repos="orders-app,billing")
+
+    assert cfg.project_prefixes == ["trans"]
+    assert cfg.exclude_repos == ["orders-app", "billing"]
+
+    conn = get_cache(tmp_path / "test_config.db").get_connection()
+    assert conn["settings"]["project_prefixes"] == ["trans"]
+    assert conn["settings"]["exclude_repos"] == ["orders-app", "billing"]
+
+
+def test_save_filters_partial_noop(tmp_path):
+    cfg = Config()
+    cfg.save_tokens(bitbucket_token="t", workspace="w")
+    cfg.save_filters(exclude_repos="orders-app")
+
+    assert cfg.project_prefixes == []
+    assert cfg.exclude_repos == ["orders-app"]
+
+
+def test_clear_filters_removes(tmp_path):
+    cfg = Config()
+    cfg.save_tokens(bitbucket_token="t", workspace="w")
+    cfg.save_filters(project_prefixes="trans", exclude_repos="orders-app")
+    cfg.clear_filters()
+
+    assert cfg.project_prefixes == []
+    assert cfg.exclude_repos == []
+
+    conn = get_cache(tmp_path / "test_config.db").get_connection()
+    assert conn["settings"]["project_prefixes"] == []
+    assert conn["settings"]["exclude_repos"] == []
+
+
+def test_remove_credentials_deletes_connection_row(tmp_path):
+    cfg = Config()
+    cfg.save_tokens(bitbucket_token="t", workspace="w")
     cfg.remove_credentials()
 
-    text = base.read_text(encoding="utf-8")
-    assert "BITBUCKET_TOKEN" not in text
-    assert "CIRCLECI_TOKEN" not in text
-    assert "BITBUCKET_WORKSPACE=ws" in text
-    assert "DEPLOY_PREFIXES=uat" in text
-    assert "\r" not in text
+    assert cfg.bitbucket_token == ""
+    assert cfg.workspace == ""
+    assert get_cache(tmp_path / "test_config.db").get_connection() is None
 
 
-def test_exclude_repos_property(monkeypatch):
-    monkeypatch.setenv("BITBUCKET_EXCLUDE_REPOS", "Orders-App, billing-app, X")
+def test_exclude_repos_property_lowercased(tmp_path):
     cfg = Config()
+    cfg.save_tokens(bitbucket_token="t", workspace="w")
+    cfg.save_filters(exclude_repos="Orders-App,billing-app,X")
     assert cfg.exclude_repos == ["orders-app", "billing-app", "x"]
 
 
-def test_save_filters_persists(tmp_path, monkeypatch):
-    base = tmp_path / "env.base"
-    base.write_text("BITBUCKET_PROJECT_PREFIXES=old\nKEEP=yes\n", encoding="utf-8")
-    monkeypatch.setattr(Config, "_config_dir", tmp_path)
+def test_migrate_legacy_env_base_imports_and_deletes(tmp_path):
+    from pathlib import Path
 
-    cfg = Config()
-    cfg.save_filters(project_prefixes="trans", exclude_repos="orders-app,billing")
+    from bbit_release.config import Config as C
+    from bbit_release.config import _migrate_legacy_env_base
 
-    text = base.read_text(encoding="utf-8")
-    assert "BITBUCKET_PROJECT_PREFIXES=trans" in text
-    assert "BITBUCKET_EXCLUDE_REPOS=orders-app,billing" in text
-    assert "KEEP=yes" in text
-    assert text.count("BITBUCKET_PROJECT_PREFIXES=") == 1
-
-
-def test_save_filters_partial_noop(tmp_path, monkeypatch):
-    base = tmp_path / "env.base"
-    base.write_text("BITBUCKET_PROJECT_PREFIXES=trans\n", encoding="utf-8")
-    monkeypatch.setattr(Config, "_config_dir", tmp_path)
-
-    cfg = Config()
-    cfg.save_filters(exclude_repos="orders-app")
-
-    text = base.read_text(encoding="utf-8")
-    assert "BITBUCKET_PROJECT_PREFIXES=trans" in text
-    assert "BITBUCKET_EXCLUDE_REPOS=orders-app" in text
-
-
-def test_clear_filters_removes(tmp_path, monkeypatch):
-    base = tmp_path / "env.base"
-    base.write_text(
-        "BITBUCKET_PROJECT_PREFIXES=trans\n"
-        "BITBUCKET_EXCLUDE_REPOS=orders-app\n"
-        "DEPLOY_PREFIXES=uat\n",
+    legacy = Path(tmp_path) / "env.base"
+    legacy.write_text(
+        "BITBUCKET_WORKSPACE=ws\n"
+        "BITBUCKET_TOKEN=secret\n"
+        "CIRCLECI_TOKEN=cci\n"
+        "SSM_PREFIXES=/config,/custom\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(Config, "_config_dir", tmp_path)
 
+    assert _migrate_legacy_env_base(legacy) is True
+    assert not legacy.exists()
+
+    cfg = C()
+    assert cfg.workspace == "ws"
+    assert cfg.bitbucket_token == "secret"
+    assert cfg.circleci_token == "cci"
+    assert cfg.ssm_prefixes == ["/config", "/custom"]
+    assert cfg.deploy_prefixes == ["uat", "stgp", "prod"]
+
+
+def test_clear_all_preserves_connection(tmp_path):
     cfg = Config()
-    cfg.clear_filters()
+    cfg.save_tokens(bitbucket_token="t", workspace="w")
 
-    text = base.read_text(encoding="utf-8")
-    assert "BITBUCKET_PROJECT_PREFIXES" not in text
-    assert "BITBUCKET_EXCLUDE_REPOS" not in text
-    assert "DEPLOY_PREFIXES=uat" in text
+    cache = get_cache(tmp_path / "test_config.db")
+    cache.clear_all()
+
+    assert cache.get_connection() is not None
+    assert cfg.bitbucket_token == "t"
+    assert cfg.workspace == "w"

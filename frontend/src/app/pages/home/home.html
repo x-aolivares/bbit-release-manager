@@ -98,7 +98,7 @@
             }
           </button>
           <p class="bb-auth-hint">
-            Los tokens se guardan en <code class="bb-auth-code">config/env.base</code> y se reutilizan hasta que vencen.
+            Los tokens se guardan en la <code class="bb-auth-code">fila de conexión</code> (data/cache.db) y se reutilizan hasta que vencen.
           </p>
         </div>
       </div>
@@ -106,7 +106,7 @@
       <div class="bb-auth-card">
         <p class="bb-auth-title">Ya hay credenciales guardadas</p>
         <p class="bb-auth-text">
-          Las credenciales de <code class="bb-auth-code">config/env.base</code> siguen funcionando.
+          Las credenciales de la <code class="bb-auth-code">fila de conexión</code> (data/cache.db) siguen funcionando.
         </p>
         <div class="bb-auth-actions">
           <button class="bb-btn-primary" (click)="reuseSession()" [disabled]="loading()">

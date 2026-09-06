@@ -171,6 +171,7 @@ def _circleci() -> CircleCiClient | None:
 
 @router.get("/session")
 def session_status():
+    cfg = Config()
     sid = active_session_id()
     data = get_session(sid) if sid else None
     if data:
@@ -179,9 +180,8 @@ def session_status():
             "identity": data.identity,
             "workspace": data.workspace,
             "repo_count": data.repo_count,
-            "stored": bool(Config().bitbucket_token),
+            "stored": bool(cfg.bitbucket_token),
         }
-    cfg = Config()
     if cfg.bitbucket_token and cfg.workspace:
         return {"active": False, "stored": True, "needs_tokens": False}
     return {"active": False, "stored": False, "needs_tokens": True}
@@ -195,7 +195,10 @@ def session_reuse():
     tok = cfg.bitbucket_token
     ws = cfg.workspace
     if not (tok and ws):
-        return JSONResponse({"ok": False, "error": "No hay credenciales guardadas."}, status_code=400)
+        return JSONResponse(
+            {"ok": False, "error": "No hay credenciales en la conexión. Conectate o ejecutá 'bbit login'."},
+            status_code=400,
+        )
     try:
         data = create_session(ws, tok)
     except (bb.BitbucketAuthError, bb.BitbucketError):
@@ -252,7 +255,7 @@ def api_session(body: dict):
         )
     except OSError as exc:
         return JSONResponse(
-            {"ok": False, "error": f"Sesión OK pero no se pudo guardar el token en env.base: {exc}"},
+            {"ok": False, "error": f"Sesión OK pero no se pudo guardar la conexión en la DB: {exc}"},
             status_code=500,
         )
 
