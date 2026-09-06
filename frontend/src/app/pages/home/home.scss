@@ -480,6 +480,26 @@
   max-width: 420px;
 }
 
+.bb-modal--loading {
+  max-width: 260px;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 26px 22px;
+  border: none;
+}
+
+.bb-spinner--lg {
+  width: 40px;
+  height: 40px;
+}
+
+.bb-loading-text {
+  font-size: var(--bb-font-md);
+  font-weight: 600;
+  color: var(--bb-text);
+}
+
 .bb-confirm-text {
   font-size: var(--bb-font-base);
   color: var(--bb-text-secondary);

@@ -438,6 +438,14 @@
       </div>
     </div>
     }
+    @if (reposLoading() || paramsLoading()) {
+    <div class="bb-modal-mask">
+      <div class="bb-modal bb-modal--loading" (click)="$event.stopPropagation()">
+        <ion-spinner name="dots" class="bb-spinner bb-spinner--lg"></ion-spinner>
+        <div class="bb-loading-text">Procesando…</div>
+      </div>
+    </div>
+    }
 
   </div>
 </div>
