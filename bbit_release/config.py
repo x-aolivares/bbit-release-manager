@@ -3,12 +3,36 @@ from __future__ import annotations
 import os
 import re
 import sys
-from copy import deepcopy
+import time
 from pathlib import Path
 
-from .cache import get_cache
+from .cache import DEFAULT_CLIENT_ALIAS, get_cache
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_CLIENT_MARKER = _PROJECT_ROOT / "data" / "client_id"
+_DEFAULT_CLIENT_MARKER = _CLIENT_MARKER
+
+
+def _marker_path() -> Path:
+    """Ruta del marker del cliente activo (sobrescribible por env en tests)."""
+    override = os.environ.get("BBIT_CLIENT_MARKER")
+    if override:
+        return Path(override)
+    return _CLIENT_MARKER
+
+# Variables que determinan si un servicio tiene credencial almacenada.
+_SECRET_KEYS = {
+    "Bitbucket": ("BITBUCKET_TOKEN",),
+    "CircleCi": ("CIRCLECI_TOKEN",),
+    "AWS": ("AWS_PROFILE",),
+}
+
+# Claves canónicas de env vars por proveedor (mismas que antes en env.*).
+_ENV_KEYS = {
+    "Bitbucket": {"url": "BITBUCKET_URL", "workspace": "BITBUCKET_WORKSPACE", "username": "BITBUCKET_USERNAME", "token": "BITBUCKET_TOKEN"},
+    "CircleCi": {"token": "CIRCLECI_TOKEN", "vcs": "CIRCLECI_VCS", "org": "CIRCLECI_ORG"},
+    "AWS": {"profile": "AWS_PROFILE", "region": "AWS_REGION"},
+}
 
 
 def win_to_posix(path: str) -> str:
@@ -27,33 +51,16 @@ def posix_to_win(path: str) -> str:
     return path
 
 
-def _default_details() -> dict:
-    """Config canónica por defecto: credenciales por servicio + settings."""
+def _default_settings() -> dict:
+    """Settings por defecto (se guardan en la fila config/connection)."""
     return {
-        "bypass_cache": False,
-        "credentials": {
-            "bitbucket": {
-                "url": "https://bitbucket.org",
-                "workspace": "",
-                "username": "",
-                "token": "",
-            },
-            "circle": {"token": "", "vcs": "bb", "org": ""},
-            # Reservado para BBIT-1 (sesión SSO: profile/region/... de AWS).
-            "aws": {},
-        },
-        "settings": {
-            "repos": [],
-            "project_prefixes": [],
-            "exclude_repos": [],
-            "default_branch": "master",
-            "ssm_prefixes": ["/config", "/common"],
-            "deploy_prefixes": ["uat", "stgp", "prod"],
-        },
+        "repos": [],
+        "project_prefixes": [],
+        "exclude_repos": [],
+        "default_branch": "master",
+        "ssm_prefixes": ["/config", "/common"],
+        "deploy_prefixes": ["uat", "stgp", "prod"],
     }
-
-
-_legacy_migration_done = False
 
 
 def _split_commas(raw: str) -> list[str]:
@@ -65,13 +72,46 @@ def _is_production_db() -> bool:
     return get_cache().db_path == _PROJECT_ROOT / "data" / "cache.db"
 
 
+def _read_client_id() -> str | None:
+    override = os.environ.get("BBIT_CLIENT_ID")
+    if override:
+        return override
+    try:
+        return _marker_path().read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def _write_client_id(c_id: str) -> None:
+    try:
+        path = _marker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(c_id, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _resolve_client_id() -> str:
+    """Cliente actual: env override > marker local > cliente default."""
+    cache = get_cache()
+    cid = _read_client_id()
+    if cid and cache.get_client(cid):
+        return cid
+    client = cache.get_or_create_client(DEFAULT_CLIENT_ALIAS)
+    _write_client_id(client["id"])
+    return client["id"]
+
+
+_legacy_migration_done = False
+_connection_migration_done = False
+
+
 def _migrate_legacy_env_base(path: Path | None = None) -> bool:
-    """One-shot: importa ``config/env.base`` histórico a la fila de conexión y
-    elimina el archivo.
+    """One-shot: importa ``config/env.base`` histórico a las tablas nuevas
+    (client + service_authentication + settings) y elimina el archivo.
 
     Solo corre sobre la base por defecto (data/cache.db); con una DB temporal
-    (tests) no toca archivos reales. Idempotente: si ya existe la fila de
-    conexión, solo se borra el archivo legacy.
+    (tests) no toca archivos reales. Idempotente.
     """
     global _legacy_migration_done
     if _legacy_migration_done:
@@ -85,29 +125,46 @@ def _migrate_legacy_env_base(path: Path | None = None) -> bool:
     from dotenv import dotenv_values
 
     values = dotenv_values(legacy) or {}
-
     cache = get_cache()
-    if cache.get_connection() is None:
-        details = _default_details()
-        bb = details["credentials"]["bitbucket"]
-        circle = details["credentials"]["circle"]
-        settings = details["settings"]
-        url = (values.get("BITBUCKET_URL") or "").strip()
-        if url:
-            bb["url"] = url
-        bb["workspace"] = (values.get("BITBUCKET_WORKSPACE") or "").strip()
-        bb["username"] = values.get("BITBUCKET_USERNAME") or ""
-        bb["token"] = values.get("BITBUCKET_TOKEN") or ""
-        circle["token"] = values.get("CIRCLECI_TOKEN") or ""
-        circle["vcs"] = (values.get("CIRCLECI_VCS") or "").strip() or "bb"
-        circle["org"] = (values.get("CIRCLECI_ORG") or "").strip()
+    client = cache.get_or_create_client(DEFAULT_CLIENT_ALIAS)
+
+    bb_env = _compact_env({
+        "BITBUCKET_URL": (values.get("BITBUCKET_URL") or "").strip(),
+        "BITBUCKET_WORKSPACE": (values.get("BITBUCKET_WORKSPACE") or "").strip(),
+        "BITBUCKET_USERNAME": values.get("BITBUCKET_USERNAME") or "",
+        "BITBUCKET_TOKEN": values.get("BITBUCKET_TOKEN") or "",
+    })
+    if bb_env:
+        cache.save_authentication(client["id"], "Bitbucket", bb_env)
+
+    ci_env = _compact_env({
+        "CIRCLECI_TOKEN": values.get("CIRCLECI_TOKEN") or "",
+        "CIRCLECI_VCS": (values.get("CIRCLECI_VCS") or "").strip() or "bb",
+        "CIRCLECI_ORG": (values.get("CIRCLECI_ORG") or "").strip(),
+    })
+    if ci_env:
+        cache.save_authentication(client["id"], "CircleCi", ci_env)
+
+    settings = _default_settings()
+    if values.get("BITBUCKET_REPOS"):
         settings["repos"] = _split_commas(values.get("BITBUCKET_REPOS") or "")
+    if values.get("BITBUCKET_PROJECT_PREFIXES"):
         settings["project_prefixes"] = _split_commas(values.get("BITBUCKET_PROJECT_PREFIXES") or "")
+    if values.get("BITBUCKET_EXCLUDE_REPOS"):
         settings["exclude_repos"] = _split_commas(values.get("BITBUCKET_EXCLUDE_REPOS") or "")
-        settings["default_branch"] = (values.get("BITBUCKET_DEFAULT_BRANCH") or "").strip() or "master"
-        settings["ssm_prefixes"] = _split_commas(values.get("SSM_PREFIXES") or "/config,/common")
-        settings["deploy_prefixes"] = _split_commas(values.get("DEPLOY_PREFIXES") or "uat,stgp,prod")
-        cache.save_connection(details)
+    if values.get("BITBUCKET_DEFAULT_BRANCH"):
+        settings["default_branch"] = (values.get("BITBUCKET_DEFAULT_BRANCH") or "").strip()
+    if values.get("SSM_PREFIXES"):
+        settings["ssm_prefixes"] = _split_commas(values.get("SSM_PREFIXES") or "")
+    if values.get("DEPLOY_PREFIXES"):
+        settings["deploy_prefixes"] = _split_commas(values.get("DEPLOY_PREFIXES") or "")
+    current = cache.get_connection() or {"bypass_cache": False, "settings": {}}
+    current_settings = dict(current.get("settings") or {})
+    current_settings.update(settings)
+    cache.save_connection({"bypass_cache": bool(current.get("bypass_cache", False)), "settings": current_settings})
+
+    if not _read_client_id():
+        _write_client_id(client["id"])
     try:
         legacy.unlink()
     except OSError:
@@ -115,68 +172,193 @@ def _migrate_legacy_env_base(path: Path | None = None) -> bool:
     return True
 
 
-class Config:
-    """Configuración y credenciales desde la fila de conexión en SQLite.
+def _migrate_connection_credentials() -> bool:
+    """One-shot: divide la fila ``config/connection`` que quedó con credenciales
+    (BBIT-3) en ``service_authentication`` por proveedor; la fila conserva solo
+    settings. Idempotente.
+    """
+    global _connection_migration_done
+    if _connection_migration_done:
+        return False
+    _connection_migration_done = True
 
-    Reemplaza los archivos ``config/env.*``: las credenciales por servicio
-    (bitbucket, circle, aws) y los settings viven en el JSON ``is_details`` de
-    la fila ``config/connection`` de ``init_sesion`` (data/cache.db).
+    cache = get_cache()
+    conn = cache.get_connection()
+    if not conn:
+        return False
+    creds = conn.get("credentials") or {}
+    bb = creds.get("bitbucket") or {}
+    ci = creds.get("circle") or {}
+    aws = creds.get("aws") or {}
+    if not (bb or ci or aws):
+        return False
+
+    client = cache.get_or_create_client(DEFAULT_CLIENT_ALIAS)
+
+    bb_env = _compact_env({
+        "BITBUCKET_URL": bb.get("url") or "",
+        "BITBUCKET_WORKSPACE": bb.get("workspace") or "",
+        "BITBUCKET_USERNAME": bb.get("username") or "",
+        "BITBUCKET_TOKEN": bb.get("token") or "",
+    })
+    if bb_env:
+        cache.save_authentication(client["id"], "Bitbucket", bb_env)
+
+    ci_env = _compact_env({
+        "CIRCLECI_TOKEN": ci.get("token") or "",
+        "CIRCLECI_VCS": ci.get("vcs") or "",
+        "CIRCLECI_ORG": ci.get("org") or "",
+    })
+    if ci_env:
+        cache.save_authentication(client["id"], "CircleCi", ci_env)
+
+    aws_env = _compact_env({
+        "AWS_PROFILE": (aws.get("profile") if isinstance(aws, dict) else "") or "",
+        "AWS_REGION": (aws.get("region") if isinstance(aws, dict) else "") or "",
+    })
+    if aws_env:
+        cache.save_authentication(client["id"], "AWS", aws_env)
+
+    cache.save_connection({
+        "bypass_cache": bool(conn.get("bypass_cache", False)),
+        "settings": (conn.get("settings") or {}).copy(),
+    })
+    if not _read_client_id():
+        _write_client_id(client["id"])
+    return True
+
+
+def _compact_env(env: dict) -> dict:
+    return {k: v for k, v in env.items() if v is not None and str(v) != ""}
+
+
+class Config:
+    """Configuración y credenciales por cliente desde SQLite.
+
+    - Credenciales por (cliente, proveedor) en ``service_authentication``
+      (env vars en ``sa_details.env``), con ``expires_at`` opcional.
+    - Settings (filtros, prefijos, rama base) en la fila ``config/connection``
+      de ``init_sesion``.
+    - Cliente actual resuelto por marker local (``data/client_id``) o env
+      ``BBIT_CLIENT_ID``.
     """
 
     def __init__(self):
         if _is_production_db():
             _migrate_legacy_env_base()
+        _migrate_connection_credentials()
         self.reload()
 
     @classmethod
     def reset(cls):
-        """Limpia el flag de migración one-shot (para tests)."""
-        global _legacy_migration_done
+        """Limpia flags de migración y marker local (para tests)."""
+        global _legacy_migration_done, _connection_migration_done
         _legacy_migration_done = False
+        _connection_migration_done = False
+        try:
+            _marker_path().unlink()
+        except OSError:
+            pass
 
     def reload(self) -> "Config":
-        """Recarga desde la fila de conexión (tras un save/clear)."""
-        details = _default_details()
-        conn = get_cache().get_connection()
-        if conn:
-            if isinstance(conn.get("credentials"), dict):
-                details["credentials"] = {**details["credentials"], **conn["credentials"]}
-            if isinstance(conn.get("settings"), dict):
-                details["settings"] = {**details["settings"], **conn["settings"]}
-        self._details = details
-        self._creds = details["credentials"]
-        self._settings = details["settings"]
+        self._c_id = _resolve_client_id()
+        cache = get_cache()
+
+        settings = _default_settings()
+        conn = cache.get_connection()
+        if conn and isinstance(conn.get("settings"), dict):
+            settings = {**settings, **conn["settings"]}
+        self._settings = settings
+
+        self._auth = {}
+        for key, provider in (("bitbucket", "Bitbucket"), ("circleci", "CircleCi"), ("aws", "AWS")):
+            auth = cache.get_authentication(self._c_id, provider) or {}
+            self._auth[key] = auth
+        self._bb = self._auth["bitbucket"].get("env", {})
+        self._ci = self._auth["circleci"].get("env", {})
+        self._aws = self._auth["aws"].get("env", {})
         return self
 
-    # -- credenciales ----------------------------------------------------------
+    # -- cliente ----------------------------------------------------------------
+
+    @property
+    def client_id(self) -> str:
+        return self._c_id
+
+    @property
+    def client_alias(self) -> str:
+        client = get_cache().get_client(self._c_id)
+        return client["alias"] if client else ""
+
+    def set_client_alias(self, alias: str) -> "Config":
+        """Cambia/crea el cliente activo por alias y lo vuelve el default local."""
+        client = get_cache().get_or_create_client(alias or DEFAULT_CLIENT_ALIAS)
+        _write_client_id(client["id"])
+        return self.reload()
+
+    # -- credenciales -----------------------------------------------------------
 
     @property
     def bitbucket_url(self) -> str:
-        return (self._creds["bitbucket"].get("url") or "https://bitbucket.org").rstrip("/")
+        return (self._bb.get("BITBUCKET_URL") or "https://bitbucket.org").rstrip("/")
 
     @property
     def bitbucket_token(self) -> str:
-        return self._creds["bitbucket"].get("token") or ""
+        return self._bb.get("BITBUCKET_TOKEN") or ""
 
     @property
     def bitbucket_username(self) -> str:
-        return self._creds["bitbucket"].get("username") or ""
+        return self._bb.get("BITBUCKET_USERNAME") or ""
 
     @property
     def workspace(self) -> str:
-        return (self._creds["bitbucket"].get("workspace") or "").strip()
+        return (self._bb.get("BITBUCKET_WORKSPACE") or "").strip()
 
     @property
     def circleci_token(self) -> str:
-        return self._creds["circle"].get("token") or ""
+        return self._ci.get("CIRCLECI_TOKEN") or ""
 
     @property
     def circleci_vcs(self) -> str:
-        return (self._creds["circle"].get("vcs") or "bb").strip()
+        return (self._ci.get("CIRCLECI_VCS") or "bb").strip()
 
     @property
     def circleci_org(self) -> str:
-        return self._creds["circle"].get("org") or self.workspace
+        return self._ci.get("CIRCLECI_ORG") or self.workspace
+
+    @property
+    def aws_profile(self) -> str:
+        return self._aws.get("AWS_PROFILE") or ""
+
+    @property
+    def aws_region(self) -> str:
+        return self._aws.get("AWS_REGION") or ""
+
+    def stored_services(self) -> dict:
+        """Credenciales no vacías por proveedor: {provider: {env, expires_at}}."""
+        out = {}
+        for key, provider_name in (("bitbucket", "Bitbucket"), ("circleci", "CircleCi"), ("aws", "AWS")):
+            env = self._auth[key].get("env", {})
+            secret_keys = _SECRET_KEYS[provider_name]
+            if any(env.get(k) for k in secret_keys):
+                out[provider_name] = self._auth[key]
+        return out
+
+    def service_states(self) -> dict:
+        """Estado por proveedor para la UI (stored/expires/warning)."""
+        out = {}
+        for key, provider_name in (("bitbucket", "Bitbucket"), ("circleci", "CircleCi"), ("aws", "AWS")):
+            env = self._auth[key].get("env", {})
+            exp = self._auth[key].get("expires_at")
+            has = any(env.get(k) for k in _SECRET_KEYS[provider_name])
+            warning = None
+            if exp:
+                if exp < time.time():
+                    warning = "expired"
+                elif exp - time.time() < 7 * 86400:
+                    warning = "expiring"
+            out[key] = {"stored": bool(has), "expires_at": exp, "warning": warning}
+        return out
 
     # -- settings ----------------------------------------------------------------
 
@@ -214,35 +396,64 @@ class Config:
 
     # -- persistencia -----------------------------------------------------------
 
+    def _connection_details(self) -> dict:
+        return {"bypass_cache": False, "settings": dict(self._settings)}
+
+    def save_service(self, provider_name: str, env: dict, expires_at: float | None = None) -> int:
+        """Persiste el bloque env de un proveedor para el cliente actual."""
+        sid = get_cache().save_authentication(self._c_id, provider_name, env, expires_at)
+        self.reload()
+        return sid
+
     def save_tokens(
         self,
         *,
         bitbucket_token: str = "",
-        circleci_token: str = "",
         workspace: str = "",
+        bitbucket_username: str = "",
+        bitbucket_url: str = "",
+        circleci_token: str = "",
+        circleci_vcs: str = "",
+        circleci_org: str = "",
+        aws_profile: str = "",
+        aws_region: str = "",
+        expires_at: float | None = None,
     ) -> int:
-        """Persiste credenciales (BB token + workspace, Circle token) en la fila
-        de conexión. Devuelve el ``is_id`` de la fila; ``-1`` si no hay cambios.
+        """Upsert por proveedor con lo que venga. Devuelve el último sa_id o -1.
+
+        Solo guarda un proveedor si llega (o ya había) su secreto
+        (token/profile): pasar solo workspace no crea una fila de token vacía.
         """
-        if not (bitbucket_token or circleci_token):
-            return -1
-        details = deepcopy(self._details)
-        bb = details["credentials"]["bitbucket"]
-        if bitbucket_token:
-            bb["token"] = bitbucket_token
-            bb["workspace"] = workspace or bb.get("workspace") or ""
-        if circleci_token:
-            details["credentials"]["circle"]["token"] = circleci_token
-        sid = get_cache().save_connection(details)
-        self.reload()
-        return sid
+        cache = get_cache()
+        last = -1
+        if bitbucket_token or self._bb.get("BITBUCKET_TOKEN"):
+            bb_env = _compact_env({
+                "BITBUCKET_URL": bitbucket_url or self._bb.get("BITBUCKET_URL") or "",
+                "BITBUCKET_WORKSPACE": workspace or self._bb.get("BITBUCKET_WORKSPACE") or "",
+                "BITBUCKET_USERNAME": bitbucket_username or self._bb.get("BITBUCKET_USERNAME") or "",
+                "BITBUCKET_TOKEN": bitbucket_token or self._bb.get("BITBUCKET_TOKEN") or "",
+            })
+            last = cache.save_authentication(self._c_id, "Bitbucket", bb_env, expires_at)
+        if circleci_token or self._ci.get("CIRCLECI_TOKEN"):
+            ci_env = _compact_env({
+                "CIRCLECI_TOKEN": circleci_token or self._ci.get("CIRCLECI_TOKEN") or "",
+                "CIRCLECI_VCS": circleci_vcs or self._ci.get("CIRCLECI_VCS") or "bb",
+                "CIRCLECI_ORG": circleci_org or self._ci.get("CIRCLECI_ORG") or "",
+            })
+            last = cache.save_authentication(self._c_id, "CircleCi", ci_env, expires_at)
+        if aws_profile or self._aws.get("AWS_PROFILE"):
+            aws_env = _compact_env({
+                "AWS_PROFILE": aws_profile or self._aws.get("AWS_PROFILE") or "",
+                "AWS_REGION": aws_region or self._aws.get("AWS_REGION") or "",
+            })
+            last = cache.save_authentication(self._c_id, "AWS", aws_env, expires_at)
+        if last != -1:
+            self.reload()
+        return last
 
     def save_filters(self, project_prefixes: str = "", exclude_repos: str = "") -> int:
-        """Persiste prefijos de proyecto y exclusiones de repos en la conexión.
-
-        Solo escribe las claves cuyo valor no sea vacío.
-        """
-        details = deepcopy(self._details)
+        """Persiste prefijos de proyecto y exclusiones de repos (settings)."""
+        details = self._connection_details()
         settings = details["settings"]
         if project_prefixes:
             settings["project_prefixes"] = _split_commas(project_prefixes)
@@ -254,13 +465,13 @@ class Config:
 
     def clear_filters(self) -> None:
         """Limpia prefijos de proyecto y exclusiones en la fila de conexión."""
-        details = deepcopy(self._details)
+        details = self._connection_details()
         details["settings"]["project_prefixes"] = []
         details["settings"]["exclude_repos"] = []
         get_cache().save_connection(details)
         self.reload()
 
     def remove_credentials(self) -> None:
-        """Elimina la fila de conexión completa (credenciales + settings)."""
-        get_cache().clear_connection()
+        """Elimina todas las credenciales del cliente (no toca settings ni la fila client)."""
+        get_cache().clear_authentications(self._c_id)
         self.reload()

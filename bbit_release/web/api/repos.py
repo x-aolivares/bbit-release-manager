@@ -169,22 +169,174 @@ def _circleci() -> CircleCiClient | None:
     )
 
 
+SERVICE_MAP = {
+    "bitbucket": ("Bitbucket", "BITBUCKET_TOKEN"),
+    "circleci": ("CircleCi", "CIRCLECI_TOKEN"),
+    "aws": ("AWS", "AWS_PROFILE"),
+}
+
+
+def _bb_probe(workspace: str, token: str, url: str) -> tuple[bool, str]:
+    from ...bitbucket.client import BitbucketAuthError, BitbucketClient, BitbucketError
+
+    try:
+        with BitbucketClient(workspace, token, url=url) as c:
+            _, identity = c.session()
+    except (BitbucketAuthError, BitbucketError) as exc:
+        return False, str(exc)
+    return True, identity
+
+
+def _ci_probe(token: str, vcs: str, org: str) -> tuple[bool, str]:
+    ci = CircleCiClient(token, vcs=vcs, org=org, recorder=_recorder)
+    try:
+        ci.me()
+    except (CircleCiError, ValueError) as exc:
+        return False, str(exc)
+    finally:
+        ci.close()
+    return True, ""
+
+
+def _aws_probe(profile: str, region: str) -> tuple[bool, str]:
+    from ...aws.client import validate_credentials
+
+    return validate_credentials(profile, region)
+
+
+def _validate_service(service: str, body: dict, cfg: Config) -> tuple[bool, str]:
+    """Valida credenciales de un servicio contra su API. (ok, detalle/error)."""
+    if service == "bitbucket":
+        ws = (body.get("workspace") or "").strip()
+        tok = (body.get("token") or "").strip()
+        if not ws or not tok:
+            return False, "workspace y token son obligatorios"
+        url = (body.get("url") or "").strip() or cfg.bitbucket_url
+        return _bb_probe(ws, tok, url)
+    if service == "circleci":
+        tok = (body.get("token") or "").strip()
+        if not tok:
+            return False, "token es obligatorio"
+        vcs = (body.get("vcs") or "").strip() or "bb"
+        org = (body.get("org") or "").strip() or (body.get("workspace") or "").strip() or cfg.workspace
+        ok, err = _ci_probe(tok, vcs, org)
+        return (ok, err if ok else f"Token de CircleCI inválido o sin acceso: {err}")
+    if service == "aws":
+        profile = (body.get("profile") or "").strip()
+        region = (body.get("region") or "").strip() or "us-east-1"
+        if not profile:
+            return False, "profile es obligatorio"
+        return _aws_probe(profile, region)
+    raise ValueError(f"Servicio desconocido: {service}")
+
+
+def _env_for(cfg: Config, service: str, body: dict) -> dict:
+    """Bloque env canónico de un servicio desde el body (para sa_details)."""
+    from ...config import _compact_env
+
+    if service == "bitbucket":
+        return _compact_env({
+            "BITBUCKET_URL": (body.get("url") or "").strip() or cfg.bitbucket_url,
+            "BITBUCKET_WORKSPACE": (body.get("workspace") or "").strip(),
+            "BITBUCKET_USERNAME": (body.get("username") or "").strip(),
+            "BITBUCKET_TOKEN": (body.get("token") or "").strip(),
+        })
+    if service == "circleci":
+        return _compact_env({
+            "CIRCLECI_TOKEN": (body.get("token") or "").strip(),
+            "CIRCLECI_VCS": (body.get("vcs") or "").strip() or "bb",
+            "CIRCLECI_ORG": (body.get("org") or "").strip() or (body.get("workspace") or "").strip() or cfg.workspace,
+        })
+    if service == "aws":
+        return _compact_env({
+            "AWS_PROFILE": (body.get("profile") or "").strip(),
+            "AWS_REGION": (body.get("region") or "").strip() or "us-east-1",
+        })
+    raise ValueError(f"Servicio desconocido: {service}")
+
+
+@router.get("/client")
+def client_status():
+    """Cliente activo + estado de servicios + settings (para la UI)."""
+    cfg = Config()
+    return {
+        "client": {"alias": cfg.client_alias or "local", "id": cfg.client_id},
+        "services": cfg.service_states(),
+        "settings": {
+            "project_prefixes": cfg.project_prefixes,
+            "exclude_repos": cfg.exclude_repos,
+            "default_branch": cfg.default_branch,
+            "ssm_prefixes": cfg.ssm_prefixes,
+            "deploy_prefixes": cfg.deploy_prefixes,
+        },
+        "configured": cfg.is_configured,
+    }
+
+
+@router.post("/auth/{service}/validate")
+def validate_service_auth(service: str, body: dict):
+    """Valida credenciales de un servicio SIN guardarlas."""
+    if service not in SERVICE_MAP:
+        raise HTTPException(404, f"Servicio desconocido: {service}")
+    try:
+        ok, detail = _validate_service(service, body, Config())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": ok, "service": service, "detail": detail}
+
+
+@router.post("/auth/{service}")
+def save_service_auth(service: str, body: dict):
+    """Valida y guarda credenciales de un servicio para el cliente activo."""
+    if service not in SERVICE_MAP:
+        raise HTTPException(404, f"Servicio desconocido: {service}")
+    cfg = Config()
+    try:
+        ok, detail = _validate_service(service, body, cfg)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if not ok:
+        return JSONResponse({"ok": False, "error": detail}, status_code=401)
+    env = _env_for(cfg, service, body)
+    if not env:
+        return JSONResponse({"ok": False, "error": "No llegan credenciales para guardar."}, status_code=400)
+    provider = SERVICE_MAP[service][0]
+    expires_at = body.get("expires_at")
+    try:
+        cfg.save_service(provider, env, float(expires_at) if expires_at else None)
+    except OSError as exc:
+        return JSONResponse(
+            {"ok": False, "error": f"No se pudo guardar en la DB: {exc}"},
+            status_code=500,
+        )
+    return {"ok": True, "service": service, "stored": True, "detail": detail}
+
+
 @router.get("/session")
 def session_status():
     cfg = Config()
     sid = active_session_id()
     data = get_session(sid) if sid else None
+    states = cfg.service_states()
     if data:
         return {
             "active": True,
             "identity": data.identity,
             "workspace": data.workspace,
             "repo_count": data.repo_count,
+            "client_alias": cfg.client_alias or "local",
+            "services": states,
             "stored": bool(cfg.bitbucket_token),
+            "needs_tokens": False,
         }
-    if cfg.bitbucket_token and cfg.workspace:
-        return {"active": False, "stored": True, "needs_tokens": False}
-    return {"active": False, "stored": False, "needs_tokens": True}
+    configured = bool(cfg.bitbucket_token) and bool(cfg.workspace)
+    return {
+        "active": False,
+        "client_alias": cfg.client_alias or "local",
+        "services": states,
+        "stored": configured,
+        "needs_tokens": not configured,
+    }
 
 
 @router.post("/session/reuse")
@@ -196,7 +348,7 @@ def session_reuse():
     ws = cfg.workspace
     if not (tok and ws):
         return JSONResponse(
-            {"ok": False, "error": "No hay credenciales en la conexión. Conectate o ejecutá 'bbit login'."},
+            {"ok": False, "error": "No hay credenciales para este cliente. Conectate o ejecutá 'bbit login'."},
             status_code=400,
         )
     try:
@@ -212,6 +364,8 @@ def session_reuse():
         "identity": data.identity,
         "workspace": data.workspace,
         "repo_count": data.repo_count,
+        "client_alias": cfg.client_alias or "local",
+        "services": cfg.service_states(),
         "stored": True,
     }
 
@@ -221,10 +375,15 @@ def api_session(body: dict):
     workspace = (body.get("workspace") or "").strip()
     token = (body.get("token") or "").strip()
     circleci_token = (body.get("circleci_token") or "").strip()
+    aws_profile = (body.get("aws_profile") or "").strip()
+    aws_region = (body.get("aws_region") or "").strip()
     if not workspace or not token:
         raise HTTPException(400, "workspace y token son obligatorios")
 
     cfg = Config()
+    if body.get("alias"):
+        cfg = cfg.set_client_alias((body.get("alias") or "").strip())
+
     if circleci_token:
         ci = CircleCiClient(
             circleci_token,
@@ -242,13 +401,28 @@ def api_session(body: dict):
         finally:
             ci.close()
 
+    if aws_profile:
+        ok_a, detail_a = _aws_probe(aws_profile, aws_region or "us-east-1")
+        if not ok_a:
+            return JSONResponse(
+                {"ok": False, "error": f"Credenciales AWS inválidas: {detail_a}"},
+                status_code=401,
+            )
+
     try:
         data = create_session(workspace, token)
     except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=401)
 
     try:
-        cfg.save_tokens(bitbucket_token=token, circleci_token=circleci_token, workspace=workspace)
+        cfg.save_tokens(
+            bitbucket_token=token,
+            circleci_token=circleci_token,
+            workspace=workspace,
+            bitbucket_username=(body.get("username") or "").strip(),
+            aws_profile=aws_profile,
+            aws_region=aws_region,
+        )
         cfg.save_filters(
             project_prefixes=",".join(_project_prefixes(cfg, body.get("project_prefixes", "")) or []),
             exclude_repos=",".join(sorted(_exclude_repos(cfg, body.get("exclude_repos", "")))),
@@ -265,6 +439,8 @@ def api_session(body: dict):
         "identity": data.identity,
         "workspace": data.workspace,
         "repo_count": data.repo_count,
+        "client_alias": cfg.client_alias or "local",
+        "services": cfg.service_states(),
         "stored": True,
     }
 
