@@ -1,4 +1,4 @@
-import { Component, inject, signal, effect, OnInit } from '@angular/core';
+import { Component, HostListener, inject, signal, effect, OnInit } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { IonHeader } from '@ionic/angular/ion-header';
@@ -93,6 +93,19 @@ interface DiffResponse {
   removed: RemovedParam[];
 }
 
+interface ServiceState {
+  stored: boolean;
+  expires_at?: number | null;
+  warning?: string | null;
+}
+
+interface ConfigField {
+  key: string;
+  label: string;
+  secret: boolean;
+  placeholder: string;
+}
+
 @Component({
   selector: 'app-home',
   templateUrl: './home.html',
@@ -162,6 +175,101 @@ export class Home implements OnInit {
   storedCreds = signal(false);
   askDisconnect = signal(false);
   syncingPrs = signal(false);
+
+  userMenuOpen = signal(false);
+  configOpen = signal(false);
+  services = signal<Record<string, ServiceState>>({});
+  clientAlias = signal('local');
+  savingService = signal<string | null>(null);
+  configMessage = signal<{ kind: 'ok' | 'error'; text: string } | null>(null);
+
+  readonly serviceKeys = ['bitbucket', 'circleci', 'aws'];
+  readonly serviceFields: Record<string, ConfigField[]> = {
+    bitbucket: [
+      { key: 'url', label: 'BITBUCKET_URL', secret: false, placeholder: 'https://bitbucket.org' },
+      { key: 'workspace', label: 'BITBUCKET_WORKSPACE', secret: false, placeholder: 'my_org_web_dev' },
+      { key: 'username', label: 'BITBUCKET_USERNAME', secret: false, placeholder: '@usuario' },
+      { key: 'token', label: 'BITBUCKET_TOKEN', secret: true, placeholder: 'ATATT...' },
+    ],
+    circleci: [
+      { key: 'token', label: 'CIRCLECI_TOKEN', secret: true, placeholder: 'CCIPAT...' },
+      { key: 'vcs', label: 'CIRCLECI_VCS', secret: false, placeholder: 'bb' },
+      { key: 'org', label: 'CIRCLECI_ORG', secret: false, placeholder: 'my_org_web_dev' },
+    ],
+    aws: [
+      { key: 'profile', label: 'AWS_PROFILE', secret: false, placeholder: 'bbit-release' },
+      { key: 'region', label: 'AWS_REGION', secret: false, placeholder: 'us-east-1' },
+    ],
+  };
+  configForm: Record<string, Record<string, string>> = {
+    bitbucket: { url: '', workspace: '', username: '', token: '' },
+    circleci: { token: '', vcs: '', org: '' },
+    aws: { profile: '', region: '' },
+  };
+
+  serviceLabel(svc: string): string {
+    return { bitbucket: 'Bitbucket', circleci: 'CircleCI', aws: 'AWS' }[svc] ?? svc;
+  }
+
+  toggleUserMenu(): void {
+    this.userMenuOpen.update((v) => !v);
+  }
+
+  @HostListener('document:click', ['$event'])
+  onDocClick(event: Event): void {
+    if (this.userMenuOpen() && !(event.target as HTMLElement).closest('.bb-user-menu-wrap')) {
+      this.userMenuOpen.set(false);
+    }
+  }
+
+  @HostListener('document:keydown.escape')
+  onEscape(): void {
+    this.userMenuOpen.set(false);
+  }
+
+  closeUserMenuAndDisconnect(): void {
+    this.userMenuOpen.set(false);
+    this.askDisconnect.set(true);
+  }
+
+  openConfig(): void {
+    this.userMenuOpen.set(false);
+    this.configMessage.set(null);
+    this.configOpen.set(true);
+    this.refreshClient();
+  }
+
+  private refreshClient(): void {
+    this.http.get<any>('/api/client').subscribe({
+      next: (r) => {
+        this.services.set(r.services ?? {});
+        this.clientAlias.set(r.client?.alias ?? 'local');
+      },
+    });
+  }
+
+  saveServiceAuth(service: string): void {
+    this.savingService.set(service);
+    this.configMessage.set(null);
+    const body: Record<string, string> = { ...this.configForm[service] };
+    this.http.post<any>(`/api/auth/${service}`, body).subscribe({
+      next: (r) => {
+        if (r.ok) {
+          this.configMessage.set({ kind: 'ok', text: `${this.serviceLabel(service)} guardado y validado.` });
+          this.refreshClient();
+        } else {
+          this.configMessage.set({ kind: 'error', text: r.error ?? 'No se pudo guardar.' });
+        }
+      },
+      error: (e) => {
+        this.configMessage.set({
+          kind: 'error',
+          text: e.error?.error ?? e.error?.detail ?? 'Error de red al guardar.',
+        });
+      },
+      complete: () => this.savingService.set(null),
+    });
+  }
 
   reposLoading = signal(false);
   paramsLoading = signal(false);
@@ -258,6 +366,8 @@ reportOpen = signal(false);
     });
     this.http.get<any>('/api/session').subscribe({
       next: (r) => {
+        this.services.set(r.services ?? {});
+        this.clientAlias.set(r.client_alias ?? 'local');
         if (r.active) {
           this.connected.set(true);
           this.identity.set(r.identity ?? '');
@@ -361,6 +471,8 @@ reportOpen = signal(false);
           this.connected.set(true);
           this.identity.set(r.identity ?? '');
           this.repoCount.set(r.repo_count ?? 0);
+          this.services.set(r.services ?? {});
+          this.clientAlias.set(r.client_alias ?? 'local');
           this.storedCreds.set(false);
           if (onSuccess) {
             onSuccess();
@@ -396,6 +508,8 @@ reportOpen = signal(false);
             this.connected.set(true);
             this.identity.set(r.identity);
             this.repoCount.set(r.repo_count);
+            this.services.set(r.services ?? {});
+            this.clientAlias.set(r.client_alias ?? 'local');
             this.storedCreds.set(false);
           } else {
             this.error.set(r.error ?? 'Error de conexión');
@@ -418,6 +532,10 @@ reportOpen = signal(false);
         this.params.set([]);
         this.removed.set([]);
         this.stats.set(null);
+        this.services.set({});
+        this.clientAlias.set('local');
+        this.userMenuOpen.set(false);
+        this.configOpen.set(false);
         this.storedCreds.set(!deleteCredentials);
       },
     });

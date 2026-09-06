@@ -33,11 +33,34 @@
 
       <div class="bb-topbar-right">
         @if (connected()) {
-        <div class="bb-topbar-user">
-          <span class="bb-topbar-avatar">{{ identityInitials() }}</span>
-          <span class="bb-topbar-username">{{ identity() }}</span>
+        <div class="bb-user-menu-wrap">
+          <button class="bb-user-menu-trigger" [class.bb-user-menu-trigger--open]="userMenuOpen()"
+                  (click)="toggleUserMenu()" aria-label="Menú de usuario" aria-haspopup="menu"
+                  [attr.aria-expanded]="userMenuOpen()">
+            <span class="bb-topbar-avatar">{{ identityInitials() }}</span>
+            <span class="bb-topbar-username">{{ identity() }}</span>
+            <ion-icon class="bb-user-caret" name="chevron-down-outline"></ion-icon>
+          </button>
+          @if (userMenuOpen()) {
+          <div class="bb-user-menu" role="menu">
+            <div class="bb-user-menu-head">
+              <div class="bb-user-menu-name">{{ identity() }}</div>
+              <div class="bb-user-menu-meta bb-muted">
+                Cliente: <span class="bb-mono">{{ clientAlias() }}</span>
+              </div>
+            </div>
+            <button class="bb-user-menu-item" role="menuitem" (click)="openConfig()">
+              <ion-icon name="settings-outline"></ion-icon>
+              Configuración
+            </button>
+            <button class="bb-user-menu-item bb-user-menu-item--danger" role="menuitem"
+                    (click)="closeUserMenuAndDisconnect()">
+              <ion-icon name="log-out-outline"></ion-icon>
+              Cerrar sesión
+            </button>
+          </div>
+          }
         </div>
-        <button class="bb-btn-secondary" (click)="askDisconnect.set(true)">Desconectar</button>
         }
       </div>
     </div>
@@ -449,6 +472,64 @@
           <button class="bb-btn-danger bb-btn-sm" (click)="disconnect(true)">Sí, eliminar credenciales</button>
           <button class="bb-btn-secondary bb-btn-sm" (click)="disconnect(false)">Conservar</button>
           <button class="bb-btn-secondary bb-btn-sm" (click)="askDisconnect.set(false)">Cancelar</button>
+        </div>
+      </div>
+    </div>
+    }
+    @if (configOpen()) {
+    <div class="bb-modal-mask" (click)="configOpen.set(false)">
+      <div class="bb-modal bb-modal--config" (click)="$event.stopPropagation()">
+        <div class="bb-modal-title">Configuración</div>
+        <div class="bb-config-meta bb-muted">
+          Cliente: <span class="bb-mono">{{ clientAlias() }}</span>
+        </div>
+        @if (configMessage(); as msg) {
+        <div class="bb-config-msg"
+             [class.bb-config-msg--ok]="msg.kind === 'ok'"
+             [class.bb-config-msg--error]="msg.kind === 'error'">
+          {{ msg.text }}
+        </div>
+        }
+        @for (svc of serviceKeys; track svc) {
+        <div class="bb-config-service">
+          <div class="bb-config-service-head">
+            <span class="bb-config-service-name">{{ serviceLabel(svc) }}</span>
+            @let st = services()[svc];
+            @if (st?.stored) {
+            <span class="bb-badge bb-badge--ok">Guardado</span>
+            } @else {
+            <span class="bb-badge bb-badge--neutral">Sin guardar</span>
+            }
+            @if (st?.warning === 'expired') {
+            <span class="bb-badge bb-badge--warn">Vencido</span>
+            } @else if (st?.warning === 'expiring') {
+            <span class="bb-badge bb-badge--warn">Vence pronto</span>
+            }
+          </div>
+          <div class="bb-config-fields">
+            @for (f of serviceFields[svc]; track f.key) {
+            <div class="bb-config-field">
+              <label class="bb-auth-label">{{ f.label }}</label>
+              <input class="bb-input bb-mono" [type]="f.secret ? 'password' : 'text'"
+                     [placeholder]="f.placeholder"
+                     [name]="svc + '_' + f.key"
+                     [(ngModel)]="configForm[svc][f.key]"/>
+            </div>
+            }
+          </div>
+          <div class="bb-modal-row">
+            <button class="bb-btn-primary bb-btn-sm" [disabled]="savingService() === svc"
+                    (click)="saveServiceAuth(svc)">
+              @if (savingService() === svc) {
+              <span class="bb-spinner-inline"></span>
+              }
+              Validar y guardar
+            </button>
+          </div>
+        </div>
+        }
+        <div class="bb-modal-row bb-modal-actions">
+          <button class="bb-btn-secondary bb-btn-sm" (click)="configOpen.set(false)">Cerrar</button>
         </div>
       </div>
     </div>
