@@ -30,12 +30,18 @@ Cada tema/HU se registra como un issue en GitHub con nomenclatura de JIRA:
 When a user requests an adjustment:
 
 1. Abrir/crear un issue con tag `BBIT-{N}` (si el tema aún no lo tiene) y escribir el plan en su body.
-2. Crear la branch `bbit-{N}` desde `main` (una branch por issue; varios temas conviven en paralelo).
+2. Crear la branch `feature/BBIT-{N}` desde `main` (una branch por issue; varios temas conviven en paralelo).
 3. Make the code change
 4. Update `version` in `pyproject.toml`
 5. `git add -A && git commit -m "tipo(BBIT-N): descripción concisa"`
 6. `git push`
-7. Solo al dar **luz verde**: PR `bbit-{N}` → `main`, merge y cierre del issue (el PR referencias el issue: "closes #N").
+7. Solo al dar **luz verde**: PR `feature/BBIT-{N}` → `main`, merge y cierre del issue (el PR referencias el issue: "closes #N").
+
+> **CI automático**: el GitHub Action `.github/workflows/ci.yml` corre
+> pytest (backend) y `ng build` + `ng test` (frontend) en cada push a ramas
+> `feature/**`. No es necesario correr los tests en local antes de empujar:
+> el CI valida por vos. Solo commitear cuando el estado sea razonable y
+> dejar que el push muestre el resultado.
 
 ## Commit message format
 

@@ -2,6 +2,15 @@
   border-bottom: 1px solid var(--bb-border);
 }
 
+/* El header debe ganar su propio stacking context frente a ion-content
+   (que crea contain: size style y pintaría por encima de un simple
+   z-index:10 del ion-header de iOS). Sin esto, el menú desplegable del
+   perfil queda atrapado bajo el área de scroll. */
+.bb-nav {
+  position: relative;
+  z-index: 101;
+}
+
 .bb-mark {
   color: var(--bb-blue);
   font-weight: 800;
@@ -480,6 +489,7 @@
   max-width: 720px;
   width: 100%;
   max-height: 90vh;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1065,6 +1075,177 @@ button.bb-link {
     left: 0;
     bottom: 0;
     z-index: 200;
+  }
+}
+
+/* ===== Menú desplegable de perfil ===== */
+.bb-user-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.bb-user-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bb-surface);
+  border: 1px solid transparent;
+  padding: 5px 10px 5px 6px;
+  border-radius: var(--bb-radius-pill);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  max-width: 230px;
+}
+
+.bb-user-menu-trigger:hover,
+.bb-user-menu-trigger--open {
+  border-color: var(--bb-border);
+  background: var(--bb-elevated);
+}
+
+.bb-user-caret {
+  font-size: 14px;
+  color: var(--bb-text-secondary);
+  flex-shrink: 0;
+}
+
+.bb-user-menu {
+  position: fixed;
+  min-width: 230px;
+  max-width: 80vw;
+  background: var(--bb-elevated);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius-lg);
+  box-shadow: 0 8px 24px rgba(9, 30, 66, 0.18);
+  padding: 6px;
+  z-index: 1300;
+}
+
+.bb-user-menu-head {
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--bb-border);
+  margin-bottom: 6px;
+}
+
+.bb-user-menu-name {
+  font-weight: 700;
+  font-size: var(--bb-font-base);
+  color: var(--bb-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bb-user-menu-meta {
+  font-size: var(--bb-font-sm);
+  margin-top: 4px;
+}
+
+.bb-user-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: var(--bb-radius-md);
+  font-size: var(--bb-font-base);
+  color: var(--bb-text);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.bb-user-menu-item:hover {
+  background: var(--bb-surface);
+}
+
+.bb-user-menu-item ion-icon {
+  font-size: 16px;
+  color: var(--bb-text-secondary);
+}
+
+.bb-user-menu-item--danger {
+  color: var(--bb-danger);
+}
+
+.bb-user-menu-item--danger ion-icon {
+  color: var(--bb-danger);
+}
+
+@media (max-width: 768px) {
+  .bb-user-menu-trigger {
+    max-width: 40vw;
+  }
+}
+
+/* ===== Modal de configuración ===== */
+.bb-modal--config {
+  max-width: 560px;
+}
+
+.bb-config-meta {
+  font-size: var(--bb-font-sm);
+}
+
+.bb-config-msg {
+  font-size: var(--bb-font-sm);
+  padding: 8px 10px;
+  border-radius: var(--bb-radius-md);
+}
+
+.bb-config-msg--ok {
+  background: var(--bb-success-bg);
+  color: var(--bb-success);
+}
+
+.bb-config-msg--error {
+  background: var(--bb-danger-bg);
+  color: var(--bb-danger);
+}
+
+.bb-config-service {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius-lg);
+  padding: 12px;
+  background: var(--bb-surface);
+}
+
+.bb-config-service-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bb-config-service-name {
+  font-weight: 700;
+  font-size: var(--bb-font-md);
+  color: var(--bb-text);
+}
+
+.bb-config-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.bb-config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bb-config-service .bb-modal-row {
+  justify-content: flex-end;
+}
+
+@media (max-width: 520px) {
+  .bb-config-fields {
+    grid-template-columns: 1fr;
   }
 }
 
