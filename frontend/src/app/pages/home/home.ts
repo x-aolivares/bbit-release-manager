@@ -597,12 +597,15 @@ reportOpen = signal(false);
   loadRepos() {
     if (!this.origin) return;
     this.reposLoading.set(true);
+    this.paramsLoading.set(true);
     this.error.set(null);
     this.creatingPr.set(null);
     this.tableLoaded.set(true);
     const startedAt = Date.now();
-    const done = () => this.releaseBusy(startedAt, () => this.reposLoading.set(false));
-    // Limpiar params al cambiar de rama origen (nueva consulta = nueva cache)
+    const done = () => this.releaseBusy(startedAt, () => {
+      this.reposLoading.set(false);
+      this.paramsLoading.set(false);
+    });
     this.params.set([]);
     this.removed.set([]);
     this.paramsLoaded.set(false);
@@ -611,27 +614,25 @@ reportOpen = signal(false);
     const exclude = this.blacklisted().join(',');
     const force = this.forceCache() ? 1 : 0;
 
-    // Endpoint de proyectos (alimenta la blacklist)
-    this.http.get<any>(`/api/repos?origin=${encodeURIComponent(this.origin)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&force=${force}&exclude=${encodeURIComponent(exclude)}`).subscribe({
+    this.http.get<any>(`/api/flow?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}`).subscribe({
       next: (r) => {
-        const items: ScanProject[] = (r.items ?? []).slice();
-        items.sort((a, b) => a.slug.localeCompare(b.slug));
-        this.projects.set(items);
-      },
-      error: () => this.error.set('Error al obtener los proyectos.'),
-    });
+        const projects: ScanProject[] = (r.projects ?? []).slice();
+        projects.sort((a, b) => a.slug.localeCompare(b.slug));
+        this.projects.set(projects);
 
-    // Endpoint de la tabla de repos
-    const base = `/api/scan?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&force=${force}`;
-    this.http.get<any>(base).subscribe({
-      next: (r) => {
-        this.ciConfigured.set(r.ci_configured ?? true);
-        this.ciError.set(r.ci_error ?? null);
-        this.stats.set(r.stats ?? null);
-        this.repos.set(r.repos ?? []);
-        if (!r.repos?.length) {
-          this.error.set(r.error ?? `Ningún repo contiene la rama '${this.origin}'.`);
+        const scan = r.scan ?? {};
+        this.ciConfigured.set(scan.ci_configured ?? true);
+        this.ciError.set(scan.ci_error ?? null);
+        this.stats.set(scan.stats ?? null);
+        this.repos.set(scan.repos ?? []);
+        if (!scan.repos?.length) {
+          this.error.set(scan.error ?? `Ningún repo contiene la rama '${this.origin}'.`);
         }
+
+        const diff = r.diff ?? {};
+        this.params.set(diff.params ?? []);
+        this.removed.set(diff.removed ?? []);
+        this.paramsLoaded.set(true);
       },
       error: () => {
         this.error.set('Error al cargar la tabla.');
@@ -639,34 +640,13 @@ reportOpen = signal(false);
       },
       complete: () => {
         done();
-        // Auto-guardar sesión tras carga exitosa
         this.saveCurrentSession();
       },
     });
   }
 
   loadParams() {
-    if (!this.origin) return;
-    this.paramsLoading.set(true);
-    this.error.set(null);
-    this.paramsLoaded.set(true);
-    const startedAt = Date.now();
-    const done = () => this.releaseBusy(startedAt, () => this.paramsLoading.set(false));
-    const dest = this.projectsDest();
-    const exclude = this.blacklisted().join(',');
-    const force = this.forceCache() ? 1 : 0;
-    this.http.get<DiffResponse>(`/api/diff?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&mode=${this.scanMode}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&force=${force}`)
-      .subscribe({
-        next: (r) => {
-          this.params.set(r.params ?? []);
-          this.removed.set(r.removed ?? []);
-        },
-        error: () => {
-          this.error.set('Error al obtener parámetros SSM.');
-          done();
-        },
-        complete: () => done(),
-      });
+    this.loadRepos();
   }
 
   // Alias: tras crear/actualizar PRs o tags se recarga la tabla (no encadena params).

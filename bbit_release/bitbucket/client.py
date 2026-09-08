@@ -537,21 +537,18 @@ class BitbucketClient:
         """Cantidad de commits en base que la rama no tiene (gap de sync).
 
         GET /commits/{base}?exclude={branch} → commits de base ausentes en branch.
-        Pide `pagelen=1` y lee `size` del envelope (el total de la consulta) en
-        un solo request; si el servidor no devuelve `size`, pagina como antes.
+        Pide `pagelen=100` y lee `size` del envelope (el total de la consulta)
+        en un solo request; si el servidor no devuelve `size`, cuenta los
+        valores ya recibidos y pagina el resto.
         """
         url_base = f"/repositories/{self.workspace}/{slug}/commits/{base}"
         try:
-            data = self._request("GET", url_base, params={"exclude": branch, "pagelen": 1})
+            data = self._request("GET", url_base, params={"exclude": branch, "pagelen": 100})
         except (BitbucketError, BitbucketAuthError):
             return 0
         size = (data or {}).get("size")
         if isinstance(size, int) and size >= 0:
             return size
-        try:
-            data = self._request("GET", url_base, params={"exclude": branch, "pagelen": 100})
-        except (BitbucketError, BitbucketAuthError):
-            return 0
         count = 0
         while data and data.get("values"):
             count += len(data["values"])
@@ -568,6 +565,11 @@ class BitbucketClient:
         tags: list[dict] = []
         url: str | None = f"/repositories/{self.workspace}/{slug}/refs/tags"
         params: dict | None = {"pagelen": 100}
+        if len(commit_hash) >= 40:
+            # Filtro server-side por target.hash: evita paginar TODAS las tags
+            # del repo cuando ya tenemos el hash completo (el objeto tag referencia
+            # un commit propio, distinto del hash del tag anotado).
+            params["q"] = f'target.hash="{commit_hash}"'
         while url:
             payload = self._request("GET", url, params=params)
             if payload is None:

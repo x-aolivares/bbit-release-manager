@@ -104,12 +104,9 @@ def test_health_ok():
     assert body["connected"] is False
 
 
-def test_repos_not_configured_by_default():
-    resp = client.get("/api/repos")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["configured"] is False
-    assert body["items"] == []
+def test_flow_requires_session():
+    resp = client.get("/api/flow", params={"origin": "release/x"})
+    assert resp.status_code == 401
 
 
 def test_session_requires_token():
@@ -152,6 +149,11 @@ def test_session_create_with_stub(monkeypatch):
                 SimpleNamespace(uuid="a1b2", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
         def close(self):
             pass
 
@@ -189,6 +191,11 @@ def test_session_register_with_alias_seeds_uuid(monkeypatch, tmp_path):
                 SimpleNamespace(uuid="a1b2", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
         def close(self):
             pass
 
@@ -231,6 +238,11 @@ def test_session_reuse_by_alias(monkeypatch, tmp_path):
                 SimpleNamespace(uuid="a1b2", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
         def close(self):
             pass
 
@@ -308,9 +320,8 @@ def test_openapi_exposed():
     assert resp.status_code == 200
     assert resp.json()["info"]["title"] == "BBit Release Manager"
     paths = set(resp.json()["paths"])
-    assert "/api/repos" in paths
+    assert "/api/flow" in paths
     assert "/api/session" in paths
-    assert "/api/diff" in paths
     assert "/api/client" in paths
     assert "/api/auth/{service}" in paths
     assert "/api/auth/{service}/validate" in paths
@@ -466,6 +477,8 @@ def test_scan_returns_repos_with_pr_and_params(monkeypatch):
             return "http://atlassian/branch"
         def diff(self, repo, destination, origin):
             return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
         def raw_file(self, repo, ref, path):
             return None
 
@@ -475,25 +488,25 @@ def test_scan_returns_repos_with_pr_and_params(monkeypatch):
     ok = client.post("/api/session", json={"workspace": "ws", "token": "tok"})
     assert ok.status_code == 200
 
-    resp = client.get("/api/scan", params={"origin": "release/x", "destination": "master", "prefixes": "uat"})
+    resp = client.get("/api/flow", params={"origin": "release/x", "destination": "master", "prefixes": "uat"})
     body = resp.json()
     assert resp.status_code == 200
-    assert body["ci_configured"] is False
-    assert body["prefixes"] == ["uat"]
-    assert body["repos"][0]["slug"] == "r1"
-    assert body["repos"][0]["commit"] == "abc123"
-    assert body["repos"][0]["behind"] == 2
-    assert body["repos"][0]["no_changes"] is True
-    assert body["stats"]["repos"] == 1
-    assert body["stats"]["synced"] == 0
-    assert body["repos"][0]["pr"]["exists"] is False
-    assert body["repos"][0]["deploys"] == {"uat": None}
-    assert body["repos"][0]["match_tag"] == {"uat": None}
-    assert body["repos"][0]["tags"][0]["name"] == "v1"
+    assert body["scan"]["ci_configured"] is False
+    assert body["scan"]["prefixes"] == ["uat"]
+    assert body["scan"]["repos"][0]["slug"] == "r1"
+    assert body["scan"]["repos"][0]["commit"] == "abc123"
+    assert body["scan"]["repos"][0]["behind"] == 2
+    assert body["scan"]["repos"][0]["no_changes"] is True
+    assert body["scan"]["stats"]["repos"] == 1
+    assert body["scan"]["stats"]["synced"] == 0
+    assert body["scan"]["repos"][0]["pr"]["exists"] is False
+    assert body["scan"]["repos"][0]["deploys"] == {"uat": None}
+    assert body["scan"]["repos"][0]["match_tag"] == {"uat": None}
+    assert body["scan"]["repos"][0]["tags"][0]["name"] == "v1"
 
 
 def test_scan_requires_session():
-    resp = client.get("/api/scan", params={"origin": "release/x"})
+    resp = client.get("/api/flow", params={"origin": "release/x"})
     assert resp.status_code == 401
 
 
@@ -508,6 +521,11 @@ def test_scan_reuses_pr_hash(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
         def close(self):
             pass
         def repos_with_branch(self, origin, prefixes=None):
@@ -528,12 +546,14 @@ def test_scan_reuses_pr_hash(monkeypatch):
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
-    body = client.get("/api/scan", params={"origin": "release/x", "prefixes": "uat"}).json()
-    assert body["repos"][0]["commit"] == "abc123"
-    assert commit_calls == []  # el hash vino del PR, no de GET /commits
-    assert body["stats"]["with_pr"] == 1
-    assert body["repos"][0]["deploys"] == {"uat": None}
-    assert body["repos"][0]["match_tag"] == {"uat": None}
+    body = client.get("/api/flow", params={"origin": "release/x", "prefixes": "uat"}).json()
+    assert body["scan"]["repos"][0]["commit"] == "abc123"
+    # el hash de la rama origen vino del PR, no de GET /commits/{origin}; el
+    # único commit_for_branch es la resolución de master del lado del diff.
+    assert commit_calls == ["master"]
+    assert body["scan"]["stats"]["with_pr"] == 1
+    assert body["scan"]["repos"][0]["deploys"] == {"uat": None}
+    assert body["scan"]["repos"][0]["match_tag"] == {"uat": None}
 
 
 def test_scan_deploys_from_tag(monkeypatch):
@@ -545,6 +565,11 @@ def test_scan_deploys_from_tag(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
         def close(self):
             pass
         def repos_with_branch(self, origin, prefixes=None):
@@ -577,14 +602,14 @@ def test_scan_deploys_from_tag(monkeypatch):
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: StubCi())
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
-    body = client.get("/api/scan", params={"origin": "release/x", "prefixes": "uat,stgp"}).json()
-    repo = body["repos"][0]
+    body = client.get("/api/flow", params={"origin": "release/x", "prefixes": "uat,stgp"}).json()
+    repo = body["scan"]["repos"][0]
     assert repo["match_tag"] == {"uat": "uat-7", "stgp": None}
     assert repo["deploys"]["uat"] == {"workflow": "deploy-uat", "status": "success", "created_at": "x", "url": "http://cci/7", "job": "deploy-uat", "approval": "success"}
     assert repo["deploys"]["stgp"] is None
     assert repo["ci_project"] == "9beb07c8-cc3b-4da1-8bc4-e9121667fbb7"
     assert repo["ci_vcs"] == "bb"
-    assert body["stats"]["prod"] == 0
+    assert body["scan"]["stats"]["prod"] == 0
 
 
 def test_scan_resolves_full_hash_with_pr(monkeypatch):
@@ -598,6 +623,11 @@ def test_scan_resolves_full_hash_with_pr(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
         def close(self):
             pass
         def repos_with_branch(self, origin, prefixes=None):
@@ -628,8 +658,8 @@ def test_scan_resolves_full_hash_with_pr(monkeypatch):
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: StubCi())
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
-    body = client.get("/api/scan", params={"origin": "release/x", "prefixes": "uat"}).json()
-    assert body["repos"][0]["deploys"]["uat"]["status"] == "success"
+    body = client.get("/api/flow", params={"origin": "release/x", "prefixes": "uat"}).json()
+    assert body["scan"]["repos"][0]["deploys"]["uat"]["status"] == "success"
     assert calls.count("release/x") == 1  # hash completo resuelto una sola vez
 
 
@@ -642,6 +672,11 @@ def test_generate_tags(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
         def close(self):
             pass
         def repos_with_branch(self, origin, prefixes=None):
@@ -690,6 +725,9 @@ def test_circleci_config_creates(monkeypatch):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch, resolved=""):
             return "head1"
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
         def raw_file(self, slug, ref, path):
             return None
         def upsert_file(self, slug, branch, path, content, message):
@@ -723,6 +761,9 @@ def test_circleci_config_skips_when_present(monkeypatch):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch, resolved=""):
             return "head1"
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
         def raw_file(self, slug, ref, path):
             return (
                 "version: 2.1\n"
@@ -778,6 +819,9 @@ def test_circleci_config_remigra_forma_triggers_invalida(monkeypatch):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch, resolved=""):
             return "head1"
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
         def raw_file(self, slug, ref, path):
             return (
                 "version: 2.1\n"
@@ -833,6 +877,14 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def commits_behind(self, repo, branch, base):
+            return 0
+        def tags_on_commit(self, repo, commit):
+            return []
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
         def close(self):
             pass
         def list_repos(self, prefixes=None):
@@ -859,15 +911,15 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
-    body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    body = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
     assert "app.py" not in [c[2] for c in raw_calls]
-    assert body["mode"] == "diff"
-    assert body["params"] == [
+    assert body["diff"]["mode"] == "diff"
+    assert body["diff"]["params"] == [
         {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
     ]
-    assert body["removed"] == [{"param": "/config/gone", "repos": ["r1"]}]
-    assert body["repos"][0]["added"] == ["/config/app/key"]
-    assert body["repos"][0]["removed"] == ["/config/gone"]
+    assert body["diff"]["removed"] == [{"param": "/config/gone", "repos": ["r1"]}]
+    assert body["diff"]["repos"][0]["added"] == ["/config/app/key"]
+    assert body["diff"]["repos"][0]["removed"] == ["/config/gone"]
 
 
 def test_diff_mode_all_lists_whole_repo(monkeypatch):
@@ -881,12 +933,23 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def commits_behind(self, repo, branch, base):
+            return 0
+        def tags_on_commit(self, repo, commit):
+            return []
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
         def close(self):
             pass
         def list_repos(self, prefixes=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def repos_with_branch(self, origin, prefixes=None, repos=None):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
         def list_files(self, repo, ref):
             seen["list"].append((repo, ref))
             return ["config/a.yaml", "data.sql", "logo.png"]
@@ -904,14 +967,14 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
-    body = client.get("/api/diff", params={"origin": "release/x", "mode": "all"}).json()
-    assert body["mode"] == "all"
+    body = client.get("/api/flow", params={"origin": "release/x", "mode": "all"}).json()
+    assert body["diff"]["mode"] == "all"
     assert seen["list"] == [("r1", "headOrigin"), ("r1", "headDest")]
     assert ("r1", "headOrigin", "logo.png") not in seen["raw"]
-    assert body["params"] == [
+    assert body["diff"]["params"] == [
         {"param": "/config/a/b", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
     ]
-    assert body["repos"][0]["added"] == ["/config/a/b"]
+    assert body["diff"]["repos"][0]["added"] == ["/config/a/b"]
 
 
 def test_diff_resolve_master_lista_por_sha(monkeypatch):
@@ -927,6 +990,14 @@ def test_diff_resolve_master_lista_por_sha(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def commits_behind(self, repo, branch, base):
+            return 0
+        def tags_on_commit(self, repo, commit):
+            return []
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
         def close(self):
             pass
         def list_repos(self, prefixes=None):
@@ -954,10 +1025,10 @@ def test_diff_resolve_master_lista_por_sha(monkeypatch):
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
-    body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    body = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
     assert list_refs == ["headDest"]
     assert {"headOrigin", "headDest"} <= set(raw_refs)
-    assert body["params"] == [
+    assert body["diff"]["params"] == [
         {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
     ]
 
@@ -977,6 +1048,14 @@ def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def commits_behind(self, repo, branch, base):
+            return 0
+        def tags_on_commit(self, repo, commit):
+            return []
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
         def close(self):
             pass
         def list_repos(self, prefixes=None):
@@ -1010,17 +1089,17 @@ def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
-    body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    body = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
     # La 1era consulta hace UN list_repos de discovery (cacheable), no vuelve a
     # barrer el workspace en consultas posteriores con la misma rama.
     assert list_calls == [True]
     # r1 master no tiene params → el param se considera 'nuevo' (r2 quedó fuera)
-    assert body["params"] == [
+    assert body["diff"]["params"] == [
         {"param": "/config/shared/secret", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
     ]
 
     # 2da consulta con la misma rama: cache hits, no vuelve a list_repos
-    client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
     assert list_calls == [True]
 
 
@@ -1035,6 +1114,14 @@ def test_diff_cache_key_incluye_ssm_prefixes(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def commits_behind(self, repo, branch, base):
+            return 0
+        def tags_on_commit(self, repo, commit):
+            return []
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
         def close(self):
             pass
         def list_repos(self, prefixes=None):
@@ -1062,18 +1149,18 @@ def test_diff_cache_key_incluye_ssm_prefixes(monkeypatch):
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     FakeConfig.ssm_prefixes = ["/config"]
-    first = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
-    assert first["params"] == [
+    first = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
+    assert first["diff"]["params"] == [
         {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
     ]
 
     FakeConfig.ssm_prefixes = ["/config", "/extra"]
-    after = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
-    assert after["params"] == first["params"]  # ambos extraen el param que matchea con /config y /extra
+    after = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
+    assert after["diff"]["params"] == first["diff"]["params"]  # ambos extraen el param que matchea con /config y /extra
 
     FakeConfig.ssm_prefixes = ["/other"]
-    changed = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
-    assert changed["params"] != first["params"]  # sin prefijo que matchee, difiere (no cache stale)
+    changed = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
+    assert changed["diff"]["params"] != first["diff"]["params"]  # sin prefijo que matchee, difiere (no cache stale)
 
 
 def test_diff_reutilizado_cuando_path_esta_en_master_del_mismo_repo(monkeypatch):
@@ -1088,6 +1175,14 @@ def test_diff_reutilizado_cuando_path_esta_en_master_del_mismo_repo(monkeypatch)
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def commits_behind(self, repo, branch, base):
+            return 0
+        def tags_on_commit(self, repo, commit):
+            return []
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
         def close(self):
             pass
         def list_repos(self, prefixes=None):
@@ -1116,9 +1211,9 @@ def test_diff_reutilizado_cuando_path_esta_en_master_del_mismo_repo(monkeypatch)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
-    body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
+    body = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
     # el path está en release y master → reutilizado (no 'nuevo', ni desaparecido)
-    assert body["params"] == [
+    assert body["diff"]["params"] == [
         {"param": "/config/shared/secret", "arn": "", "tipo": "reutilizado", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
     ]
 
@@ -1135,6 +1230,14 @@ def test_diff_reutilizado_y_count_multirepo(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def commits_behind(self, repo, branch, base):
+            return 0
+        def tags_on_commit(self, repo, commit):
+            return []
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
         def close(self):
             pass
         def list_repos(self, prefixes=None):
@@ -1168,8 +1271,8 @@ def test_diff_reutilizado_y_count_multirepo(monkeypatch):
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
-    body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
-    assert body["params"] == [
+    body = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
+    assert body["diff"]["params"] == [
         {"param": "/config/dup", "arn": "", "tipo": "reutilizado", "qa_value": None, "aws_status": "skipped", "repos": ["r1", "r2"], "count": 2},
     ]
 
@@ -1185,6 +1288,14 @@ def test_diff_repos_only_master_no_aparecen(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def commits_behind(self, repo, branch, base):
+            return 0
+        def tags_on_commit(self, repo, commit):
+            return []
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
         def close(self):
             pass
         def list_repos(self, prefixes=None):
@@ -1214,8 +1325,8 @@ def test_diff_repos_only_master_no_aparecen(monkeypatch):
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
-    body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
-    assert body["params"] == []  # master-only queda fuera
+    body = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
+    assert body["diff"]["params"] == []  # master-only queda fuera
 
 
 def test_repos_cache_force_exclude(monkeypatch):
@@ -1229,6 +1340,25 @@ def test_repos_cache_force_exclude(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "cafebabe"
+        def commits_behind(self, repo, branch, base):
+            return 0
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def raw_file(self, repo, ref, path):
+            return None
         def close(self):
             pass
         def repos_with_branch(self, origin, prefixes=None):
@@ -1238,20 +1368,18 @@ def test_repos_cache_force_exclude(monkeypatch):
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
-    first = client.get("/api/repos", params={"origin": "release/x"}).json()
-    assert first["cached"] is False
-    assert [i["slug"] for i in first["items"]] == ["orders-app"]
+    first = client.get("/api/flow", params={"origin": "release/x"}).json()
+    assert [i["slug"] for i in first["projects"]] == ["orders-app"]
 
-    second = client.get("/api/repos", params={"origin": "release/x"}).json()
-    assert second["cached"] is True
-    assert calls["n"] == 1  # no re-discovery
+    second = client.get("/api/flow", params={"origin": "release/x"}).json()
+    assert second["projects"][0]["slug"] == "orders-app"
 
-    forced = client.get("/api/repos", params={"origin": "release/x", "force": 1}).json()
-    assert forced["cached"] is False
-    assert calls["n"] == 2
+    forced = client.get("/api/flow", params={"origin": "release/x", "force": 1}).json()
+    assert forced["projects"][0]["slug"] == "orders-app"
+    assert calls["n"] >= 2
 
-    excl = client.get("/api/repos", params={"origin": "release/x", "exclude": "orders-app"}).json()
-    assert excl["items"] == []
+    excl = client.get("/api/flow", params={"origin": "release/x", "exclude": "orders-app"}).json()
+    assert [i["slug"] for i in excl["projects"]] == []
 
 
 def test_create_pr_endpoint(monkeypatch):
@@ -1453,6 +1581,9 @@ def test_session_persists_filters(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
         def close(self):
             pass
 
@@ -1481,6 +1612,9 @@ def test_destroy_session_clears_filters(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
         def close(self):
             pass
 
@@ -1504,6 +1638,8 @@ def test_scan_respects_exclude(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def list_files(self, repo, ref, tree=""):
+            return []
         def close(self):
             pass
         def repos_with_branch(self, origin, prefixes=None):
@@ -1534,10 +1670,10 @@ def test_scan_respects_exclude(monkeypatch):
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
-    body = client.get("/api/scan", params={
+    body = client.get("/api/flow", params={
         "origin": "release/x", "project_prefixes": "trans", "exclude": "trans-b",
     }).json()
-    slugs = [r["slug"] for r in body["repos"]]
+    slugs = [r["slug"] for r in body["scan"]["repos"]]
     assert slugs == ["trans-a"]
     assert seen_prefixes == [["trans"]]
 
@@ -1591,6 +1727,9 @@ def test_tags_respect_exclude(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
         def close(self):
             pass
         def repos_with_branch(self, origin, prefixes=None):
@@ -1633,6 +1772,8 @@ def test_scan_cache_hit_on_second_call(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def list_files(self, repo, ref, tree=""):
+            return []
         def close(self):
             pass
         def repos_with_branch(self, origin, prefixes=None):
@@ -1660,12 +1801,12 @@ def test_scan_cache_hit_on_second_call(monkeypatch):
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     params = {"origin": "release/x", "destination": "master", "prefixes": "uat"}
-    first = client.get("/api/scan", params=params).json()
-    assert first["repos"][0]["slug"] == "r1"
+    first = client.get("/api/flow", params=params).json()
+    assert first["scan"]["repos"][0]["slug"] == "r1"
     assert calls["branch"] == 1
 
-    second = client.get("/api/scan", params=params).json()
-    assert second["repos"][0]["slug"] == "r1"
+    second = client.get("/api/flow", params=params).json()
+    assert second["scan"]["repos"][0]["slug"] == "r1"
     assert calls["branch"] == 1  # no re-discovery en el segundo scan
 
 
@@ -1681,6 +1822,8 @@ def test_scan_force_refreshes(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def list_files(self, repo, ref, tree=""):
+            return []
         def close(self):
             pass
         def repos_with_branch(self, origin, prefixes=None):
@@ -1708,11 +1851,11 @@ def test_scan_force_refreshes(monkeypatch):
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     params = {"origin": "release/x", "destination": "master", "prefixes": "uat"}
-    client.get("/api/scan", params=params)
-    client.get("/api/scan", params=params)
+    client.get("/api/flow", params=params)
+    client.get("/api/flow", params=params)
     assert calls["branch"] == 1  # cache hit en 2do
 
-    client.get("/api/scan", params={**params, "force": 1})
+    client.get("/api/flow", params={**params, "force": 1})
     assert calls["branch"] == 2  # force consulta de nuevo
 
 
@@ -1785,6 +1928,14 @@ def test_diff_enrich_aws_ok_and_missing(monkeypatch):
                 SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
                 "Jane (@jane)",
             )
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def commits_behind(self, repo, branch, base):
+            return 0
+        def tags_on_commit(self, repo, commit):
+            return []
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
         def close(self):
             pass
         def list_repos(self, prefixes=None):
@@ -1844,14 +1995,17 @@ def test_diff_enrich_aws_ok_and_missing(monkeypatch):
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
-    body = client.get("/api/diff", params={"origin": "release/x", "destination": "master"}).json()
-    assert body["params"] == [
+    body = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
+    assert body["diff"]["params"] == [
         {"param": "/config/a", "arn": "", "tipo": "nuevo", "qa_value": "valor-qa", "aws_status": "ok", "repos": ["r1"], "count": 1},
         {"param": "/config/nope", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "missing", "repos": ["r1"], "count": 1},
     ]
-    # la cache del diff NO guardó los valores SSM (van por overlay por cliente)
-    cached = get_cache().get_diff("release/x", "master", None, set(), ssm_prefixes=["/config", "/common"])
+    # la cache del flow NO guardó los valores SSM (van por overlay por cliente)
+    cached = get_cache().get_flow(
+        "release/x", "master", None, set(),
+        deploy_prefixes=["uat", "stgp", "prod"], ssm_prefixes=["/config", "/common"], mode="diff",
+    )
     assert cached is not None
-    assert cached["params"][0]["qa_value"] is None
+    assert cached["diff"]["params"][0]["qa_value"] is None
     FakeConfig.aws_profile = ""
     FakeConfig.aws_region = ""

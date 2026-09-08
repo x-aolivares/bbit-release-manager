@@ -384,12 +384,14 @@ def test_pipelines_cache_distinguishes_branch_and_tag(tmp_path):
         assert calls == ["release"]  # 2do pega en el cache
         assert [p["id"] for p in client.pipelines("r1", tag="v1.0")] == ["p"]
         assert calls == ["release", "<<tag>>"]  # tag no colisiona con branch
+        assert [p["id"] for p in client.pipelines("r1", tag="v1.0")] == ["p"]
+        assert calls == ["release", "<<tag>>"]  # 2do tag pega en el cache
         rt = cache.get_rt("circleci_pipelines")
         assert rt is not None
         total = cache._fetchone(
             "SELECT COUNT(*) FROM request WHERE rt_id = ?", (rt["id"],)
         )[0]
-        assert total == 2  # una fila por branch y otra por tag, con hit en 2do
+        assert total == 3  # branch + lista full del proyecto + tag, con hit en 2do
     finally:
         client.close()
         cache.close()
