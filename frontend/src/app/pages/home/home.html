@@ -279,6 +279,15 @@
             Refrescar
             }
           </button>
+          @if (failedRepos().length > 0) {
+          <button class="bb-btn-secondary bb-btn-sm" (click)="retryFailed()" [disabled]="reposLoading()">
+            @if (reposLoading()) {
+            <span class="bb-spinner-inline"></span>
+            } @else {
+            Reintentar fallidos ({{ failedRepos().length }})
+            }
+          </button>
+          }
         </div>
         <div class="bb-table bb-table--repos"
              [style.--bb-cols]="'1.4fr 1fr 1fr 1.4fr' + prefixCols()">
@@ -298,12 +307,18 @@
                        [title]="repo.name">{{ repo.name }}</a>
                   </span>
             <span>
-                    @let sync = syncInfo(repo.behind);
-                    <span class="bb-dot {{ syncDot(sync.cls) }}"></span>
-                    <span class="bb-sync {{ sync.cls }}">{{ sync.label }}</span>
+                    @if (repo.error) {
+                      <span class="bb-sync bb-sync--danger" [title]="repo.error">falló</span>
+                    } @else {
+                      @let sync = syncInfo(repo.behind);
+                      <span class="bb-dot {{ syncDot(sync.cls) }}"></span>
+                      <span class="bb-sync {{ sync.cls }}">{{ sync.label }}</span>
+                    }
                   </span>
             <span>
-                    @if (repo.pr.exists && repo.pr.url) {
+                    @if (repo.error) {
+                      <span class="bb-muted" [title]="repo.error">falló</span>
+                    } @else if (repo.pr.exists && repo.pr.url) {
                       <a class="bb-link" [href]="repo.pr.url" target="_blank"
                          [title]="repo.pr.title">
                         PR #{{ repo.pr.url.split('pull-requests/')[1]?.split('/')[0] ?? 'abierto' }}
@@ -329,12 +344,19 @@
                     }
                   </span>
             <span>
-                    <a class="bb-link bb-mono" [href]="repo.branch_url" target="_blank"
-                       [title]="'Rama ' + origin">{{ repo.commit.slice(0, 8) }}</a>
+                    @if (repo.error) {
+                      <span class="bb-muted">—</span>
+                    } @else {
+                      <a class="bb-link bb-mono" [href]="repo.branch_url" target="_blank"
+                         [title]="'Rama ' + origin">{{ repo.commit.slice(0, 8) }}</a>
+                    }
                   </span>
             @for (p of prefixes(); track p) {
             <span class="bb-deploy-col">
-                      @let badge = envTagBadge(repo, p);
+                      @if (repo.error) {
+                        <span class="bb-muted">—</span>
+                      } @else {
+                        @let badge = envTagBadge(repo, p);
                       @if (badge) {
                         <a class="bb-link bb-mono bb-deploy-badge {{ badge.cls }}"
                            [href]="envTagHref(repo, p)" target="_blank"
@@ -354,6 +376,7 @@
                         </button>
                       } @else {
                         <span class="bb-muted">—</span>
+                      }
                       }
                     </span>
             }

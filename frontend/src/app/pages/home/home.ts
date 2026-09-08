@@ -49,6 +49,7 @@ interface ScanRepo {
   commit: string;
   behind: number;
   no_changes?: boolean;
+  error?: string | null;
   tags: TagRow[];
   pr: PrInfo;
   deploys: Record<string, DeployInfo | null>;
@@ -594,39 +595,59 @@ reportOpen = signal(false);
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   }
 
-  loadRepos() {
+  loadRepos(retryOnly = false) {
     if (!this.origin) return;
     this.reposLoading.set(true);
-    this.paramsLoading.set(true);
     this.error.set(null);
     this.creatingPr.set(null);
-    this.tableLoaded.set(true);
+    if (!retryOnly) {
+      this.paramsLoading.set(true);
+      this.tableLoaded.set(true);
+      this.params.set([]);
+      this.removed.set([]);
+      this.paramsLoaded.set(false);
+    }
     const startedAt = Date.now();
     const done = () => this.releaseBusy(startedAt, () => {
       this.reposLoading.set(false);
-      this.paramsLoading.set(false);
+      if (!retryOnly) {
+        this.paramsLoading.set(false);
+      }
     });
-    this.params.set([]);
-    this.removed.set([]);
-    this.paramsLoaded.set(false);
     const dest = this.projectsDest();
     const prefixes = this.prefixes().join(',');
     const exclude = this.blacklisted().join(',');
-    const force = this.forceCache() ? 1 : 0;
+    // El reintento consulta una vez (sin forzar cache) y solo los fallidos.
+    const force = retryOnly ? 0 : (this.forceCache() ? 1 : 0);
+    let url = `/api/flow?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}`;
+    if (retryOnly) {
+      const slugs = this.failedSlugs();
+      if (!slugs.length) {
+        done();
+        return;
+      }
+      url += `&repos=${encodeURIComponent(slugs.join(','))}`;
+    }
 
-    this.http.get<any>(`/api/flow?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}`).subscribe({
+    this.http.get<any>(url).subscribe({
       next: (r) => {
-        const projects: ScanProject[] = (r.projects ?? []).slice();
-        projects.sort((a, b) => a.slug.localeCompare(b.slug));
-        this.projects.set(projects);
+        if (!retryOnly) {
+          const projects: ScanProject[] = (r.projects ?? []).slice();
+          projects.sort((a, b) => a.slug.localeCompare(b.slug));
+          this.projects.set(projects);
 
-        const scan = r.scan ?? {};
-        this.ciConfigured.set(scan.ci_configured ?? true);
-        this.ciError.set(scan.ci_error ?? null);
-        this.stats.set(scan.stats ?? null);
-        this.repos.set(scan.repos ?? []);
-        if (!scan.repos?.length) {
-          this.error.set(scan.error ?? `Ningún repo contiene la rama '${this.origin}'.`);
+          const scan = r.scan ?? {};
+          this.ciConfigured.set(scan.ci_configured ?? true);
+          this.ciError.set(scan.ci_error ?? null);
+          this.stats.set(scan.stats ?? null);
+          this.repos.set(scan.repos ?? []);
+          if (!scan.repos?.length) {
+            this.error.set(scan.error ?? `Ningún repo contiene la rama '${this.origin}'.`);
+          }
+        } else {
+          // Reintento: reempleza solo las filas de los repos re-consultados.
+          const bySlug = new Map<string, ScanRepo>((r.scan?.repos ?? []).map((row: ScanRepo) => [row.slug, row]));
+          this.repos.update((current) => current.map((repo) => bySlug.get(repo.slug) ?? repo));
         }
 
         const diff = r.diff ?? {};
@@ -798,6 +819,19 @@ reportOpen = signal(false);
     if (behind <= 0) return { label: 'al día', cls: 'bb-sync--ok' };
     if (behind <= 4) return { label: `${behind} atrás`, cls: 'bb-sync--warn' };
     return { label: `${behind} atrás`, cls: 'bb-sync--danger' };
+  }
+
+  failedRepos(): ScanRepo[] {
+    return this.repos().filter((r) => !!r.error);
+  }
+
+  failedSlugs(): string[] {
+    return this.failedRepos().map((r) => r.slug);
+  }
+
+  retryFailed(): void {
+    if (!this.failedSlugs().length) return;
+    this.loadRepos(true);
   }
 
   syncDot(cls: string): string {

@@ -18,7 +18,7 @@ from typing import Callable
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRIES = 5
+MAX_RETRIES = 1
 RETRY_BASE_DELAY = 1.0
 
 API_BASE = "https://api.bitbucket.org/2.0"
@@ -187,14 +187,14 @@ class BitbucketClient:
                     delay = float(retry_after)
                 else:
                     delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                logger.warning(
-                    "Bitbucket 429 en %s (intento %d/%d): esperando %.1fs",
-                    path, attempt, MAX_RETRIES, delay,
-                )
                 last_error = BitbucketError(
-                    f"Bitbucket 429 en {path}: rate limit after {MAX_RETRIES} retries"
+                    f"Bitbucket 429 en {path}: rate limit alcanzado"
                 )
                 if attempt < MAX_RETRIES:
+                    logger.warning(
+                        "Bitbucket 429 en %s (intento %d/%d): esperando %.1fs",
+                        path, attempt, MAX_RETRIES, delay,
+                    )
                     time.sleep(delay)
                     continue
                 break

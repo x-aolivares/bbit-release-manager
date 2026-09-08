@@ -727,16 +727,47 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
     return item, ci_error
 
 
+def _failed_repo_item(repo, client, origin, exc):
+    """Item de scan para un repo cuya consulta falló.
+
+    Se muestra en la tabla como fallido (con error) en vez de re-lanzar y
+    romper el flow completo; el usuario reintenta solo estos repos a demanda.
+    """
+    return {
+        "slug": repo.slug,
+        "name": repo.name,
+        "workspace": repo.workspace,
+        "branch_url": client.branch_url(repo.slug, origin),
+        "commit": "",
+        "behind": None,
+        "no_changes": False,
+        "error": str(exc),
+        "tags": [],
+        "pr": {"exists": False},
+        "deploys": {},
+        "match_tag": {},
+        "ci_project": None,
+        "ci_vcs": None,
+    }
+
+
 def _scan_repos(client, ci, repos, origin, destination, clean, ctx=None):
     """Ejecuta el scan paralelo sobre una lista de repos (ya resueltos/filtrados).
 
-    Retorna (items, ci_error, stats).
+    Un repo cuya consulta falla se marca como fallido en la tabla y no rompe
+    el scan de los demás. Retorna (items, ci_error, stats).
     """
     ci_error = None
     workers = min(MAX_WORKERS, len(repos) or 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [ex.submit(_repo_scan, client, ci, repo, origin, destination, clean, ctx) for repo in repos]
-        results = [f.result() for f in futures]
+        results = []
+        for fut, repo in zip(futures, repos):
+            try:
+                results.append(fut.result())
+            except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+                log.warning("scan %s falló: %s", repo.slug, exc)
+                results.append((_failed_repo_item(repo, client, origin, exc), None))
 
     items = [r[0] for r in results]
     items.sort(key=lambda x: x["slug"])
@@ -765,6 +796,7 @@ def flow(
     exclude: str = "",
     mode: str = "diff",
     force: int = 0,
+    repos: str = "",
 ):
     """Endpoint unificado que resuelve repos UNA VEZ y computa scan + diff.
 
@@ -773,6 +805,10 @@ def flow(
     ciclo, y retorna ambos payloads en una sola respuesta. Elimina la
     duplicación de resolución de repos entre los anteriores /api/scan,
     /api/diff y /api/repos.
+
+    El parámetro `repos` (slugs separados por coma) limita el ESCAN a esos
+    repos (reintento de los fallidos); el diff se sigue computando con el
+    set completo para no alterar la clasificación.
     """
     data = _require_session()
     cfg_scan = Config()
@@ -782,6 +818,7 @@ def flow(
     proj = _project_prefixes(cfg_scan, project_prefixes)
     blocked = _exclude_repos(cfg_scan, exclude)
     mode = mode if mode == "all" else "diff"
+    only_repos = {s.strip() for s in repos.split(",") if s.strip()}
     cache = get_cache()
 
     if force:
@@ -789,7 +826,7 @@ def flow(
             "repositories": {"excluded": sorted(blocked), "prefixes": sorted(proj or [])}
         })
 
-    if not force:
+    if not force and not only_repos:
         cached_flow = cache.get_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode)
         if cached_flow is not None:
             enriched = _enrich_diff_ssm(cached_flow["diff"], cfg_diff)
@@ -801,6 +838,9 @@ def flow(
         proj, blocked,
     )
 
+    # Reintento a demanda: solo se re-escanan los repos fallidos pedidos.
+    scan_repos = repos if not only_repos else [r for r in repos if r.slug in only_repos]
+
     ci = _circleci()
     ci_configured = ci is not None
     ci_error = None
@@ -810,7 +850,7 @@ def flow(
     # Contexto compartido por este request: por repo, el PR ya resuelto y los
     # refs de origen/destino ya calculados, para no re-consultarlos en el diff.
     ctx: dict = {}
-    scan_items, scan_ci_error, stats = _scan_repos(data.client, ci, repos, origin, destination, deploy_prefixes, ctx)
+    scan_items, scan_ci_error, stats = _scan_repos(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx)
     if scan_ci_error:
         ci_error = ci_error or scan_ci_error
 
@@ -837,7 +877,8 @@ def flow(
         },
         "diff": diff_raw,
     }
-    cache.set_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode, result)
+    if not only_repos:
+        cache.set_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode, result)
     result["diff"] = _enrich_diff_ssm(result["diff"], cfg_diff)
     return result
 
@@ -1083,13 +1124,21 @@ def _compute_diff(
             if pr and pr.get("source_commit"):
                 origin_ref = pr["source_commit"]
             if not origin_ref:
-                origin_ref = client.commit_for_branch(repo.slug, origin) or origin
+                origin_ref = _ref_for(repo.slug, origin)
             entry["origin_ref"] = origin_ref
         dest_ref = entry.get("dest_ref") or ""
         if not dest_ref:
-            dest_ref = client.commit_for_branch(repo.slug, destination) or destination
+            dest_ref = _ref_for(repo.slug, destination)
             entry["dest_ref"] = dest_ref
         return origin_ref, dest_ref
+
+    def _ref_for(slug: str, branch: str) -> str:
+        """Commit de una rama; si falla, degrada al nombre de la rama (sin romper)."""
+        try:
+            return client.commit_for_branch(slug, branch) or branch
+        except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+            log.warning("commit_for_branch %s %s falló: %s", slug, branch, exc)
+            return branch
 
     def _resolve_master(client, repo) -> set:
         """Master params de un repo (cache o lectura completa)."""
@@ -1099,10 +1148,14 @@ def _compute_diff(
         entry = (ctx or {}).setdefault(repo.slug, {})
         dest_ref = entry.get("dest_ref") or ""
         if not dest_ref:
-            dest_ref = client.commit_for_branch(repo.slug, destination) or destination
+            dest_ref = _ref_for(repo.slug, destination)
             entry["dest_ref"] = dest_ref
-        params = _read_files_params(client, repo.slug, dest_ref,
-                                    client.list_files(repo.slug, dest_ref), prefixes)
+        try:
+            params = _read_files_params(client, repo.slug, dest_ref,
+                                        client.list_files(repo.slug, dest_ref), prefixes)
+        except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+            log.warning("master params %s falló: %s", repo.slug, exc)
+            return set()
         if params:
             cache.set_master(repo.slug, destination, params)
         return params
@@ -1115,11 +1168,15 @@ def _compute_diff(
     if mode == "all":
         def _scan_all(client, repo):
             slug = repo.slug
-            origin_ref, dest_ref = _repo_refs(client, repo)
-            origin_params = _read_files_params(client, slug, origin_ref,
-                                               client.list_files(slug, origin_ref), prefixes)
-            dest_params = _read_files_params(client, slug, dest_ref,
-                                             client.list_files(slug, dest_ref), prefixes)
+            try:
+                origin_ref, dest_ref = _repo_refs(client, repo)
+                origin_params = _read_files_params(client, slug, origin_ref,
+                                                   client.list_files(slug, origin_ref), prefixes)
+                dest_params = _read_files_params(client, slug, dest_ref,
+                                                 client.list_files(slug, dest_ref), prefixes)
+            except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+                log.warning("scan all %s falló: %s", slug, exc)
+                return slug, set(), set()
             if dest_params:
                 cache.set_master(slug, destination, dest_params)
             return slug, origin_params, dest_params
@@ -1133,7 +1190,11 @@ def _compute_diff(
                     release_by_repo[slug] = {p for p, _ in origin_params}
     else:
         def _run_repo_diff(client, repo):
-            return repo.slug, client.diff(repo.slug, destination, origin)
+            try:
+                return repo.slug, client.diff(repo.slug, destination, origin)
+            except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+                log.warning("diff %s falló: %s", repo.slug, exc)
+                return repo.slug, None
 
         # Master params de TODOS los repos (cache o lectura completa).
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(master_repos) or 1)) as ex:
@@ -1147,6 +1208,8 @@ def _compute_diff(
             futures = {ex.submit(_run_repo_diff, client, r): r for r in branch_repos}
             for fut, repo in futures.items():
                 slug, d = fut.result()
+                if d is None:
+                    continue
                 pending = [f for f in d.files if _suggests_ssm(f, prefixes)]
                 if not pending:
                     continue
@@ -1157,8 +1220,12 @@ def _compute_diff(
         # Etapa B: raws + extracción por archivo (en paralelo).
         def _file_params(client, cand):
             slug, path, origin_ref, dest_ref = cand
-            raw_origin = client.raw_file(slug, origin_ref, path)
-            raw_dest = client.raw_file(slug, dest_ref, path)
+            try:
+                raw_origin = client.raw_file(slug, origin_ref, path)
+                raw_dest = client.raw_file(slug, dest_ref, path)
+            except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+                log.warning("raw %s %s falló: %s", slug, path, exc)
+                return set()
             origin_params = set(extract_ssm_params([raw_origin], prefixes)) if raw_origin else set()
             return origin_params
 

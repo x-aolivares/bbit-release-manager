@@ -173,6 +173,26 @@ def test_auth_error():
             client.close()
 
 
+def test_rate_limit_429_no_retry(monkeypatch):
+    """Con MAX_RETRIES=1 un 429 falla al primer intento (sin backoff)."""
+    calls = 0
+
+    def notif(request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(429, headers={"Retry-After": "0.5"}, json={"message": "rate limit"})
+
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/refs/tags"): notif,
+    }))
+    with pytest.raises(BitbucketError, match="rate limit alcanzado"):
+        try:
+            client.tags_on_commit("r1", "abc")
+        finally:
+            client.close()
+    assert calls == 1
+
+
 @pytest.mark.parametrize("ws,tok", [("", "tok"), ("ws", "")])
 def test_requires_workspace_and_token(ws, tok):
     with pytest.raises(ValueError):
