@@ -2019,6 +2019,66 @@ def test_clear_cache_con_sesion_filtra_solo_esa():
     assert "release/otra" in [r[0] for r in kept]
 
 
+def test_clear_cache_session_vuelve_a_consultar_apis(monkeypatch):
+    """Eliminar una sesión borra el cache del flow (mismo origen/destino):
+    re-consultar vuelve a las APIs aunque los filtros no coincidan (BBIT-20)."""
+    branch_calls: list[str] = []
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            branch_calls.append(origin)
+            return [SimpleNamespace(slug="myapp1", name="My App 1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def commits_behind(self, repo, branch, base):
+            return 2
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def raw_file(self, repo, ref, path):
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/flow", params={"origin": "release/x", "prefixes": "uat",
+                                           "project_prefixes": "my", "exclude": "billing"}).json()
+    assert body["scan"]["stats"]["repos"] == 1
+    assert branch_calls == ["release/x"]
+
+    # borrar la sesión por su pareja de ramas (sin repetir los filtros con los
+    # que se cacheó el flow): la pareja entera debe invalidarse igual (BBIT-20)
+    resp = client.request("DELETE", "/api/cache", json={
+        "sessions": [{"origin": "release/x", "destination": "master"}],
+    })
+    assert resp.status_code == 200
+
+    body = client.get("/api/flow", params={"origin": "release/x", "prefixes": "uat",
+                                           "project_prefixes": "my", "exclude": "billing"}).json()
+    assert body["scan"]["stats"]["repos"] == 1
+    assert branch_calls == ["release/x", "release/x"]
+
+
 def test_diff_enrich_aws_ok_and_missing(monkeypatch):
     """Con sesión AWS (AwsSession mockeado) el diff marca ok/missing."""
     FakeConfig.aws_profile = "prof"

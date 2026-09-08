@@ -29,9 +29,6 @@
             <div class="bb-session-name bb-mono">{{ session.name }}</div>
             <div class="bb-session-meta">
               <span class="bb-session-updated">{{ formatRelativeTime(session.updatedAt) }}</span>
-              @if (session.forceCache) {
-                <span class="bb-session-badge bb-session-badge--force">force</span>
-              }
               @if (session.prefixes.length > 0) {
                 <span class="bb-session-badge">{{ session.prefixes.join(', ') }}</span>
               }

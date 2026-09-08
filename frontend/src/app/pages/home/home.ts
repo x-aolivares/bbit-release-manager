@@ -446,7 +446,6 @@ reportOpen = signal(false);
       prefixes: this.prefixes(),
       projectPrefixes: this.projectPrefixes(),
       blacklisted: this.blacklisted(),
-      forceCache: this.forceCache(),
     });
     this.currentSessionId.set(session.id);
     this.refreshSessions();
@@ -492,7 +491,10 @@ reportOpen = signal(false);
     this.prefixes.set(session.prefixes);
     this.projectPrefixes.set(session.projectPrefixes);
     this.blacklisted.set(session.blacklisted);
-    this.forceCache.set(session.forceCache);
+    // "Forzar consultas" es un toggle transitorio de UNA consulta: no se
+    // persiste en la sesión ni se restaura al recargar (ver BBIT-20), para
+    // que un reload nunca dispare de nuevo el barrido completo a las APIs.
+    this.forceCache.set(false);
     this.currentSessionId.set(session.id);
     this.loadRepos();
   }

@@ -448,11 +448,16 @@ def test_invalidate_matching_repositories(tmp_path):
 
 
 def test_invalidate_does_not_match_different_repositories(tmp_path):
-    """Invalidar con otro bloque repositories no borra (config distinta)."""
+    """Invalidar borra la pareja de ramas incluso con otro bloque repositories.
+
+    Una sesión de consulta se identifica por su par (origen, destino): al
+    eliminar la sesión o forzar consultas se re-consultan las APIs sin
+    importar con qué prefijos/exclusiones se cacheó (BBIT-20).
+    """
     cache = _make_cache(tmp_path)
     cache.set_scan("release/x", "master", ["uat"], {"billing"}, {"origin": "x"})
     cache.invalidate("release/x", "master", _invoke_details(None, None))
-    assert cache.get_scan("release/x", "master", ["uat"], {"billing"}) == {"origin": "x"}
+    assert cache.get_scan("release/x", "master", ["uat"], {"billing"}) is None
 
 
 def test_invalidate_scan_and_branch(tmp_path):

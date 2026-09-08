@@ -8,7 +8,6 @@ export interface SessionConfig {
   prefixes: string[];
   projectPrefixes: string[];
   blacklisted: string[];
-  forceCache: boolean;
   updatedAt: number;
 }
 

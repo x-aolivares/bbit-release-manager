@@ -746,37 +746,27 @@ class ReleaseCache:
     # -- invalidación -----------------------------------------------------------
 
     def invalidate(self, source: str, target: str, details: dict) -> None:
-        """Borra sessions y requests cuya config base coincide.
+        """Borra las sesiones y requests de una pareja de ramas.
 
-        Se compara ``is_source``/``is_target`` y el bloque ``repositories``
-        (excluded/prefixes) del ``is_details`` (se ignoran los extras tipo
-        deploy/ssm para que un force de scan limpie tambien el diff de la
-        misma pareja de ramas).
+        Una sesión de consulta se identifica por su par (origen, destino):
+        al forzar consultas o al eliminar la sesión se debe re-consultar las
+        APIs, sin importar con qué prefijos/exclusiones/filtros se cacheó el
+        primer día. ``details`` se conserva por retrocompatibilidad y se ignora.
         """
-        base = details.get("repositories", {})
-        wanted_excluded = set(base.get("excluded", []) or [])
-        wanted_prefixes = set(base.get("prefixes", []) or [])
         rows = self._fetchall(
-            "SELECT is_id, is_details FROM init_sesion "
-            "WHERE is_source = ? AND is_target = ?",
-            (source, target),
+            "SELECT is_id FROM init_sesion "
+            "WHERE is_source = ? AND is_target = ? "
+            "AND NOT (is_source = ? AND is_target = ?)",
+            (source, target, CONN_SOURCE, CONN_TARGET),
         )
-        matched_ids = []
-        for is_id, fp in rows:
-            try:
-                parsed = json.loads(fp)
-            except (ValueError, TypeError):
-                continue
-            repos = parsed.get("config", {}).get("repositories", {})
-            if set(repos.get("excluded", []) or []) == wanted_excluded and \
-               set(repos.get("prefixes", []) or []) == wanted_prefixes:
-                matched_ids.append(is_id)
-        for is_id in matched_ids:
-            self._execute("DELETE FROM request WHERE is_id = ?", (is_id,))
-            self._execute("DELETE FROM init_sesion WHERE is_id = ?", (is_id,))
+        ids = [row[0] for row in rows]
+        with self._lock:
+            for is_id in ids:
+                self._execute("DELETE FROM request WHERE is_id = ?", (is_id,))
+                self._execute("DELETE FROM init_sesion WHERE is_id = ?", (is_id,))
         log.info(
             "cache invalidate %s->%s: %d sesion(es) y sus requests borrados de SQLite",
-            source, target, len(matched_ids),
+            source, target, len(ids),
         )
 
     def invalidate_all(self) -> None:
