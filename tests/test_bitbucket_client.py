@@ -238,11 +238,10 @@ def test_commits_behind_fallback_paginates_without_size():
 
     def handler(request):
         hits["n"] += 1
-        if int(request.url.params.get("pagelen", 100)) == 1:
-            return httpx.Response(200, json={"values": [], "size": None})
-        if hits["n"] == 2:
+        if hits["n"] == 1:
             return httpx.Response(200, json={
                 "values": [{"hash": f"c{i}"} for i in range(3)],
+                "size": None,
                 "next": "https://api.bitbucket.org/2.0/repositories/ws/r1/commits/master?exclude=release&pagelen=100&page=2",
             })
         return httpx.Response(200, json={"values": [{"hash": "c3"}]})
@@ -255,7 +254,7 @@ def test_commits_behind_fallback_paginates_without_size():
     finally:
         client.close()
     assert behind == 4
-    assert hits["n"] == 3
+    assert hits["n"] == 2
 
 
 def test_tags_on_commit():

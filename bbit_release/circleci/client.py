@@ -164,7 +164,8 @@ class CircleCiClient:
 
         El endpoint v2 solo filtra por nombre de rama (`branch`); los pipilines
         de tag traen ``vcs.branch=null`` y ``vcs.tag=<tag>``, asi que para tags
-        se pagina todo el proyecto y se filtra client-side por ``vcs.tag``.
+        se pagina todo el proyecto UNA VEZ (cacheada) y se filtra client-side
+        por ``vcs.tag``, sin paginar el proyecto por cada tag.
         """
         params: dict = {"limit": 100}
         key = ""
@@ -178,11 +179,29 @@ class CircleCiClient:
             cached = self._cache.get_circleci_pipelines(self.project_slug(repo), key, kind)
             if cached is not None:
                 return cached
-        items = self._paginate(f"/project/{self.project_slug(repo)}/pipeline", params)
         if tag:
-            items = [p for p in items if (p.get("vcs") or {}).get("tag") == tag]
+            items = [p for p in self._project_pipelines(repo)
+                     if (p.get("vcs") or {}).get("tag") == tag]
+        else:
+            items = self._paginate(f"/project/{self.project_slug(repo)}/pipeline", params)
         if self._cache is not None and key:
             self._cache.set_circleci_pipelines(self.project_slug(repo), key, kind, items)
+        return items
+
+    def _project_pipelines(self, repo: str) -> list[dict]:
+        """Lista completa de pipelines de un proyecto (todas las páginas).
+
+        Se pagina una sola vez por proyecto y se cachea con clave vacía para
+        ser compartida entre todos los lookups por tag en caché fría.
+        """
+        slug = self.project_slug(repo)
+        if self._cache is not None:
+            cached = self._cache.get_circleci_pipelines(slug, "", "")
+            if cached is not None:
+                return cached
+        items = self._paginate(f"/project/{slug}/pipeline", {"limit": 100})
+        if self._cache is not None:
+            self._cache.set_circleci_pipelines(slug, "", "", items)
         return items
 
     def workflows(self, pipeline_id: str) -> list[dict]:

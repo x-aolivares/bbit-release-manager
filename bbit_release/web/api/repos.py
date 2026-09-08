@@ -624,7 +624,7 @@ def _tag_match(prefix: str) -> re.Pattern:
     return re.compile(rf"^{re.escape(prefix)}-(\d+)$", re.IGNORECASE)
 
 
-def _repo_scan(client, ci, repo, origin, destination, clean):
+def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
     """Payload de un repo (etapa paralela de /scan).
 
     Reusa el head de la rama origen desde el PR cuando existe
@@ -644,6 +644,9 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
         commit = pr["source_commit"]
     else:
         commit = client.commit_for_branch(repo.slug, origin, resolved=resolved)
+    if ctx is not None:
+        ctx.setdefault(repo.slug, {})["pr"] = pr
+        ctx.setdefault(repo.slug, {})["origin_ref"] = commit
     if not pr:
         no_changes = not client.has_commits_ahead(repo.slug, origin, destination)
     else:
@@ -724,7 +727,7 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
     return item, ci_error
 
 
-def _scan_repos(client, ci, repos, origin, destination, clean):
+def _scan_repos(client, ci, repos, origin, destination, clean, ctx=None):
     """Ejecuta el scan paralelo sobre una lista de repos (ya resueltos/filtrados).
 
     Retorna (items, ci_error, stats).
@@ -732,7 +735,7 @@ def _scan_repos(client, ci, repos, origin, destination, clean):
     ci_error = None
     workers = min(MAX_WORKERS, len(repos) or 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [ex.submit(_repo_scan, client, ci, repo, origin, destination, clean) for repo in repos]
+        futures = [ex.submit(_repo_scan, client, ci, repo, origin, destination, clean, ctx) for repo in repos]
         results = [f.result() for f in futures]
 
     items = [r[0] for r in results]
@@ -804,7 +807,10 @@ def flow(
     if ci is None and cfg_scan.circleci_token == "":
         ci_error = "Sin CIRCLECI_TOKEN configurado."
 
-    scan_items, scan_ci_error, stats = _scan_repos(data.client, ci, repos, origin, destination, deploy_prefixes)
+    # Contexto compartido por este request: por repo, el PR ya resuelto y los
+    # refs de origen/destino ya calculados, para no re-consultarlos en el diff.
+    ctx: dict = {}
+    scan_items, scan_ci_error, stats = _scan_repos(data.client, ci, repos, origin, destination, deploy_prefixes, ctx)
     if scan_ci_error:
         ci_error = ci_error or scan_ci_error
 
@@ -814,7 +820,7 @@ def flow(
     ]
 
     diff_raw = _compute_diff(
-        data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache,
+        data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
     )
     diff_enriched = _enrich_diff_ssm(diff_raw, cfg_diff)
 
@@ -1051,6 +1057,7 @@ def _compute_diff(
     blocked: set[str],
     prefixes: list[str],
     cache,
+    ctx: dict | None = None,
 ) -> dict:
     """Computa el payload del diff (sin valores SSM; esos van por overlay)."""
     master_repos = _apply_filters(_branch_repos_cached(client, origin, destination, proj, blocked), proj, blocked)
@@ -1058,17 +1065,30 @@ def _compute_diff(
     by_slug = {r.slug: r for r in branch_repos}
 
     def _repo_refs(client, repo):
-        """Refs para leer raws: head de origen (del PR si existe) y de destino."""
-        try:
-            pr = client.find_pr(repo.slug, origin, destination)
-        except bb.BitbucketError:
-            pr = None
-        origin_ref = ""
-        if pr and pr.get("source_commit"):
-            origin_ref = pr["source_commit"]
+        """Refs para leer raws: head de origen (del PR si existe) y de destino.
+
+        Reutiliza el PR y los refs que el scan ya resolvió en este mismo
+        request (ctx), evitando repetir find_pr y commit_for_branch.
+        """
+        entry = (ctx or {}).setdefault(repo.slug, {})
+        if "pr" not in entry:
+            try:
+                pr = client.find_pr(repo.slug, origin, destination)
+            except bb.BitbucketError:
+                pr = None
+            entry["pr"] = pr
+        pr = entry["pr"]
+        origin_ref = entry.get("origin_ref") or ""
         if not origin_ref:
-            origin_ref = client.commit_for_branch(repo.slug, origin) or origin
-        dest_ref = client.commit_for_branch(repo.slug, destination) or destination
+            if pr and pr.get("source_commit"):
+                origin_ref = pr["source_commit"]
+            if not origin_ref:
+                origin_ref = client.commit_for_branch(repo.slug, origin) or origin
+            entry["origin_ref"] = origin_ref
+        dest_ref = entry.get("dest_ref") or ""
+        if not dest_ref:
+            dest_ref = client.commit_for_branch(repo.slug, destination) or destination
+            entry["dest_ref"] = dest_ref
         return origin_ref, dest_ref
 
     def _resolve_master(client, repo) -> set:
@@ -1076,7 +1096,11 @@ def _compute_diff(
         cached_params = cache.get_master(repo.slug, destination)
         if cached_params is not None:
             return cached_params
-        dest_ref = client.commit_for_branch(repo.slug, destination) or destination
+        entry = (ctx or {}).setdefault(repo.slug, {})
+        dest_ref = entry.get("dest_ref") or ""
+        if not dest_ref:
+            dest_ref = client.commit_for_branch(repo.slug, destination) or destination
+            entry["dest_ref"] = dest_ref
         params = _read_files_params(client, repo.slug, dest_ref,
                                     client.list_files(repo.slug, dest_ref), prefixes)
         if params:
