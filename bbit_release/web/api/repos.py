@@ -598,50 +598,7 @@ def destroy(delete_credentials: bool = False):
     return {"ok": True, "delete_credentials": deleted}
 
 
-@router.get("/repos")
-def list_repos(origin: str = "", project_prefixes: str = "", force: int = 0, exclude: str = ""):
-    sid = active_session_id()
-    if not sid:
-        return {"items": [], "configured": False, "error": "No hay sesión activa. Conectá desde la web."}
-    data = get_session(sid)
-    if not data:
-        return {"items": [], "configured": False, "error": "Sesión inválida."}
-    prefs = _project_prefixes(Config(), project_prefixes)
-    blocked = _exclude_repos(Config(), exclude)
-    cache = get_cache()
 
-    if not force:
-        cached = cache.get_repos(origin, "all", prefs, blocked)
-        if cached is not None:
-            repos = [r for r in cached if r["slug"] not in blocked]
-            return {
-                "items": repos,
-                "configured": True, "error": None, "cached": True,
-            }
-
-    if origin:
-        base = _all_repos_cached(data.client, prefs, blocked)
-        if base is not None:
-            repos = data.client.repos_with_branch(origin, prefixes=prefs, repos=base)
-        else:
-            repos = data.client.repos_with_branch(origin, prefixes=prefs)
-    else:
-        repos = _all_repos_cached(data.client, prefs, blocked) or data.client.list_repos(prefixes=prefs)
-    items = [
-        {"slug": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch}
-        for r in repos
-    ]
-    cache.set_repos(origin, "all", prefs, blocked, items)
-    repos = [r for r in repos if r.slug.lower() not in blocked]
-    return {
-        "items": [
-            {"slug": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch}
-            for r in repos
-        ],
-        "configured": True,
-        "error": None,
-        "cached": False,
-    }
 
 
 def _serialize_pr(pr: dict | None) -> dict:
@@ -767,37 +724,22 @@ def _repo_scan(client, ci, repo, origin, destination, clean):
     return item, ci_error
 
 
-@router.get("/scan")
-def scan(origin: str, destination: str = "master", prefixes: str = "", project_prefixes: str = "", exclude: str = "", force: int = 0):
-    data = _require_session()
-    cfg = Config()
-    clean = [p.strip() for p in prefixes.split(",") if p.strip()] or cfg.deploy_prefixes
-    proj = _project_prefixes(cfg, project_prefixes)
-    blocked = _exclude_repos(cfg, exclude)
-    cache = get_cache()
+def _scan_repos(client, ci, repos, origin, destination, clean):
+    """Ejecuta el scan paralelo sobre una lista de repos (ya resueltos/filtrados).
 
-    if force:
-        cache.invalidate(origin, destination, {"repositories": {"excluded": sorted(blocked), "prefixes": sorted(proj or [])}})
-    elif cache.get_scan(origin, destination, proj, blocked, clean) is not None:
-        return cache.get_scan(origin, destination, proj, blocked, clean)
-
-    ci = _circleci()
-    ci_configured = ci is not None
+    Retorna (items, ci_error, stats).
+    """
     ci_error = None
-    if ci is None and cfg.circleci_token == "":
-        ci_error = "Sin CIRCLECI_TOKEN configurado."
-
-    repos = _apply_filters(_branch_repos_cached(data.client, origin, destination, proj, blocked), proj, blocked)
     workers = min(MAX_WORKERS, len(repos) or 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [ex.submit(_repo_scan, data.client, ci, repo, origin, destination, clean) for repo in repos]
+        futures = [ex.submit(_repo_scan, client, ci, repo, origin, destination, clean) for repo in repos]
         results = [f.result() for f in futures]
 
     items = [r[0] for r in results]
     items.sort(key=lambda x: x["slug"])
     first_ci_error = next((r[1] for r in results if r[1]), None)
     if first_ci_error:
-        ci_error = ci_error or first_ci_error
+        ci_error = first_ci_error
 
     with_pr = sum(1 for it in items if it["pr"].get("exists"))
     synced = sum(1 for it in items if it["behind"] == 0)
@@ -808,17 +750,89 @@ def scan(origin: str, destination: str = "master", prefixes: str = "", project_p
         "synced": synced,
         "prod": prod,
     }
+    return items, ci_error, stats
+
+
+@router.get("/flow")
+def flow(
+    origin: str,
+    destination: str = "master",
+    prefixes: str = "",
+    project_prefixes: str = "",
+    exclude: str = "",
+    mode: str = "diff",
+    force: int = 0,
+):
+    """Endpoint unificado que resuelve repos UNA VEZ y computa scan + diff.
+
+    Resuelve la lista de repos con la rama origen una sola vez, ejecuta el
+    scan (PR, commits, tags, deploys) y el diff (params SSM) en el mismo
+    ciclo, y retorna ambos payloads en una sola respuesta. Elimina la
+    duplicación de resolución de repos entre los anteriores /api/scan,
+    /api/diff y /api/repos.
+    """
+    data = _require_session()
+    cfg_scan = Config()
+    cfg_diff = _session_config(data)
+    deploy_prefixes = [p.strip() for p in prefixes.split(",") if p.strip()] or cfg_scan.deploy_prefixes
+    ssm_prefixes = cfg_diff.ssm_prefixes
+    proj = _project_prefixes(cfg_scan, project_prefixes)
+    blocked = _exclude_repos(cfg_scan, exclude)
+    mode = mode if mode == "all" else "diff"
+    cache = get_cache()
+
+    if force:
+        cache.invalidate(origin, destination, {
+            "repositories": {"excluded": sorted(blocked), "prefixes": sorted(proj or [])}
+        })
+
+    if not force:
+        cached_flow = cache.get_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode)
+        if cached_flow is not None:
+            enriched = _enrich_diff_ssm(cached_flow["diff"], cfg_diff)
+            cached_flow["diff"] = enriched
+            return cached_flow
+
+    repos = _apply_filters(
+        _branch_repos_cached(data.client, origin, destination, proj, blocked),
+        proj, blocked,
+    )
+
+    ci = _circleci()
+    ci_configured = ci is not None
+    ci_error = None
+    if ci is None and cfg_scan.circleci_token == "":
+        ci_error = "Sin CIRCLECI_TOKEN configurado."
+
+    scan_items, scan_ci_error, stats = _scan_repos(data.client, ci, repos, origin, destination, deploy_prefixes)
+    if scan_ci_error:
+        ci_error = ci_error or scan_ci_error
+
+    projects = [
+        {"slug": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch}
+        for r in repos
+    ]
+
+    diff_raw = _compute_diff(
+        data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache,
+    )
+    diff_enriched = _enrich_diff_ssm(diff_raw, cfg_diff)
 
     result = {
         "origin": origin,
         "destination": destination,
-        "prefixes": clean,
-        "ci_configured": ci_configured,
-        "ci_error": ci_error,
-        "stats": stats,
-        "repos": items,
+        "projects": projects,
+        "scan": {
+            "prefixes": deploy_prefixes,
+            "ci_configured": ci_configured,
+            "ci_error": ci_error,
+            "stats": stats,
+            "repos": scan_items,
+        },
+        "diff": diff_raw,
     }
-    cache.set_scan(origin, destination, proj, blocked, result, clean)
+    cache.set_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode, result)
+    result["diff"] = _enrich_diff_ssm(result["diff"], cfg_diff)
     return result
 
 
@@ -1025,41 +1039,7 @@ def circleci_config(origin: str, prefixes: str = "", repo: str = "", project_pre
     return {"ok": True, "origin": origin, "envs": envs, "items": items}
 
 
-@router.get("/diff")
-def diff(origin: str, destination: str = "master", mode: str = "diff", project_prefixes: str = "", exclude: str = "", force: int = 0):
-    """Parámetros SSM de la iniciativa origin → destination.
 
-    `mode=diff` (default): analiza solo los archivos tocados por el diff.
-    `mode=all`: recorre todos los archivos del repo en ambos refs (más lento).
-
-    Clasifica cada parámetro en `nuevo` (no existe en ninguna rama destino) o
-    `reutilizado` (ya productivo en destino de otro repo → revisar SSM), y
-    lista los `removed` (solo en rama destino, no implica eliminarlos).
-
-    El estado `reutilizado` se calcula contra el master de TODOS los repos del
-    proyecto (aunque no traigan la rama origen), para que un repo totalmente
-    nuevo que reutiliza parámetros ya productivos no los marque como `nuevo`.
-    """
-    data = _require_session()
-    cfg = _session_config(data)
-    prefixes = cfg.ssm_prefixes
-    proj = _project_prefixes(cfg, project_prefixes)
-    blocked = _exclude_repos(cfg, exclude)
-    mode = mode if mode == "all" else "diff"
-    cache = get_cache()
-
-    if force:
-        cache.invalidate(origin, destination, {"repositories": {"excluded": sorted(blocked), "prefixes": sorted(proj or [])}})
-        result = None
-    else:
-        result = cache.get_diff(origin, destination, proj, blocked, ssm_prefixes=prefixes)
-
-    if result is None:
-        result = _compute_diff(data.client, origin, destination, mode, proj, blocked, prefixes, cache)
-        cache.set_diff(origin, destination, proj, blocked, result, ssm_prefixes=prefixes)
-
-    enriched = _enrich_diff_ssm(result, cfg)
-    return enriched
 
 
 def _compute_diff(
