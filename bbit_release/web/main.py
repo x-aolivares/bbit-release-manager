@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
 from .._version import read_version
-from .api import health, repos
+from .api import health, repos, ssm
 
 FRONTEND_DIST = (
     Path(__file__).resolve().parent.parent.parent / "frontend" / "dist" / "browser"
@@ -69,6 +69,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(health.router)
     app.include_router(repos.router)
+    app.include_router(ssm.router)
     if FRONTEND_DIST.is_dir():
         _serve_spa(app)
     else:

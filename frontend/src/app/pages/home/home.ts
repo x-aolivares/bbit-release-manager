@@ -1,4 +1,5 @@
-import { Component, HostListener, inject, signal, effect, OnInit } from '@angular/core';
+import { ActivatedRoute, Router } from '@angular/router';
+import { Component, HostListener, inject, signal, effect, computed, OnInit } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { IonHeader } from '@ionic/angular/ion-header';
@@ -79,6 +80,8 @@ interface SsmParam {
   qa_value: string | null;
   aws_status: 'ok' | 'missing' | 'skipped';
   repos: string[];
+  type?: string;
+  env_values?: Record<string, string>;
 }
 
 interface RemovedParam {
@@ -106,6 +109,15 @@ interface ConfigField {
   label: string;
   secret: boolean;
   placeholder: string;
+  checkbox?: boolean;
+  dependsOn?: string;
+}
+
+interface AwsEnvironment {
+  name: string;
+  region: string;
+  localstack: boolean;
+  endpoint_url: string;
 }
 
 @Component({
@@ -125,6 +137,7 @@ interface ConfigField {
 export class Home implements OnInit {
   private http = inject(HttpClient);
   private sessionHistory = inject(SessionHistoryService);
+  private router = inject(Router);
 
   health = signal<Health | null>(null);
   connected = signal(false);
@@ -187,6 +200,11 @@ export class Home implements OnInit {
   savingService = signal<string | null>(null);
   configMessage = signal<{ kind: 'ok' | 'error'; text: string } | null>(null);
   userMenuPosition = signal<{ top: number; right: number }>({ top: 0, right: 0 });
+  awsEnvironments = signal<AwsEnvironment[]>([]);
+  awsEnvironmentLoading = signal(false);
+  savingAwsEnvironments = signal(false);
+  awsNewEnv = '';
+  awsNewRegion = '';
 
   readonly serviceKeys = ['bitbucket', 'circleci', 'aws'];
   readonly serviceFields: Record<string, ConfigField[]> = {
@@ -203,13 +221,12 @@ export class Home implements OnInit {
     ],
     aws: [
       { key: 'profile', label: 'AWS_PROFILE', secret: false, placeholder: 'bbit-release' },
-      { key: 'region', label: 'AWS_REGION', secret: false, placeholder: 'us-east-1' },
     ],
   };
   configForm: Record<string, Record<string, string>> = {
     bitbucket: { url: '', workspace: '', username: '', token: '' },
     circleci: { token: '', vcs: '', org: '' },
-    aws: { profile: '', region: '' },
+    aws: { profile: '' },
   };
 
   serviceLabel(svc: string): string {
@@ -266,6 +283,77 @@ export class Home implements OnInit {
     this.configMessage.set(null);
     this.configOpen.set(true);
     this.refreshClient();
+    this.loadAwsEnvironments();
+  }
+
+  awsEnvironmentRows = computed<{ name: string; region: string; localstack: boolean; endpoint_url: string }[]>(
+    () => [...this.awsEnvironments()]
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  );
+
+  private loadAwsEnvironments(): void {
+    this.awsEnvironmentLoading.set(true);
+    this.http.get<any>('/api/ssm/environments').subscribe({
+      next: (r) => this.awsEnvironments.set(r.environments ?? []),
+      error: () => this.awsEnvironments.set([]),
+      complete: () => this.awsEnvironmentLoading.set(false),
+    });
+  }
+
+  setAwsRegion(name: string, value: string): void {
+    this.awsEnvironments.update((list) =>
+      list.map((e) => (e.name === name ? { ...e, region: value } : e)),
+    );
+  }
+
+  setAwsLocalstack(name: string, checked: boolean): void {
+    this.awsEnvironments.update((list) =>
+      list.map((e) => (e.name === name ? { ...e, localstack: checked } : e)),
+    );
+  }
+
+  setAwsEndpoint(name: string, value: string): void {
+    this.awsEnvironments.update((list) =>
+      list.map((e) => (e.name === name ? { ...e, endpoint_url: value } : e)),
+    );
+  }
+
+  addAwsEnvironment(): void {
+    const env = (this.awsNewEnv || '').trim();
+    if (!env) return;
+    const region = (this.awsNewRegion || '').trim();
+    this.awsEnvironments.update((list) => {
+      if (list.some((e) => e.name === env)) {
+        return list.map((e) => (e.name === env ? { ...e, region } : e));
+      }
+      return [...list, { name: env, region, localstack: false, endpoint_url: '' }];
+    });
+    this.awsNewEnv = '';
+    this.awsNewRegion = '';
+  }
+
+  saveAwsEnvironments(): void {
+    this.savingAwsEnvironments.set(true);
+    this.configMessage.set(null);
+    const environments = this.awsEnvironmentRows()
+      .filter((e) => (e.name || '').trim())
+      .map((e) => ({
+        name: e.name.trim(),
+        region: (e.region || '').trim(),
+        localstack: e.localstack,
+        endpoint_url: (e.endpoint_url || '').trim(),
+      }));
+    this.http.patch<any>('/api/ssm/environments', { environments }).subscribe({
+      next: () => {
+        this.configMessage.set({ kind: 'ok', text: 'Ambientes y regiones guardados.' });
+        this.loadAwsEnvironments();
+      },
+      error: (e) => this.configMessage.set({
+        kind: 'error',
+        text: e.error?.detail ?? e.error?.error ?? 'No se pudieron guardar los ambientes.',
+      }),
+      complete: () => this.savingAwsEnvironments.set(false),
+    });
   }
 
   private refreshClient(): void {
@@ -276,7 +364,13 @@ export class Home implements OnInit {
         const auth = r.auth ?? {};
         for (const svc of this.serviceKeys) {
           const vals = auth[svc] ?? {};
-          this.configForm[svc] = { ...this.configForm[svc], ...vals };
+          if (svc === 'aws') {
+            // el rest de AWS (región/endpoint/LocalStack) vive por ambiente
+            // en la tabla de ambientes; acá solo el profile.
+            this.configForm[svc] = { ...this.configForm[svc], profile: (vals['profile'] ?? '').trim() };
+          } else {
+            this.configForm[svc] = { ...this.configForm[svc], ...vals };
+          }
         }
       },
     });
@@ -286,6 +380,20 @@ export class Home implements OnInit {
     this.savingService.set(service);
     this.configMessage.set(null);
     const body: Record<string, string> = { ...this.configForm[service] };
+
+    // Para AWS: enviar endpoint/region del primer ambiente docker para la
+    // validación STS, ya que el form solo expone el profile.
+    if (service === 'aws') {
+      const dockerEnv = this.awsEnvironmentRows().find(
+        (e) => e.localstack && e.endpoint_url,
+      );
+      if (dockerEnv) {
+        body['endpoint_url'] = dockerEnv.endpoint_url;
+        body['localstack'] = '1';
+        body['region'] = dockerEnv.region;
+      }
+    }
+
     this.http.post<any>(`/api/auth/${service}`, body).subscribe({
       next: (r) => {
         if (r.ok) {
@@ -304,6 +412,10 @@ export class Home implements OnInit {
       },
       complete: () => this.savingService.set(null),
     });
+  }
+
+  onFieldToggle(svc: string, key: string, checked: boolean): void {
+    this.configForm[svc] = { ...this.configForm[svc], [key]: checked ? '1' : '' };
   }
 
   reposLoading = signal(false);
@@ -677,19 +789,34 @@ reportOpen = signal(false);
     this.loadRepos();
   }
 
-  paramRows(): { param: string; estado: string; qaValue: string | null; awsStatus: string }[] {
-    const rows: { param: string; estado: string; qaValue: string | null; awsStatus: string }[] = [];
+  paramRows(): { param: string; estado: string; qaValue: string | null; awsStatus: string; type: string; envValues: Record<string, string> }[] {
+    const rows: { param: string; estado: string; qaValue: string | null; awsStatus: string; type: string; envValues: Record<string, string> }[] = [];
     for (const p of this.filteredParams()) {
       if (!this.repoInProjects(p.repos)) continue;
-      rows.push({ param: p.param, estado: p.tipo, qaValue: p.qa_value ?? null, awsStatus: p.aws_status ?? 'skipped' });
+      rows.push({
+        param: p.param,
+        estado: p.tipo,
+        qaValue: p.qa_value ?? null,
+        awsStatus: p.aws_status ?? 'skipped',
+        type: p.type ?? 'ssm',
+        envValues: p.env_values ?? {},
+      });
     }
     for (const p of this.removed()) {
       if (!this.repoInProjects(p.repos)) continue;
       const estado = 'solo destino';
       if (!this.estadoFilterActive(estado)) continue;
-      rows.push({ param: p.param, estado, qaValue: null, awsStatus: 'skipped' });
+      rows.push({ param: p.param, estado, qaValue: null, awsStatus: 'skipped', type: 'ssm', envValues: {} });
     }
     return rows.sort((a, b) => a.param.localeCompare(b.param));
+  }
+
+  openSsmView(param: string): void {
+    this.router.navigate(['/ssm', encodeURIComponent(param)]);
+  }
+
+  envChips(p: { envValues: Record<string, string> }): { env: string; value: string }[] {
+    return Object.entries(p.envValues ?? {}).map(([env, value]) => ({ env, value }));
   }
 
   estadoLabel(estado: string): string {

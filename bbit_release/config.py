@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from .cache import DEFAULT_CLIENT_ALIAS, get_cache
+from .cache import DEFAULT_AWS_REGION, DEFAULT_CLIENT_ALIAS, get_cache
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CLIENT_MARKER = _PROJECT_ROOT / "data" / "client_id"
@@ -34,12 +34,70 @@ _ENV_KEYS = {
     "AWS": {
         "profile": "AWS_PROFILE",
         "region": "AWS_REGION",
+        "localstack": "AWS_LOCALSTACK",
         "endpoint": "AWS_ENDPOINT_URL",
         "access_key": "AWS_ACCESS_KEY_ID",
         "secret_key": "AWS_SECRET_ACCESS_KEY",
         "session_token": "AWS_SESSION_TOKEN",
     },
 }
+
+
+def _normalize_environments(ssm_environments) -> list[dict]:
+    """Normaliza ambientes a lista de filas ``{name, region, localstack, endpoint_url}``.
+
+    - dict ``{env: region}`` (str) → filas con solo región (flags vacíos).
+    - dict ``{env: {"region":..., "localstack":..., "endpoint_url":...}}`` → filas.
+    - lista de dicts → tal cual (con trims).
+    """
+    def _text(value: str | None) -> str:
+        return "" if value is None else str(value).strip()
+
+    def _flag(value) -> bool:
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+
+    out: list[dict] = []
+    if isinstance(ssm_environments, dict):
+        for name, value in ssm_environments.items():
+            name = (name or "").strip()
+            if not name:
+                continue
+            if isinstance(value, dict):
+                out.append(
+                    {
+                        "name": name,
+                        "region": _text(value.get("region")),
+                        "localstack": _flag(value.get("localstack")),
+                        "endpoint_url": _text(value.get("endpoint_url")),
+                    }
+                )
+            else:
+                out.append(
+                    {
+                        "name": name,
+                        "region": _text(value),
+                        "localstack": False,
+                        "endpoint_url": "",
+                    }
+                )
+    else:
+        for raw in ssm_environments or []:
+            if not isinstance(raw, dict):
+                continue
+            name = (raw.get("name") or "").strip()
+            if not name:
+                continue
+            out.append(
+                {
+                    "name": name,
+                    "region": _text(raw.get("region")),
+                    "localstack": _flag(raw.get("localstack")),
+                    "endpoint_url": _text(raw.get("endpoint_url")),
+                }
+            )
+    return out
 
 
 def win_to_posix(path: str) -> str:
@@ -67,6 +125,8 @@ def _default_settings() -> dict:
         "default_branch": "master",
         "ssm_prefixes": ["/config", "/common"],
         "deploy_prefixes": ["uat", "stgp", "prod"],
+        "ssm_environments": {},       # {ambiente: región AWS} para la ssm-view
+        "ssm_read_secrets": False,    # permite ver valores de secretos en la ssm-view
     }
 
 
@@ -359,11 +419,26 @@ class Config:
 
     @property
     def aws_region(self) -> str:
-        return self._aws.get("AWS_REGION") or ""
+        """Región efectiva: valor persistido o default alineado con yappy-cli-manager.
+
+        El front ya no expone AWS_REGION; se usa ``DEFAULT_AWS_REGION`` para
+        levantar la sesión SSO sin un valor global intervenido.
+        """
+        return (self._aws.get("AWS_REGION") or "").strip() or DEFAULT_AWS_REGION
+
+    @property
+    def aws_environments(self) -> list[dict]:
+        """Filas completas de ambientes (name, region, localstack, endpoint_url)."""
+        return get_cache().list_aws_environments()
 
     @property
     def aws_endpoint_url(self) -> str:
         return (self._aws.get("AWS_ENDPOINT_URL") or "").strip()
+
+    @property
+    def aws_localstack(self) -> bool:
+        """El endpoint custom solo se aplica cuando apuntás a LocalStack/Docker."""
+        return str(self._aws.get("AWS_LOCALSTACK") or "").lower() in ("1", "true", "yes", "on")
 
     @property
     def aws_access_key_id(self) -> str:
@@ -431,6 +506,26 @@ class Config:
         return [p.strip().rstrip("/") for p in (self._settings.get("ssm_prefixes") or [])]
 
     @property
+    def ssm_environments(self) -> dict:
+        """Mapa ambiente → región AWS usado por el query de update de la ssm-view.
+
+        Los ambientes viven en la tabla informativa ``aws_environment``
+        (sembrados qa/dev en cada boot + agregados por el usuario). Se preserva
+        el fallback a ``settings`` por retrocompatibilidad.
+        """
+        table = get_cache().aws_environments_map()
+        if table:
+            merged = dict(table)
+            merged.update(self._settings.get("ssm_environments") or {})
+            return merged
+        return dict(self._settings.get("ssm_environments") or {})
+
+    @property
+    def ssm_read_secrets(self) -> bool:
+        """Habilita mostrar valores de secretos en la ssm-view (default: false)."""
+        return bool(self._settings.get("ssm_read_secrets", False))
+
+    @property
     def deploy_prefixes(self) -> list[str]:
         return list(self._settings.get("deploy_prefixes") or [])
 
@@ -465,6 +560,7 @@ class Config:
         circleci_org: str = "",
         aws_profile: str = "",
         aws_region: str = "",
+        aws_localstack: str = "",
         aws_endpoint_url: str = "",
         aws_access_key_id: str = "",
         aws_secret_access_key: str = "",
@@ -499,6 +595,7 @@ class Config:
             aws_env = _compact_env({
                 "AWS_PROFILE": aws_profile or self._aws.get("AWS_PROFILE") or "",
                 "AWS_REGION": aws_region or self._aws.get("AWS_REGION") or "",
+                "AWS_LOCALSTACK": aws_localstack or self._aws.get("AWS_LOCALSTACK") or "",
                 "AWS_ENDPOINT_URL": aws_endpoint_url or self._aws.get("AWS_ENDPOINT_URL") or "",
                 "AWS_ACCESS_KEY_ID": aws_access_key_id or self._aws.get("AWS_ACCESS_KEY_ID") or "",
                 "AWS_SECRET_ACCESS_KEY": aws_secret_access_key or self._aws.get("AWS_SECRET_ACCESS_KEY") or "",
@@ -528,6 +625,34 @@ class Config:
         details["settings"]["exclude_repos"] = []
         get_cache().save_connection(details)
         self.reload()
+
+    def save_ssm_settings(
+        self,
+        ssm_environments=None,
+        ssm_read_secrets: bool | None = None,
+    ) -> int:
+        """Persiste settings de la ssm-view (SSM_ENVIRONMENTS / SSM_READ_SECRETS).
+
+        ``ssm_environments`` admite:
+        - dict ``{env: region}`` (legacy) — conserva flags/endpoint existentes;
+        - lista ``[{name, region, localstack?, endpoint_url?}]`` (canónico).
+
+        En ambos casos se escribe la tabla informativa ``aws_environment``
+        (source of truth) y el mapa región se refleja en ``settings``.
+        """
+        details = self._connection_details()
+        settings = details["settings"]
+        if ssm_environments is not None:
+            rows = _normalize_environments(ssm_environments)
+            settings["ssm_environments"] = {
+                row["name"]: row["region"] for row in rows if row.get("region")
+            }
+            get_cache().save_aws_environments(rows)
+        if ssm_read_secrets is not None:
+            settings["ssm_read_secrets"] = bool(ssm_read_secrets)
+        sid = get_cache().save_connection(details)
+        self.reload()
+        return sid
 
     def remove_credentials(self) -> None:
         """Elimina todas las credenciales del cliente (no toca settings ni la fila client)."""

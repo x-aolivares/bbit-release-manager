@@ -63,6 +63,82 @@ def test_seed_upserts_existing_aws_regions(tmp_path):
 
 # -- esquema (estándar: sin REFERENCES, nombre = PK referenciada) -------------
 
+def test_seed_aws_environments_defaults(tmp_path):
+    cache = _make_cache(tmp_path)
+    envs = cache.list_aws_environments()
+    assert {e["name"]: e["region"] for e in envs} == {
+        "dev": "us-west-2",
+        "qa": "us-west-1",
+    }
+
+
+def test_seed_aws_environments_edits_survive_boot(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.save_aws_environments({"qa": "eu-west-1", "qa2": "us-east-1"})
+    fresh = _make_cache(tmp_path)
+    envs = fresh.aws_environments_map()
+    # los defaults solo aplican si la fila no existe: la edición de qa (usuario)
+    # sobrevive al boot y qa2 (agregada por usuario) se mantiene
+    assert envs["qa"] == "eu-west-1"
+    assert envs["qa2"] == "us-east-1"
+    assert envs["dev"] == "us-west-2"
+
+
+def test_aws_environments_rows_preserve_docker_endpoint(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.save_aws_environments([
+        {"name": "qa", "region": "us-west-1", "localstack": True,
+         "endpoint_url": "http://localhost:4566"},
+        {"name": "dev", "region": "us-west-2"},
+    ])
+    qa = next(e for e in cache.list_aws_environments() if e["name"] == "qa")
+    dev = next(e for e in cache.list_aws_environments() if e["name"] == "dev")
+    assert qa["localstack"] is True
+    assert qa["endpoint_url"] == "http://localhost:4566"
+    assert dev["localstack"] is False
+    assert dev["endpoint_url"] == ""
+    # el modo dict (legacy) conserva los flags existentes
+    cache.save_aws_environments({"qa": "eu-west-1"})
+    qa = next(e for e in cache.list_aws_environments() if e["name"] == "qa")
+    assert qa["region"] == "eu-west-1"
+    assert qa["localstack"] is True
+    assert qa["endpoint_url"] == "http://localhost:4566"
+
+
+def test_migrates_existing_aws_environment_columns(tmp_path):
+    db = tmp_path / "test.db"
+    cache = ReleaseCache(db_path=db)
+    cache.close()
+    # simula una DB vieja sin las columnas por ambiente
+    import sqlite3
+
+    conn = sqlite3.connect(str(db))
+    conn.execute("DROP TABLE aws_environment")
+    conn.execute(
+        "CREATE TABLE aws_environment ("
+        " ae_id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " ae_name TEXT NOT NULL UNIQUE,"
+        " ae_region TEXT NOT NULL,"
+        " ae_created_at REAL NOT NULL,"
+        " ae_updated_at REAL NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO aws_environment (ae_name, ae_region, ae_created_at, ae_updated_at)"
+        " VALUES ('qa', 'us-west-1', 0, 0)"
+    )
+    conn.commit()
+    conn.close()
+    fresh = ReleaseCache(db_path=db)
+    cols = {
+        row[1] for row in fresh._conn.execute("PRAGMA table_info(aws_environment)")
+    }
+    assert {"ae_localstack", "ae_endpoint_url"} <= cols
+    qa = next(e for e in fresh.list_aws_environments() if e["name"] == "qa")
+    assert qa["localstack"] is False
+    assert qa["endpoint_url"] == ""
+    fresh.close()
+
+
 def test_schema_without_references(tmp_path):
     """El esquema no usa claves foráneas (REQUIREMENTS del equipo)."""
     cache = _make_cache(tmp_path)

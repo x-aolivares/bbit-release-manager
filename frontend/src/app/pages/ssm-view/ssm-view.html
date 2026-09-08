@@ -1,0 +1,252 @@
+<ion-header class="bb-nav">
+  <ion-toolbar>
+    <div class="bb-topbar">
+      <div class="bb-topbar-left">
+        <button class="bb-btn-icon" (click)="goBack()" aria-label="Volver">
+          <ion-icon name="arrow-back-outline"></ion-icon>
+        </button>
+        <span class="bb-topbar-title">
+          <span class="bb-mark">BBit</span>
+          <span class="bb-mark-sep">/</span>
+          <span class="bb-app">SSM View</span>
+        </span>
+        <span class="bb-topbar-divider"></span>
+        <span class="bb-topbar-meta bb-mono">{{ param() }}</span>
+      </div>
+    </div>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content>
+  <div class="bb-page">
+    @if (error()) {
+    <div class="bb-card">
+      <div class="bb-error">{{ error() }}</div>
+    </div>
+    }
+
+    @if (message(); as msg) {
+    <div class="bb-card">
+      <div class="bb-msg"
+           [class.bb-msg--ok]="msg.kind === 'ok'"
+           [class.bb-msg--error]="msg.kind === 'error'">
+        {{ msg.text }}
+      </div>
+    </div>
+    }
+
+    <div class="bb-panel">
+      <div class="bb-section">
+        <div class="bb-section-header">
+          <span class="bb-mono">{{ param() }}</span>
+          <button class="bb-btn-secondary bb-btn-sm" (click)="refresh()" [disabled]="loading()">
+            {{ loading() ? 'Leyendo en vivo…' : 'Leer en vivo' }}
+          </button>
+        </div>
+
+        @if (loading()) {
+        <div class="bb-muted">Cargando valores…</div>
+        } @else if (envs().length === 0) {
+        <div class="bb-muted">
+          Sin valores guardados para {{ param() }}.
+          Guardá el valor de cada ambiente abajo para revisarlo contra las demás.
+        </div>
+        }
+
+        @if (envs().length > 0) {
+        <div class="bb-env-cards">
+          @for (env of envs(); track $index) {
+          @let isSecret = envSecret(env.environment);
+          <div class="bb-env-card">
+            <div class="bb-env-card-header">
+              <select class="bb-env-select bb-mono"
+                      [ngModel]="env.environment"
+                      (ngModelChange)="switchEnv($index, $event)">
+                @for (entry of regionEntries(); track entry.name) {
+                <option [value]="entry.name">{{ entry.name }}</option>
+                }
+              </select>
+              <span class="bb-secret-cell" [class.bb-secret-cell--busy]="toggling() === env.environment">
+                <label class="bb-secret-toggle"
+                       [class.bb-secret-toggle--on]="isSecret"
+                       title="{{ isSecret ? 'Desmarcar como secreto' : 'Marcar como secreto' }}">
+                  <input type="checkbox" [checked]="isSecret"
+                         [disabled]="toggling() === env.environment"
+                         (change)="toggleSecret(env.environment, $any($event.target).checked)"/>
+                  <span class="bb-mono">secreto</span>
+                </label>
+              </span>
+            </div>
+            <div class="bb-env-card-body">
+              @if (env.masked) {
+              <span class="bb-mono bb-qa-val bb-qa-val--empty"
+                    title="Secreto sin SSM_READ_SECRETS">••••••</span>
+              } @else if (isJson(drafts()[env.environment])) {
+              <textarea class="bb-input bb-mono bb-env-text bb-env-text--json"
+                        [ngModel]="drafts()[env.environment]"
+                        (ngModelChange)="setDraft(env.environment, $event)"></textarea>
+              } @else {
+              <input class="bb-input bb-mono bb-env-input"
+                     [ngModel]="drafts()[env.environment]"
+                     (ngModelChange)="setDraft(env.environment, $event)"/>
+              }
+            </div>
+            <div class="bb-env-card-footer">
+              @if (!env.masked) {
+              <button class="bb-btn-primary bb-btn-sm bb-btn-save-right" [disabled]="saving() === env.environment"
+                      (click)="saveEnv(env.environment, isSecret)">
+                {{ saving() === env.environment ? 'Guardando…' : 'Guardar' }}
+              </button>
+              }
+            </div>
+          </div>
+          }
+        </div>
+
+        @if (liveEntries().length > 0) {
+        <div class="bb-live-summary">
+          @for (entry of liveEntries(); track entry.name) {
+          <span class="bb-live-pill"
+                [class.bb-live-pill--changed]="entry.status === 'ok' && entry.changed"
+                [class.bb-live-pill--bad]="entry.status !== 'ok'"
+                [title]="liveTitle(entry)">
+            @if (entry.status === 'ok') {
+            {{ entry.changed ? entry.name + ' · cambió' : entry.name + ' · ok' }}
+            } @else if (entry.status === 'unavailable') {
+            {{ entry.name + ' · sin credenciales' }}
+            } @else {
+            {{ entry.name + ' · no existe' }}
+            }
+          </span>
+          }
+        </div>
+        }
+
+        @if (envs().length >= 2 && isAnyJson()) {
+        <div class="bb-compare-row">
+          <button class="bb-btn-primary bb-btn-sm" (click)="compare()" [disabled]="comparing()">
+            {{ comparing() ? 'Comparando…' : 'Comparar' }}
+          </button>
+        </div>
+        }
+
+        @if (envs().length < 2) {
+        <div class="bb-env-add">
+          <span class="bb-muted">Agregar ambiente:</span>
+          <select class="bb-input bb-mono" #newEnvSolo (change)="addCard(newEnvSolo.value); newEnvSolo.value = ''">
+            <option value="">Elegí…</option>
+            @for (entry of regionEntries(); track entry.name) {
+            <option [value]="entry.name">{{ entry.name }}</option>
+            }
+          </select>
+        </div>
+        }
+        }
+      </div>
+    </div>
+
+    @if (compareResult(); as c) {
+    <div class="bb-panel">
+      <div class="bb-section">
+        <div class="bb-section-header">
+          <span>Diferencias</span>
+          <span class="bb-mono bb-muted">{{ c.origin_env }} → {{ c.dest_env }}</span>
+        </div>
+
+        @if (c.warning) {
+        <div class="bb-warn">{{ c.warning }}</div>
+        }
+        @if (c.updates.length === 0) {
+        <div class="bb-muted">Sin diferencias.</div>
+        }
+        @if (c.updates.length > 0) {
+        <div class="bb-table bb-table--ops">
+          <div class="bb-ops-head">
+            <span></span>
+            <span>Path</span>
+            <span>Op</span>
+            <span>Valor</span>
+            <span></span>
+          </div>
+          @for (op of c.updates; track op.path) {
+          <div class="bb-ops-row">
+            <span>
+              <input type="checkbox" [checked]="opChecked(op.path)" (change)="toggleOp(op.path)"/>
+            </span>
+            <span class="bb-mono bb-ops-path">{{ op.path }}</span>
+            <span class="bb-badge"
+                  [class.bb-badge--ok]="op.op === 'insert'"
+                  [class.bb-badge--warn]="op.op === 'update'">
+              {{ opLabel(op) }}
+            </span>
+            <span class="bb-mono bb-ops-val" [title]="stringify(op.value)">{{ stringify(op.value) }}</span>
+            <span>
+              <button class="bb-btn-secondary bb-btn-sm" (click)="openPreview(op)">
+                Previsualizar
+              </button>
+            </span>
+          </div>
+          }
+        </div>
+        <div class="bb-row-top">
+          <button class="bb-btn-secondary bb-btn-sm" (click)="exportQuery()" [disabled]="queryLoading() || checked().length === 0">
+            {{ queryLoading() ? 'Generando…' : 'Exportar query' }}
+          </button>
+          <span class="bb-muted">{{ checked().length }}/{{ c.updates.length }}</span>
+        </div>
+        @if (query(); as q) {
+        <div class="bb-export">
+          <pre class="bb-mono bb-export-cmd">{{ q.command }}</pre>
+          <button class="bb-btn-primary bb-btn-sm" (click)="copyQuery()">
+            {{ copied() ? '¡Copiado!' : 'Copiar' }}
+          </button>
+        </div>
+        }
+        }
+      </div>
+    </div>
+    }
+  </div>
+</ion-content>
+
+@if (preview(); as p) {
+  <div class="bb-modal-mask">
+    <div class="bb-modal bb-modal--small" (click)="$event.stopPropagation()">
+      <div class="bb-modal-title">
+        Previsualizar — {{ p.op.path }}
+      </div>
+      <div class="bb-modal-row bb-mono">
+        <span class="bb-badge"
+              [class.bb-badge--ok]="p.op.op === 'insert'"
+              [class.bb-badge--warn]="p.op.op === 'update'">
+          {{ opLabel(p.op) }}
+        </span>
+        <span class="bb-modal-value">{{ stringify(p.op.value) }}</span>
+      </div>
+
+      @if (p.loading) {
+      <div class="bb-muted">Generando query…</div>
+      } @else if (p.error) {
+      <div class="bb-error">{{ p.error }}</div>
+      } @else {
+      <pre class="bb-mono bb-export-cmd">{{ p.command }}</pre>
+      <div class="bb-muted">Región: {{ p.region }} · Tipo: {{ p.type }}</div>
+      @if (p.done) {
+      <div class="bb-msg bb-msg--ok">Query ejecutada en {{ compareResult()?.dest_env }}.</div>
+      }
+      }
+
+      <div class="bb-modal-row bb-modal-actions">
+        <button class="bb-btn-secondary bb-btn-sm" (click)="closePreview()">Cerrar</button>
+        <button class="bb-btn-secondary bb-btn-sm" [disabled]="!p.command || p.loading || p.running"
+                (click)="copyPreview()">
+          {{ p.copied ? '¡Copiado!' : 'Copiar' }}
+        </button>
+        <button class="bb-btn-primary bb-btn-sm" [disabled]="!p.command || p.loading || p.running"
+                (click)="runPreview()">
+          {{ p.running ? 'Ejecutando…' : 'Ejecutar' }}
+        </button>
+      </div>
+    </div>
+  </div>
+}

@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
 from ...bitbucket import client as bb
-from ...cache import get_cache
+from ...cache import DEFAULT_AWS_REGION, get_cache
 from ...config import Config
 from ...circleci.client import CircleCiClient, CircleCiError
 from ...circleci.configyml import ensure_tag_workflows
@@ -243,14 +243,15 @@ def _validate_service(service: str, body: dict, cfg: Config) -> tuple[bool, str]
         return (ok, err if ok else f"Token de CircleCI inválido o sin acceso: {err}")
     if service == "aws":
         profile = (body.get("profile") or "").strip()
-        region = (body.get("region") or "").strip() or "us-east-1"
+        region = (body.get("region") or "").strip() or DEFAULT_AWS_REGION
+        localstack = bool(body.get("localstack"))
         access_key_id = (body.get("access_key_id") or "").strip()
         secret_access_key = (body.get("secret_access_key") or "").strip()
         if not profile and not access_key_id:
             return False, "profile o credenciales directas son obligatorias"
         return _aws_probe(
             profile, region,
-            endpoint_url=(body.get("endpoint_url") or "").strip(),
+            endpoint_url=(body.get("endpoint_url") or "").strip() if localstack else "",
             access_key_id=access_key_id,
             secret_access_key=secret_access_key,
             session_token=(body.get("session_token") or "").strip(),
@@ -276,10 +277,12 @@ def _env_for(cfg: Config, service: str, body: dict) -> dict:
             "CIRCLECI_ORG": (body.get("org") or "").strip() or (body.get("workspace") or "").strip() or cfg.workspace,
         })
     if service == "aws":
+        localstack = bool(body.get("localstack"))
         return _compact_env({
             "AWS_PROFILE": (body.get("profile") or "").strip(),
-            "AWS_REGION": (body.get("region") or "").strip() or "us-east-1",
-            "AWS_ENDPOINT_URL": (body.get("endpoint_url") or "").strip(),
+            "AWS_REGION": (body.get("region") or "").strip() or DEFAULT_AWS_REGION,
+            "AWS_LOCALSTACK": "1" if localstack else "",
+            "AWS_ENDPOINT_URL": (body.get("endpoint_url") or "").strip() if localstack else "",
             "AWS_ACCESS_KEY_ID": (body.get("access_key_id") or "").strip(),
             "AWS_SECRET_ACCESS_KEY": (body.get("secret_access_key") or "").strip(),
             "AWS_SESSION_TOKEN": (body.get("session_token") or "").strip(),
@@ -315,6 +318,7 @@ def client_status():
                 "region": cfg.aws_region,
                 # endpoint no es secreto; credenciales directas NO se exponen
                 "endpoint_url": cfg.aws_endpoint_url,
+                "localstack": cfg.aws_localstack,
             },
         },
         "settings": {
@@ -323,6 +327,8 @@ def client_status():
             "default_branch": cfg.default_branch,
             "ssm_prefixes": cfg.ssm_prefixes,
             "deploy_prefixes": cfg.deploy_prefixes,
+            "ssm_environments": cfg.ssm_environments,
+            "ssm_read_secrets": cfg.ssm_read_secrets,
         },
         "configured": cfg.is_configured,
     }
@@ -441,6 +447,7 @@ def api_session(body: dict):
     circleci_token = (body.get("circleci_token") or "").strip()
     aws_profile = (body.get("aws_profile") or "").strip()
     aws_region = (body.get("aws_region") or "").strip()
+    aws_localstack = bool(body.get("aws_localstack"))
     aws_endpoint_url = (body.get("aws_endpoint_url") or "").strip()
     aws_access_key_id = (body.get("aws_access_key_id") or "").strip()
     aws_secret_access_key = (body.get("aws_secret_access_key") or "").strip()
@@ -473,8 +480,8 @@ def api_session(body: dict):
 
     if aws_profile or aws_access_key_id:
         ok_a, detail_a = _aws_probe(
-            aws_profile, aws_region or "us-east-1",
-            endpoint_url=aws_endpoint_url,
+            aws_profile, aws_region or DEFAULT_AWS_REGION,
+            endpoint_url=aws_endpoint_url if aws_localstack else "",
             access_key_id=aws_access_key_id,
             secret_access_key=aws_secret_access_key,
             session_token=aws_session_token,
@@ -498,7 +505,8 @@ def api_session(body: dict):
             bitbucket_username=(body.get("username") or "").strip(),
             aws_profile=aws_profile,
             aws_region=aws_region,
-            aws_endpoint_url=aws_endpoint_url,
+            aws_localstack="1" if aws_localstack else "",
+            aws_endpoint_url=aws_endpoint_url if aws_localstack else "",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
@@ -1294,17 +1302,29 @@ def _enrich_diff_ssm(result: dict, cfg: Config) -> dict:
     """Overlay de valores SSM por cliente sobre el diff cacheado.
 
     El payload cacheado es compartido entre sesiones: aca se resuelven
-    `qa_value` + `aws_status` para el cliente del request y se devuelve una
-    copia enriquecida (sin escribir valores a la cache del diff).
+    `qa_value` + `aws_status` para el cliente del request, y se agrega el
+    tablero `ssm_values` (type + env_values por ambiente) para la ssm-view.
+    Se devuelve una copia enriquecida (sin escribir valores a la cache del diff).
     """
     import copy
 
     from ...aws.session import AwsSession
     from ...aws.ssm import enrich_diff_params
+    from ...ssm.store import SsmStore
 
     out = copy.deepcopy(result)
     params = out.get("params", [])
     session = AwsSession.from_config(cfg)
     decrypt = str(cfg.aws_env.get("SSM_DECRYPT") or "").strip().lower() in {"1", "true", "yes"}
     out["params"] = enrich_diff_params(params, session, decrypt=decrypt, cache=get_cache())
+
+    store = SsmStore(get_cache())
+    for p in out.get("params", []):
+        overlay = store.enrich_param(
+            p.get("param") or p.get("name") or "",
+            read_secrets=cfg.ssm_read_secrets,
+        )
+        if overlay["env_values"]:
+            p["type"] = overlay["type"]
+            p["env_values"] = overlay["env_values"]
     return out

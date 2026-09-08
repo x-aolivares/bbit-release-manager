@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..cache import DEFAULT_AWS_REGION
+
 
 SSO_HINT = "corre 'aws sso login --sso-session <session>'"
 
@@ -46,7 +48,7 @@ class AwsSession:
 
     def __post_init__(self) -> None:
         if not self.region:
-            self.region = "us-east-1"
+            self.region = DEFAULT_AWS_REGION
         self.profile = (self.profile or "").strip()
         self.endpoint_url = (self.endpoint_url or "").strip()
         self.access_key_id = (self.access_key_id or "").strip()
@@ -55,18 +57,32 @@ class AwsSession:
 
     @classmethod
     def from_config(cls, cfg=None) -> "AwsSession":
-        """Sesión desde un ``Config`` (cualquier cliente ya resuelto)."""
+        """Sesión desde un ``Config`` (cualquier cliente ya resuelto).
+
+        Cuando ``AWS_LOCALSTACK=1`` y no hay credenciales directas, inyecta
+        credenciales dummy (``test/test``) para que boto3 NO resuelva desde
+        ``~/.aws/credentials`` (que puede tener credenciales reales para el
+        profile "localstack").
+        """
         from ..config import Config
 
         cfg = cfg or Config()
+        access_key_id = cfg.aws_access_key_id
+        secret_access_key = cfg.aws_secret_access_key
+        session_token = cfg.aws_session_token
+
+        if cfg.aws_localstack and not access_key_id:
+            access_key_id = "test"
+            secret_access_key = "test"
+
         return cls(
             profile=cfg.aws_profile,
             region=cfg.aws_region,
             client_id=cfg.client_id,
-            endpoint_url=cfg.aws_endpoint_url,
-            access_key_id=cfg.aws_access_key_id,
-            secret_access_key=cfg.aws_secret_access_key,
-            session_token=cfg.aws_session_token,
+            endpoint_url=cfg.aws_endpoint_url if cfg.aws_localstack else "",
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key,
+            session_token=session_token,
         )
 
     @property

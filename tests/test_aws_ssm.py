@@ -6,7 +6,7 @@ import pytest
 
 from bbit_release.aws.session import AwsSession, AwsSessionError
 from bbit_release.aws.ssm import enrich_diff_params, fetch_values
-from bbit_release.cache import get_cache, reset_cache
+from bbit_release.cache import DEFAULT_AWS_REGION, get_cache, reset_cache
 
 
 @pytest.fixture(autouse=True)
@@ -195,9 +195,9 @@ def test_boto_session_uses_profile_without_direct_credentials(monkeypatch, _clea
     assert "aws_access_key_id" not in captured
 
 
-def test_default_region_us_east_1(_clean_cache):
+def test_default_region_aligns_with_yappy(_clean_cache):
     s = _session(region="")
-    assert s.region == "us-east-1"
+    assert s.region == DEFAULT_AWS_REGION
 
 
 # -- fetch_values -------------------------------------------------------------

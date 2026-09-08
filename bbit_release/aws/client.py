@@ -6,6 +6,8 @@ exista una sesión inválida de AWS (profile/región) antes de guardarla.
 
 from __future__ import annotations
 
+from ..cache import DEFAULT_AWS_REGION
+
 
 def validate_credentials(
     profile: str = "",
@@ -35,7 +37,7 @@ def validate_credentials(
         else:
             session_kwargs["profile_name"] = profile or None
         session = boto3.Session(**session_kwargs)
-        client_kwargs = {"region_name": region or "us-east-1"}
+        client_kwargs = {"region_name": region or DEFAULT_AWS_REGION}
         if endpoint_url:
             client_kwargs["endpoint_url"] = endpoint_url
         sts = session.client("sts", **client_kwargs)

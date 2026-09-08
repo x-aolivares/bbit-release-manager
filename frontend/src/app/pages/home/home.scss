@@ -229,7 +229,7 @@
 
 .bb-table--params .bb-repos-head,
 .bb-table--params .bb-repos-row {
-  grid-template-columns: 1.6fr 1fr 1fr;
+  grid-template-columns: 1.6fr 1fr 0.8fr 2fr 7rem;
 }
 
 .bb-table--repos,
@@ -252,6 +252,39 @@
 .bb-qa-val--empty {
   color: var(--bb-text-muted, var(--bb-text-secondary));
   letter-spacing: 0.1em;
+}
+
+.bb-param-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.bb-env-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.bb-chip-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bb-surface);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius-pill);
+  padding: 3px 10px;
+  font-size: var(--bb-font-sm);
+}
+
+.bb-chip-value {
+  color: var(--bb-text-secondary);
+  font-family: var(--bb-mono);
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .bb-repos-head {
@@ -1194,7 +1227,7 @@ button.bb-link {
 
 /* ===== Modal de configuración ===== */
 .bb-modal--config {
-  max-width: 560px;
+  max-width: 640px;
 }
 
 .bb-config-meta {
@@ -1256,9 +1289,90 @@ button.bb-link {
   justify-content: flex-end;
 }
 
+.bb-config-regions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px dashed var(--bb-border);
+  padding-top: 10px;
+}
+
+.bb-config-regions-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bb-region-table {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-border-radius);
+  overflow: hidden;
+}
+
+.bb-region-row {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr 5.5rem 1.2fr;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bb-elevated);
+  font-size: var(--bb-font-base);
+}
+
+.bb-region-row--no-endpoint {
+  grid-template-columns: 6.5rem 1fr 5.5rem;
+}
+
+.bb-region-row + .bb-region-row {
+  border-top: 1px solid var(--bb-border);
+}
+
+.bb-region-env {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bb-region-docker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--bb-font-sm);
+  color: var(--bb-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.bb-region-row .bb-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.bb-region-add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.bb-region-add .bb-input {
+  width: 150px;
+}
+
 @media (max-width: 520px) {
   .bb-config-fields {
     grid-template-columns: 1fr;
+  }
+  .bb-region-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .bb-region-add .bb-input {
+    width: 100%;
   }
 }
 

@@ -1,7 +1,7 @@
 import os
 import pytest
 
-from bbit_release.cache import get_cache, reset_cache
+from bbit_release.cache import DEFAULT_AWS_REGION, get_cache, reset_cache
 from bbit_release.config import DEFAULT_CLIENT_ALIAS, Config
 
 
@@ -94,6 +94,44 @@ def test_save_tokens_noop_without_secret(tmp_path):
     assert sid == -1
     assert get_cache().get_connection() is None
     assert get_cache().get_authentication(cfg.client_id, "Bitbucket") is None
+
+
+def test_aws_localstack_flag(tmp_path):
+    cfg = _cfg()
+    cfg.save_tokens(aws_profile="prod", aws_localstack="1")
+    assert cfg.aws_localstack is True
+    auth = get_cache().get_authentication(cfg.client_id, "AWS")
+    assert auth["env"]["AWS_LOCALSTACK"] == "1"
+
+
+def test_ssm_environments_from_aws_environment_table(tmp_path):
+    cfg = _cfg()
+    cfg.save_ssm_settings(ssm_environments={"qa": "us-west-1", "dev": "us-west-2", "prod": "us-east-1"})
+    # seeder impone qa/dev; prod (usuario) sobrevive
+    envs = cfg.ssm_environments
+    assert envs["qa"] == "us-west-1"
+    assert envs["dev"] == "us-west-2"
+    assert envs["prod"] == "us-east-1"
+
+
+def test_save_ssm_settings_list_rows_syncs_map_and_details(tmp_path):
+    cfg = _cfg()
+    cfg.save_ssm_settings(ssm_environments=[
+        {"name": "qa", "region": "us-west-1", "localstack": True,
+         "endpoint_url": "http://localhost:4566"},
+        {"name": "prod", "region": "us-east-1"},
+    ])
+    assert cfg.ssm_environments["qa"] == "us-west-1"
+    assert cfg.ssm_environments["prod"] == "us-east-1"
+    rows = {e["name"]: e for e in cfg.aws_environments}
+    assert rows["qa"]["localstack"] is True
+    assert rows["qa"]["endpoint_url"] == "http://localhost:4566"
+    assert rows["prod"]["localstack"] is False
+
+
+def test_aws_region_default_aligns_with_yappy(tmp_path):
+    cfg = _cfg()
+    assert cfg.aws_region == DEFAULT_AWS_REGION
 
 
 def test_save_service_aws(tmp_path):

@@ -9,7 +9,7 @@ from pathlib import Path
 import typer
 
 from ._version import read_version
-from .cache import get_cache
+from .cache import DEFAULT_AWS_REGION, get_cache
 from .config import Config, win_to_posix
 from .logger import console, info, success, warn, die
 
@@ -111,7 +111,10 @@ def login(
         "", "--aws-profile", help="Profile AWS a validar por STS (opcional)"
     ),
     aws_region: str = typer.Option(
-        "", "--aws-region", help="Región AWS (opcional, default us-east-1)"
+        "", "--aws-region", help="Región AWS (opcional, default alineado con yappy-cli-manager)"
+    ),
+    aws_localstack: bool = typer.Option(
+        False, "--aws-localstack", help="Usar endpoint de LocalStack/Docker"
     ),
 ):
     """Guardar credenciales por servicio (data/cache.db), validando cada uno.
@@ -188,12 +191,14 @@ def login(
             raw = input(f"AWS profile (opcional, actual: {current_prof}; Enter para omitir): ").strip()
             if raw:
                 aws_prof = raw
-                aws_reg = input(f"AWS region [{aws_reg or 'us-east-1'}]: ").strip() or aws_reg or "us-east-1"
+                aws_reg = input(
+                    f"AWS region [{aws_reg or DEFAULT_AWS_REGION}]: "
+                ).strip() or aws_reg or DEFAULT_AWS_REGION
         except (EOFError, KeyboardInterrupt):
             die("Login cancelado.")
     if aws_prof:
         if not aws_reg:
-            aws_reg = "us-east-1"
+            aws_reg = DEFAULT_AWS_REGION
         with console.status("Ahora validando credenciales de AWS (STS)..."):
             ok_a, detail_a = _probe_aws(aws_prof, aws_reg)
         if not ok_a:
@@ -210,6 +215,7 @@ def login(
         circleci_org=org or ws,
         aws_profile=aws_prof,
         aws_region=aws_reg,
+        aws_localstack="1" if aws_localstack else "",
     )
     alias_name = cfg.client_alias or "local"
     success(f"Conexión guardada para '{alias_name}' ({cfg.client_id[:8]}…)")

@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from bbit_release._version import read_version
-from bbit_release.cache import get_cache, reset_cache
+from bbit_release.cache import DEFAULT_AWS_REGION, get_cache, reset_cache
 from bbit_release.web import session as session_mod
 from bbit_release.web.api import repos as repos_mod
 from bbit_release.web.main import FRONTEND_DIST, app
@@ -25,6 +25,7 @@ class FakeConfig:
     exclude_repos: list[str] = []
     aws_profile = ""
     aws_region = ""
+    aws_localstack = False
     aws_endpoint_url = ""
     aws_access_key_id = ""
     aws_secret_access_key = ""
@@ -33,6 +34,8 @@ class FakeConfig:
     client_alias = "local"
     client_id = "00000000-0000-0000-0000-000000000000"
     is_configured = False
+    ssm_environments: dict = {}
+    ssm_read_secrets = False
 
     @classmethod
     def for_client(cls, c_id):
@@ -343,7 +346,7 @@ def test_client_status_after_login(monkeypatch, tmp_path):
     assert body["services"]["bitbucket"]["stored"] is False
     assert body["settings"]["ssm_prefixes"] == ["/config", "/common"]
     assert body["auth"]["bitbucket"]["workspace"] == ""
-    assert body["auth"]["aws"]["region"] == ""
+    assert body["auth"]["aws"]["region"] == DEFAULT_AWS_REGION
 
     cash = get_cache().get_client_by_alias("local")
     assert cash is not None
@@ -391,6 +394,7 @@ def test_auth_validates_aws_with_direct_credentials(monkeypatch):
     monkeypatch.setattr(repos_mod, "_aws_probe", fake_probe)
     resp = client.post("/api/auth/aws/validate", json={
         "region": "us-west-2",
+        "localstack": True,
         "endpoint_url": "http://localhost:4566",
         "access_key_id": "AK",
         "secret_access_key": "SK",
@@ -401,6 +405,24 @@ def test_auth_validates_aws_with_direct_credentials(monkeypatch):
     assert seen["access_key_id"] == "AK"
     assert seen["secret_access_key"] == "SK"
     assert seen["session_token"] == "TOK"
+
+
+def test_auth_aws_ignores_endpoint_without_localstack(monkeypatch):
+    """Sin flag localstack el endpoint no se aplica (default de seeders)."""
+    seen = {}
+
+    def fake_probe(profile, region, **kw):
+        seen.update(kw)
+        return (True, "STS OK prod")
+
+    monkeypatch.setattr(repos_mod, "_aws_probe", fake_probe)
+    resp = client.post("/api/auth/aws/validate", json={
+        "profile": "prod",
+        "region": "us-west-2",
+        "endpoint_url": "http://localhost:4566",
+    })
+    assert resp.status_code == 200
+    assert seen["endpoint_url"] == ""
 
 
 def test_auth_aws_requires_profile_or_access_key(monkeypatch):

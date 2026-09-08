@@ -1,0 +1,1 @@
+"""SSM View (BBIT-2): tablero `ssm_values` y motor de diff JSONPath."""

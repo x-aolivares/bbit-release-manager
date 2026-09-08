@@ -59,6 +59,16 @@ _SEED_PROVIDERS = {
     },
 }
 
+# Ambiente AWS -> región boto3 (tabla informativa; defaults de arranque).
+# El front puede sumar filas; las ediciones del usuario sobreviven al boot.
+_SEED_AWS_ENVIRONMENTS = {
+    "qa": "us-west-1",
+    "dev": "us-west-2",
+}
+
+# Región AWS por defecto (alineado con yappy-cli-manager para levantar el SSO).
+DEFAULT_AWS_REGION = "us-west-2"
+
 # name -> (provider, ttl_seconds, service_url, details)
 _SEED_REQUEST_TYPES = {
     "get_user_repositories": (
@@ -246,6 +256,33 @@ class ReleaseCache:
             );
             CREATE UNIQUE INDEX IF NOT EXISTS uuidx_ssm_c_path_decrypt
                 ON ssm_value (c_id, sv_path, sv_decrypt);
+
+            CREATE TABLE IF NOT EXISTS ssm_values (
+                sv_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sv_name TEXT NOT NULL,
+                sv_environment TEXT NOT NULL,
+                sv_is_secret INTEGER NOT NULL DEFAULT 0,
+                sv_source TEXT NOT NULL DEFAULT 'ssm',   -- 'ssm' | 'secretsmanager'
+                sv_secret_arn TEXT,
+                sv_details TEXT NOT NULL,                -- JSON del valor
+                sv_created_at REAL NOT NULL,
+                sv_updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ssmv_name ON ssm_values (sv_name);
+            CREATE INDEX IF NOT EXISTS idx_ssmv_env ON ssm_values (sv_environment);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_ssmv_name_env
+                ON ssm_values (sv_name, sv_environment);
+
+            CREATE TABLE IF NOT EXISTS aws_environment (
+                ae_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ae_name TEXT NOT NULL UNIQUE,        -- ambiente (qa, dev, prod...)
+                ae_region TEXT NOT NULL,             -- región boto3 (us-west-1...)
+                ae_localstack INTEGER NOT NULL DEFAULT 0,  -- apunta a LocalStack/Docker
+                ae_endpoint_url TEXT NOT NULL DEFAULT '',  -- endpoint custom (LocalStack)
+                ae_created_at REAL NOT NULL,
+                ae_updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ae_name ON aws_environment (ae_name);
             """
         )
         self._conn.commit()
@@ -306,6 +343,20 @@ class ReleaseCache:
                 )
             finally:
                 cur.close()
+
+            # aws_environment: columnas por ambiente (docker/endpoint) en DBs viejas.
+            ae_cols = {
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(aws_environment)").fetchall()
+            }
+            for col, ddl in (
+                ("ae_localstack", "INTEGER NOT NULL DEFAULT 0"),
+                ("ae_endpoint_url", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if col not in ae_cols:
+                    self._conn.execute(
+                        f"ALTER TABLE aws_environment ADD COLUMN {col} {ddl}"
+                    )
             self._conn.commit()
 
     def _drop_legacy_tables(self) -> None:
@@ -322,6 +373,18 @@ class ReleaseCache:
                 "ON CONFLICT(sp_name) DO UPDATE SET "
                 " sp_details = excluded.sp_details",
                 (name, json.dumps(details)),
+            )
+        self._conn.commit()
+
+        for env_name, region in _SEED_AWS_ENVIRONMENTS.items():
+            # Solo aplica los defaults si la fila no existe: una región editada
+            # o agregada por el usuario sobrevive al próximo boot.
+            self._conn.execute(
+                "INSERT INTO aws_environment "
+                "(ae_name, ae_region, ae_created_at, ae_updated_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(ae_name) DO NOTHING",
+                (env_name, region, now, now),
             )
         self._conn.commit()
 
@@ -1049,6 +1112,87 @@ class ReleaseCache:
             try:
                 cur.execute(sql, params)
                 n = cur.rowcount
+            finally:
+                cur.close()
+            self._conn.commit()
+        return n
+
+    # -- ambientes AWS (tabla informativa) -------------------------------------
+
+    def list_aws_environments(self) -> list[dict]:
+        """Ambientes sembrados + agregados por el usuario.
+
+        Filas: ``{name, region, localstack, endpoint_url}``.
+        """
+        rows = self._fetchall(
+            "SELECT ae_name, ae_region, ae_localstack, ae_endpoint_url "
+            "FROM aws_environment ORDER BY ae_name COLLATE NOCASE"
+        )
+        return [
+            {
+                "name": name,
+                "region": region,
+                "localstack": bool(localstack),
+                "endpoint_url": endpoint_url or "",
+            }
+            for name, region, localstack, endpoint_url in rows
+        ]
+
+    def aws_environments_map(self) -> dict[str, str]:
+        """Mapa ambiente -> región (para ssm_environments del Config)."""
+        return {env["name"]: env["region"] for env in self.list_aws_environments()}
+
+    def save_aws_environments(self, environments) -> int:
+        """Upsert de ambientes.
+
+        Acepta un dict ``{env: region}`` (compat) o una lista de filas
+        ``[{name, region, localstack?, endpoint_url?}]`` (canónico desde el front).
+        En el modo dict se preservan los flags/endpoint existentes de cada
+        ambiente; en modo filas se reemplazan los campos que vengan.
+        """
+        if not environments:
+            return 0
+        now = time.time()
+        rows = (
+            environments
+            if isinstance(environments, list)
+            else [{"name": k, "region": v} for k, v in environments.items()]
+        )
+        n = 0
+        with self._lock:
+            cur = self._conn.cursor()
+            try:
+                for row in rows:
+                    name = (row.get("name") or "").strip()
+                    region = (row.get("region") or "").strip()
+                    if not name or not region:
+                        continue
+                    existing = cur.execute(
+                        "SELECT ae_localstack, ae_endpoint_url "
+                        "FROM aws_environment WHERE ae_name = ?",
+                        (name,),
+                    ).fetchone()
+                    localstack = bool(
+                        row.get("localstack", bool(existing[0]) if existing else False)
+                    )
+                    endpoint = (
+                        row.get("endpoint_url")
+                        if row.get("endpoint_url") is not None
+                        else ((existing[1] or "") if existing else "")
+                    ).strip()
+                    cur.execute(
+                        "INSERT INTO aws_environment "
+                        "(ae_name, ae_region, ae_localstack, ae_endpoint_url, "
+                        " ae_created_at, ae_updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(ae_name) DO UPDATE SET "
+                        "  ae_region = excluded.ae_region, "
+                        "  ae_localstack = excluded.ae_localstack, "
+                        "  ae_endpoint_url = excluded.ae_endpoint_url, "
+                        "  ae_updated_at = excluded.ae_updated_at",
+                        (name, region, 1 if localstack else 0, endpoint, now, now),
+                    )
+                    n += 1
             finally:
                 cur.close()
             self._conn.commit()
