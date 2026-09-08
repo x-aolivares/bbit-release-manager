@@ -8,9 +8,11 @@
           <span class="bb-app">Release Manager</span>
         </div>
         <span class="bb-topbar-divider"></span>
+        @if (connected()) {
         <button class="bb-btn-icon" (click)="sidebarOpen.set(true)" aria-label="Abrir historial">
           <ion-icon name="time-outline"></ion-icon>
         </button>
+        }
         <span class="bb-topbar-badge"
               [class.bb-topbar-badge--ok]="health()"
               [class.bb-topbar-badge--neutral]="!health()">
@@ -75,7 +77,8 @@
     <!-- Mobile sidebar mask -->
     <div class="bb-sidebar-mask" [class.bb-sidebar-mask--visible]="sidebarOpen()" (click)="sidebarOpen.set(false)"></div>
 
-    <!-- Sidebar -->
+    <!-- Sidebar (solo con sesión activa: el historial no debe verse en el login) -->
+    @if (connected()) {
     <app-session-sidebar
       class="bb-sidebar-host"
       [class.bb-sidebar--open]="sidebarOpen()"
@@ -85,8 +88,9 @@
       (sessionDeleted)="onSessionDeleted($event)"
       (historyCleared)="onHistoryCleared()">
     </app-session-sidebar>
+    }
 
-    <div class="bb-page">
+    <div class="bb-page" [class.bb-page--full]="!connected()">
       @if (error()) {
       <ion-card class="bb-card">
         <ion-card-content class="bb-error">{{ error() }}</ion-card-content>

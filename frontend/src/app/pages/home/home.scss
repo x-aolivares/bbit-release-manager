@@ -1012,6 +1012,15 @@ button.bb-link {
   }
 }
 
+/* Sin sesión: el sidebar desaparece y el contenido usa todo el ancho. */
+@media (min-width: 769px) {
+  .bb-page--full {
+    width: 90%;
+    max-width: 90vw;
+    margin: 24px auto;
+  }
+}
+
 .bb-btn-icon {
   --background: transparent;
   --color: var(--bb-text-secondary);
