@@ -1220,18 +1220,25 @@ reportOpen = signal(false);
     this.http.post<any>(url, {}).subscribe({
       next: (r) => {
         if (r.ok) {
-          const created = r.items?.flatMap((i: any) => i.created) ?? [];
-          const skipped = r.items?.flatMap((i: any) => i.skipped) ?? [];
-          const errors = r.items?.flatMap((i: any) => i.errors) ?? [];
+          const created: string[] = r.items?.flatMap((i: any) => i.created) ?? [];
+          const skipped: string[] = r.items?.flatMap((i: any) => i.skipped) ?? [];
+          const errors: string[] = r.items?.flatMap((i: any) => i.errors) ?? [];
           const msg =
             `Tags creados: ${created.join(', ') || 'ninguno'}` +
             (skipped.length ? ` | ya existían: ${skipped.join(', ')}` : '') +
             (errors.length ? ` | errores: ${errors.join('; ')}` : '');
           this.error.set(msg);
-          if (repo) {
-            this.refreshRepo(repo.slug);
-          } else {
-            this.resolve();
+          if (repo && created.length) {
+            for (const tagName of created) {
+              const env = tagName.split('-').slice(0, -1).join('-') || tagName;
+              this.repos.update((list) => list.map((r) => {
+                if (r.slug !== repo.slug) return r;
+                const match_tag = { ...r.match_tag, [env]: tagName };
+                const existingTags = r.tags.filter((t) => t.name !== tagName);
+                const tags = [...existingTags, { name: tagName, deploy: null }];
+                return { ...r, match_tag, tags };
+              }));
+            }
           }
         } else {
           this.error.set(r.error ?? 'Error al generar tags.');
