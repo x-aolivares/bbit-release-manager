@@ -923,6 +923,33 @@ reportOpen = signal(false);
     this.loadRepos();
   }
 
+  /** Re-escanea un solo repo (deploy status, tags, PRs) y hace merge. */
+  refreshRepo(slug: string) {
+    if (!this.origin) return;
+    this.reposLoading.set(true);
+    const dest = this.projectsDest();
+    const prefixes = this.prefixes().join(',');
+    const exclude = this.blacklisted().join(',');
+    const url = buildFlowUrl({
+      origin: this.origin,
+      dest,
+      prefixes,
+      projectPrefixes: this.projectPrefixParam(),
+      exclude,
+      scanMode: this.scanMode,
+      force: 1,
+      repos: [slug],
+    });
+    this.http.get<any>(url).subscribe({
+      next: (r) => {
+        const bySlug = new Map<string, ScanRepo>((r.scan?.repos ?? []).map((row: ScanRepo) => [row.slug, row]));
+        this.repos.update((current) => current.map((repo) => bySlug.get(repo.slug) ?? repo));
+      },
+      error: () => {},
+      complete: () => this.reposLoading.set(false),
+    });
+  }
+
   paramRows(): { param: string; estado: string; qaValue: string | null; awsStatus: string; type: string; envValues: Record<string, string> }[] {
     const rows: { param: string; estado: string; qaValue: string | null; awsStatus: string; type: string; envValues: Record<string, string> }[] = [];
     const seen = new Set<string>();
@@ -1201,7 +1228,11 @@ reportOpen = signal(false);
             (skipped.length ? ` | ya existían: ${skipped.join(', ')}` : '') +
             (errors.length ? ` | errores: ${errors.join('; ')}` : '');
           this.error.set(msg);
-          this.resolve();
+          if (repo) {
+            this.refreshRepo(repo.slug);
+          } else {
+            this.resolve();
+          }
         } else {
           this.error.set(r.error ?? 'Error al generar tags.');
         }
