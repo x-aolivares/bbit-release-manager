@@ -19,6 +19,51 @@ def _transport(routes: dict) -> httpx.BaseTransport:
     return httpx.MockTransport(handler)
 
 
+def test_snapshot_extrae_archivos_sin_prefijo_raiz():
+    import io
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        def add(name: str, data: bytes, isdir: bool = False):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            if isdir:
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o755
+            tar.addfile(info, io.BytesIO(data))
+
+        add("ws-r1-abc123/", b"", isdir=True)
+        add("ws-r1-abc123/common.yml", b"k: {{resolve:ssm:/config/app/key}}")
+        add("ws-r1-abc123/config/app.json", b'{"env": "x"}')
+    content = buf.getvalue()
+
+    def archive(request):
+        return httpx.Response(
+            200, content=content, headers={"Content-Type": "application/x-tar-gz"}
+        )
+
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/ws/r1/get/abc.tar.gz"): archive,
+    }))
+    try:
+        snap = client.snapshot("r1", "abc")
+    finally:
+        client.close()
+    assert snap == {
+        "common.yml": "k: {{resolve:ssm:/config/app/key}}",
+        "config/app.json": '{"env": "x"}',
+    }
+
+
+def test_snapshot_none_si_el_ref_no_existe():
+    client = BitbucketClient("ws", "tok", transport=_transport({}))
+    try:
+        assert client.snapshot("r1", "nope") is None
+    finally:
+        client.close()
+
+
 def test_session_ok():
     def user(request):
         return httpx.Response(200, json={"username": "jane", "display_name": "Jane"})

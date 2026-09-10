@@ -225,7 +225,7 @@
 
 .bb-table--params .bb-repos-head,
 .bb-table--params .bb-repos-row {
-  grid-template-columns: 1.6fr 1fr 0.8fr 2fr 7rem;
+  grid-template-columns: repeat(4, 1fr);
 }
 
 .bb-table--repos,

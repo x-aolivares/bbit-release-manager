@@ -1039,7 +1039,7 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
     assert "app.py" not in [c[2] for c in raw_calls]
     assert body["diff"]["mode"] == "diff"
     assert body["diff"]["params"] == [
-        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
+        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "repos": ["r1"], "count": 1},
     ]
     assert body["diff"]["removed"] == [{"param": "/config/gone", "repos": ["r1"]}]
     assert body["diff"]["repos"][0]["added"] == ["/config/app/key"]
@@ -1094,7 +1094,7 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
     assert seen["list"] == [("r1", "headOrigin"), ("r1", "headDest")]
     assert ("r1", "headOrigin", "logo.png") not in seen["raw"]
     assert body["diff"]["params"] == [
-        {"param": "/config/a/b", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
+        {"param": "/config/a/b", "arn": "", "tipo": "nuevo", "repos": ["r1"], "count": 1},
     ]
     assert body["diff"]["repos"][0]["added"] == ["/config/a/b"]
 
@@ -1149,7 +1149,67 @@ def test_diff_resolve_master_lista_por_sha(monkeypatch):
     assert list_refs == ["headDest"]
     assert {"headOrigin", "headDest"} <= set(raw_refs)
     assert body["diff"]["params"] == [
-        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
+        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "repos": ["r1"], "count": 1},
+    ]
+
+
+def test_diff_lee_params_del_snapshot_si_el_cliente_lo_soporta(monkeypatch):
+    """El diff usa snapshot() cuando el cliente lo ofrece (en vez de
+    list_files + raw_file por archivo): upstreams y master params se leen
+    del tarball descargado una vez por (slug, ref)."""
+    snapshot_calls, raw_calls = [], []
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def diff(self, repo, destination, origin):
+            f = SimpleNamespace(
+                path="config/x.yaml", status="modified",
+                added_lines=("k: {{resolve:ssm:/config/app/key}}",), removed_lines=(),
+            )
+            return SimpleNamespace(files=[f])
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "headOrigin" if branch == "release/x" else "headDest"
+        def snapshot(self, slug, ref):
+            snapshot_calls.append(ref)
+            return {
+                "config/x.yaml": (
+                    "k: {{resolve:ssm:/config/app/key}}" if ref == "headOrigin" else "no ssm"
+                ),
+                "other/app.json": '{"k": "v"}',
+            }
+        def raw_file(self, repo, ref, path):
+            raw_calls.append((ref, path))
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
+    assert raw_calls == []
+    assert set(snapshot_calls) == {"headOrigin", "headDest"}
+    assert body["diff"]["params"] == [
+        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "repos": ["r1"], "count": 1},
     ]
 
 
@@ -1213,7 +1273,7 @@ def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
     assert list_calls == [True]
     # r1 master no tiene params → el param se considera 'nuevo' (r2 quedó fuera)
     assert body["diff"]["params"] == [
-        {"param": "/config/shared/secret", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
+        {"param": "/config/shared/secret", "arn": "", "tipo": "nuevo", "repos": ["r1"], "count": 1},
     ]
 
     # 2da consulta con la misma rama: cache hits, no vuelve a list_repos
@@ -1267,7 +1327,7 @@ def test_diff_cache_key_incluye_ssm_prefixes(monkeypatch):
     FakeConfig.ssm_prefixes = ["/config"]
     first = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
     assert first["diff"]["params"] == [
-        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
+        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "repos": ["r1"], "count": 1},
     ]
 
     FakeConfig.ssm_prefixes = ["/config", "/extra"]
@@ -1328,7 +1388,7 @@ def test_diff_reutilizado_cuando_path_esta_en_master_del_mismo_repo(monkeypatch)
     body = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
     # el path está en release y master → reutilizado (no 'nuevo', ni desaparecido)
     assert body["diff"]["params"] == [
-        {"param": "/config/shared/secret", "arn": "", "tipo": "reutilizado", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
+        {"param": "/config/shared/secret", "arn": "", "tipo": "reutilizado", "repos": ["r1"], "count": 1},
     ]
 
 
@@ -1385,7 +1445,7 @@ def test_diff_reutilizado_y_count_multirepo(monkeypatch):
 
     body = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
     assert body["diff"]["params"] == [
-        {"param": "/config/dup", "arn": "", "tipo": "reutilizado", "qa_value": None, "aws_status": "skipped", "repos": ["r1", "r2"], "count": 2},
+        {"param": "/config/dup", "arn": "", "tipo": "reutilizado", "repos": ["r1", "r2"], "count": 2},
     ]
 
 
@@ -2155,16 +2215,16 @@ def test_diff_enrich_aws_ok_and_missing(monkeypatch):
 
     body = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
     assert body["diff"]["params"] == [
-        {"param": "/config/a", "arn": "", "tipo": "nuevo", "qa_value": "valor-qa", "aws_status": "ok", "repos": ["r1"], "count": 1},
-        {"param": "/config/nope", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "missing", "repos": ["r1"], "count": 1},
+        {"param": "/config/a", "arn": "", "tipo": "nuevo", "repos": ["r1"], "count": 1},
+        {"param": "/config/nope", "arn": "", "tipo": "nuevo", "repos": ["r1"], "count": 1},
     ]
-    # la cache del flow NO guardó los valores SSM (van por overlay por cliente)
+    # los valores SSM NO se resuelven al armar la tabla (se piden bajo demanda)
     cached = get_cache().get_flow(
         "release/x", "master", None, set(),
         deploy_prefixes=["uat", "stgp", "prod"], ssm_prefixes=["/config", "/common"], mode="diff",
     )
     assert cached is not None
-    assert cached["diff"]["params"][0]["qa_value"] is None
+    assert cached["diff"]["params"][0].get("qa_value") is None
     FakeConfig.aws_profile = ""
     FakeConfig.aws_region = ""
 

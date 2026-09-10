@@ -923,10 +923,39 @@ reportOpen = signal(false);
     this.loadRepos();
   }
 
+  /** Re-escanea un solo repo (deploy status, tags, PRs) y hace merge. */
+  refreshRepo(slug: string) {
+    if (!this.origin) return;
+    this.reposLoading.set(true);
+    const dest = this.projectsDest();
+    const prefixes = this.prefixes().join(',');
+    const exclude = this.blacklisted().join(',');
+    const url = buildFlowUrl({
+      origin: this.origin,
+      dest,
+      prefixes,
+      projectPrefixes: this.projectPrefixParam(),
+      exclude,
+      scanMode: this.scanMode,
+      force: 0,
+      repos: [slug],
+    });
+    this.http.get<any>(url).subscribe({
+      next: (r) => {
+        const bySlug = new Map<string, ScanRepo>((r.scan?.repos ?? []).map((row: ScanRepo) => [row.slug, row]));
+        this.repos.update((current) => current.map((repo) => bySlug.get(repo.slug) ?? repo));
+      },
+      error: () => {},
+      complete: () => this.reposLoading.set(false),
+    });
+  }
+
   paramRows(): { param: string; estado: string; qaValue: string | null; awsStatus: string; type: string; envValues: Record<string, string> }[] {
     const rows: { param: string; estado: string; qaValue: string | null; awsStatus: string; type: string; envValues: Record<string, string> }[] = [];
+    const seen = new Set<string>();
     for (const p of this.filteredParams()) {
       if (!this.repoInProjects(p.repos)) continue;
+      seen.add(p.param);
       rows.push({
         param: p.param,
         estado: p.tipo,
@@ -938,6 +967,7 @@ reportOpen = signal(false);
     }
     for (const p of this.removed()) {
       if (!this.repoInProjects(p.repos)) continue;
+      if (seen.has(p.param)) continue;
       const estado = 'solo destino';
       if (!this.estadoFilterActive(estado)) continue;
       rows.push({ param: p.param, estado, qaValue: null, awsStatus: 'skipped', type: 'ssm', envValues: {} });
@@ -947,10 +977,6 @@ reportOpen = signal(false);
 
   openSsmView(param: string): void {
     this.router.navigate(['/ssm', encodeURIComponent(param)]);
-  }
-
-  envChips(p: { envValues: Record<string, string> }): { env: string; value: string }[] {
-    return Object.entries(p.envValues ?? {}).map(([env, value]) => ({ env, value }));
   }
 
   estadoLabel(estado: string): string {
@@ -1130,7 +1156,7 @@ reportOpen = signal(false);
     if (!tag) return null;
     const deploy = repo.deploys?.[prefix.toLowerCase()];
     if (!deploy) {
-      return { label: `${tag} · pendiente`, cls: 'bb-deploy--pending' };
+      return { label: `${tag} · pendiente de aprobación`, cls: 'bb-deploy--pending' };
     }
     const s = deploy.status;
     if (s === 'success') {
@@ -1190,15 +1216,26 @@ reportOpen = signal(false);
     this.http.post<any>(url, {}).subscribe({
       next: (r) => {
         if (r.ok) {
-          const created = r.items?.flatMap((i: any) => i.created) ?? [];
-          const skipped = r.items?.flatMap((i: any) => i.skipped) ?? [];
-          const errors = r.items?.flatMap((i: any) => i.errors) ?? [];
+          const created: string[] = r.items?.flatMap((i: any) => i.created) ?? [];
+          const skipped: string[] = r.items?.flatMap((i: any) => i.skipped) ?? [];
+          const errors: string[] = r.items?.flatMap((i: any) => i.errors) ?? [];
           const msg =
             `Tags creados: ${created.join(', ') || 'ninguno'}` +
             (skipped.length ? ` | ya existían: ${skipped.join(', ')}` : '') +
             (errors.length ? ` | errores: ${errors.join('; ')}` : '');
           this.error.set(msg);
-          this.resolve();
+          if (repo && created.length) {
+            for (const tagName of created) {
+              const env = tagName.split('-').slice(0, -1).join('-') || tagName;
+              this.repos.update((list) => list.map((r) => {
+                if (r.slug !== repo.slug) return r;
+                const match_tag = { ...r.match_tag, [env]: tagName };
+                const existingTags = r.tags.filter((t) => t.name !== tagName);
+                const tags = [...existingTags, { name: tagName, deploy: null }];
+                return { ...r, match_tag, tags };
+              }));
+            }
+          }
         } else {
           this.error.set(r.error ?? 'Error al generar tags.');
         }
