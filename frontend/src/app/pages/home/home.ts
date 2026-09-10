@@ -925,8 +925,10 @@ reportOpen = signal(false);
 
   paramRows(): { param: string; estado: string; qaValue: string | null; awsStatus: string; type: string; envValues: Record<string, string> }[] {
     const rows: { param: string; estado: string; qaValue: string | null; awsStatus: string; type: string; envValues: Record<string, string> }[] = [];
+    const seen = new Set<string>();
     for (const p of this.filteredParams()) {
       if (!this.repoInProjects(p.repos)) continue;
+      seen.add(p.param);
       rows.push({
         param: p.param,
         estado: p.tipo,
@@ -938,6 +940,7 @@ reportOpen = signal(false);
     }
     for (const p of this.removed()) {
       if (!this.repoInProjects(p.repos)) continue;
+      if (seen.has(p.param)) continue;
       const estado = 'solo destino';
       if (!this.estadoFilterActive(estado)) continue;
       rows.push({ param: p.param, estado, qaValue: null, awsStatus: 'skipped', type: 'ssm', envValues: {} });
