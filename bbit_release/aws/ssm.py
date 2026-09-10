@@ -99,6 +99,8 @@ def enrich_diff_params(
     - Sin sesión AWS usable → ``skipped`` con ``qa_value=None`` (comportamiento
       actual, nada se rompe).
     - Con sesión → ``ok`` (valor real) o ``missing`` (no existe en SSM).
+    - Con sesión pero conexión caída (AWS/LocalStack inaccesible) → degrada a
+      ``skipped`` sin tumbar el stream (idem caso sin sesión).
     El resultado comparte lista y orden; solo se muta cada dict de parametro.
     """
     paths = sorted({p.get("param", "") for p in params if p.get("param")})
@@ -108,7 +110,14 @@ def enrich_diff_params(
             p["qa_value"] = None
         return params
 
-    values = fetch_values(session, paths, decrypt=decrypt, cache=cache, ttl=ttl)
+    try:
+        values = fetch_values(session, paths, decrypt=decrypt, cache=cache, ttl=ttl)
+    except AwsSessionError as exc:
+        log.warning("SSM no disponible, degradando a skipped: %s", exc)
+        for p in params:
+            p["aws_status"] = "skipped"
+            p["qa_value"] = None
+        return params
     for p in params:
         path = p.get("param", "")
         info = values.get(path)

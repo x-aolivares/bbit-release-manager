@@ -299,6 +299,25 @@ def test_enrich_skipped_when_no_profile():
     assert out[0]["aws_status"] == "skipped"
 
 
+def test_enrich_degrades_to_skipped_when_connection_fails(_clean_cache, caplog):
+    """Si la conexión a SSM falla (AWS/LocalStack caído), enrich NO debe
+    tumbar el stream: degrada todos los params a skipped."""
+    cache = get_cache()
+
+    class BoomSsm:
+        def get_parameters(self, **kwargs):
+            raise AwsSessionError("Could not connect to the endpoint URL: http://localhost:4566/")
+
+    session = _session()
+    _inject(session, BoomSsm())
+    params = _params("/config/a", "/common/b")
+    with caplog.at_level("WARNING", logger="bbit.aws.ssm"):
+        out = enrich_diff_params(params, session, cache=cache)
+    assert [p["aws_status"] for p in out] == ["skipped", "skipped"]
+    assert all(p["qa_value"] is None for p in out)
+    assert "localhost:4566" in caplog.text
+
+
 def test_enrich_ok_and_missing(_clean_cache):
     cache = get_cache()
     ssm = FakeSsmClient()
