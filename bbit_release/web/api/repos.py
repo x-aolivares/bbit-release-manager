@@ -1444,7 +1444,6 @@ def _compute_diff(
             "param": path,
             "arn": "",
             "tipo": tipo.get(path, "nuevo"),
-            "qa_value": None,
             "repos": sorted(entry),
             "count": len(entry),
         }
@@ -1484,22 +1483,16 @@ def _enrich_diff_ssm(result: dict, cfg: Config) -> dict:
     """Overlay de valores SSM por cliente sobre el diff cacheado.
 
     El payload cacheado es compartido entre sesiones: aca se resuelven
-    `qa_value` + `aws_status` para el cliente del request, y se agrega el
-    tablero `ssm_values` (type + env_values por ambiente) para la ssm-view.
+    los env_values desde la ssm-view (cache local, sin llamada AWS) y el
+    type por ambiente. Los valores reales de SSM (qa_value) se piden por
+    separado cuando el usuario clickea "Revisar SSM".
     Se devuelve una copia enriquecida (sin escribir valores a la cache del diff).
     """
     import copy
 
-    from ...aws.session import AwsSession
-    from ...aws.ssm import enrich_diff_params
     from ...ssm.store import SsmStore
 
     out = copy.deepcopy(result)
-    params = out.get("params", [])
-    session = AwsSession.from_config(cfg)
-    decrypt = str(cfg.aws_env.get("SSM_DECRYPT") or "").strip().lower() in {"1", "true", "yes"}
-    out["params"] = enrich_diff_params(params, session, decrypt=decrypt, cache=get_cache())
-
     store = SsmStore(get_cache())
     for p in out.get("params", []):
         overlay = store.enrich_param(
