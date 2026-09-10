@@ -441,7 +441,6 @@
             <span>Parámetro</span>
             <span>Estado</span>
             <span>Tipo</span>
-            <span>Revisión por ambiente</span>
             <span></span>
           </div>
           @for (p of paramRows(); track p.param) {
@@ -456,16 +455,6 @@
               <span class="bb-badge bb-badge--danger" title="Parámetro marcado como secreto en la ssm-view">secreto</span>
               } @else {
               <span class="bb-badge bb-badge--neutral">ssm</span>
-              }
-            </span>
-            <span class="bb-env-chips">
-              @if (envChips(p).length === 0) {
-              <span class="bb-muted">—</span>
-              }
-              @for (chip of envChips(p); track chip.env) {
-              <span class="bb-chip-pill bb-mono" [title]="chip.value">{{ chip.env }}
-                <span class="bb-chip-value">{{ chip.value }}</span>
-              </span>
               }
             </span>
             <span>

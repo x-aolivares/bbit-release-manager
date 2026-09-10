@@ -979,10 +979,6 @@ reportOpen = signal(false);
     this.router.navigate(['/ssm', encodeURIComponent(param)]);
   }
 
-  envChips(p: { envValues: Record<string, string> }): { env: string; value: string }[] {
-    return Object.entries(p.envValues ?? {}).map(([env, value]) => ({ env, value }));
-  }
-
   estadoLabel(estado: string): string {
     switch (estado) {
       case 'reutilizado':
