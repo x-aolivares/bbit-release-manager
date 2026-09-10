@@ -453,9 +453,8 @@ reportOpen = signal(false);
   currentSessionId = signal<string | null>(null);
   sessions = signal<SessionConfig[]>([]);
 
-  repoCols(): string {
-    const total = 3 + this.prefixes().length;
-    return `repeat(${total}, 1fr)`;
+  prefixCols(): string {
+    return this.prefixes().map(() => ' 9.5rem').join('');
   }
 
   addPrefix() {
