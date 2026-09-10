@@ -11,6 +11,7 @@ import { IonCardContent } from '@ionic/angular/ion-card-content';
 import { IonIcon } from '@ionic/angular';
 import { SessionHistoryService, SessionConfig } from '../../services/session-history.service';
 import { SessionSidebarComponent } from '../../components/session-sidebar/session-sidebar';
+import { buildFlowUrl, processSseEvent, repoUrl as flowRepoUrl } from './flow-utils';
 
 interface Health {
   status: string;
@@ -48,7 +49,6 @@ interface ScanRepo {
   workspace: string;
   branch_url: string;
   commit: string;
-  behind: number;
   no_changes?: boolean;
   error?: string | null;
   tags: TagRow[];
@@ -69,7 +69,6 @@ interface ScanProject {
 interface ScanStats {
   repos: number;
   with_pr: number;
-  synced: number;
   prod: number;
 }
 
@@ -709,6 +708,87 @@ reportOpen = signal(false);
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   }
 
+  /**
+   * Attempt to load repos via SSE streaming for incremental rendering.
+   * Returns true if SSE started successfully, false if fallback is needed.
+   */
+  private scanSse(
+    onRepo: (item: ScanRepo) => void,
+    onStats: (stats: ScanStats) => void,
+    onDiff: (diff: DiffResponse) => void,
+    onDone: () => void,
+    onError: (msg: string) => void,
+    onTimeout: () => void,
+  ): boolean {
+    const dest = this.projectsDest();
+    const prefixes = this.prefixes().join(',');
+    const exclude = this.blacklisted().join(',');
+    const force = this.forceCache() ? 1 : 0;
+    const url = `/api/flow/stream?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}`;
+
+    let firstEventReceived = false;
+    const timeout = setTimeout(() => {
+      if (!firstEventReceived) {
+        es.close();
+        onTimeout();
+      }
+    }, 3000);
+
+    let repos: ScanRepo[] = [];
+    const es = new EventSource(url);
+
+    es.addEventListener('repo', (e: MessageEvent) => {
+      firstEventReceived = true;
+      const parsed = processSseEvent('repo', e.data, repos);
+      if (parsed?.type === 'repo') {
+        repos = parsed.repos;
+        onRepo(parsed.repos[parsed.repos.length - 1]);
+      }
+    });
+
+    es.addEventListener('stats', (e: MessageEvent) => {
+      const parsed = processSseEvent('stats', e.data, repos);
+      if (parsed?.type === 'stats') {
+        onStats(parsed.stats as unknown as ScanStats);
+      }
+    });
+
+    es.addEventListener('diff', (e: MessageEvent) => {
+      const parsed = processSseEvent('diff', e.data, repos);
+      if (parsed?.type === 'diff') {
+        onDiff(parsed.diff as unknown as DiffResponse);
+      }
+    });
+
+    es.addEventListener('done', () => {
+      clearTimeout(timeout);
+      es.close();
+      onDone();
+    });
+
+    es.addEventListener('error', (e: MessageEvent) => {
+      // Server-sent `event: error` carries data; network-level errors
+      // dispatch an Event without data and are handled by es.onerror below.
+      if (!e.data) return;
+      clearTimeout(timeout);
+      es.close();
+      const parsed = processSseEvent('error', e.data, repos);
+      if (parsed?.type === 'error') {
+        onError(parsed.message);
+      } else {
+        onError('Stream error');
+      }
+    });
+
+    es.onerror = () => {
+      clearTimeout(timeout);
+      es.close();
+      onTimeout();
+    };
+
+    return true;
+  }
+
   loadRepos(retryOnly = false) {
     if (!this.origin) return;
     this.reposLoading.set(true);
@@ -728,12 +808,66 @@ reportOpen = signal(false);
         this.paramsLoading.set(false);
       }
     });
+
+    // Retry-only path always uses batch HTTP (single repo re-scan).
+    if (retryOnly) {
+      this.loadReposBatch(retryOnly, done);
+      return;
+    }
+
+    // Normal load: try SSE streaming first, fallback to batch on failure.
+    let batchFallbackScheduled = false;
+    const scheduleFallback = () => {
+      if (batchFallbackScheduled) return;
+      batchFallbackScheduled = true;
+      console.warn('SSE streaming unavailable, falling back to batch.');
+      this.loadReposBatch(false, done);
+    };
+
+    const repos: ScanRepo[] = [];
+
+    this.scanSse(
+      (item) => {
+        repos.push(item);
+        this.repos.set([...repos]);
+      },
+      (stats) => {
+        this.stats.set(stats as ScanStats);
+      },
+      (diff) => {
+        this.params.set((diff.params ?? []) as unknown as SsmParam[]);
+        this.removed.set((diff.removed ?? []) as unknown as RemovedParam[]);
+        this.paramsLoaded.set(true);
+      },
+      () => {
+        done();
+        this.saveCurrentSession();
+      },
+      (msg) => {
+        this.error.set(msg);
+        done();
+      },
+      () => {
+        // SSE failed — fallback to batch
+        scheduleFallback();
+      },
+    );
+  }
+
+  private loadReposBatch(retryOnly: boolean, done: () => void): void {
     const dest = this.projectsDest();
     const prefixes = this.prefixes().join(',');
     const exclude = this.blacklisted().join(',');
-    // El reintento consulta una vez (sin forzar cache) y solo los fallidos.
     const force = retryOnly ? 0 : (this.forceCache() ? 1 : 0);
-    let url = `/api/flow?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}`;
+    let url = buildFlowUrl({
+      origin: this.origin,
+      dest,
+      prefixes,
+      projectPrefixes: this.projectPrefixParam(),
+      exclude,
+      scanMode: this.scanMode,
+      force,
+    });
     if (retryOnly) {
       const slugs = this.failedSlugs();
       if (!slugs.length) {
@@ -944,12 +1078,6 @@ reportOpen = signal(false);
       });
   }
 
-  syncInfo(behind: number): { label: string; cls: string } {
-    if (behind <= 0) return { label: 'al día', cls: 'bb-sync--ok' };
-    if (behind <= 4) return { label: `${behind} atrás`, cls: 'bb-sync--warn' };
-    return { label: `${behind} atrás`, cls: 'bb-sync--danger' };
-  }
-
   failedRepos(): ScanRepo[] {
     return this.repos().filter((r) => !!r.error);
   }
@@ -963,14 +1091,8 @@ reportOpen = signal(false);
     this.loadRepos(true);
   }
 
-  syncDot(cls: string): string {
-    if (cls === 'bb-sync--warn') return 'bb-dot--pending';
-    if (cls === 'bb-sync--danger') return 'bb-dot--fail';
-    return 'bb-dot--ok';
-  }
-
   repoUrl(repo: ScanRepo): string {
-    return `https://bitbucket.org/${repo.workspace}/${repo.slug}`;
+    return flowRepoUrl(repo);
   }
 
   envTagHref(repo: ScanRepo, prefix: string): string {

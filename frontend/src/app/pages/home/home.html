@@ -290,10 +290,9 @@
           }
         </div>
         <div class="bb-table bb-table--repos"
-             [style.--bb-cols]="'1.4fr 1fr 1fr 1.4fr' + prefixCols()">
+             [style.--bb-cols]="'1.4fr 1fr 1.4fr' + prefixCols()">
           <div class="bb-repos-head">
             <span>Repositorio</span>
-            <span>Sync</span>
             <span>PR</span>
             <span>Tagged Commit</span>
             @for (p of prefixes(); track p) {
@@ -303,17 +302,8 @@
           @for (repo of repos(); track repo.slug) {
           <div class="bb-repos-row">
                   <span>
-                    <a class="bb-link bb-repo-name" [href]="repoUrl(repo)" target="_blank"
+                    <a class="bb-link bb-repo-name" [href]="repo.branch_url" target="_blank"
                        [title]="repo.name">{{ repo.name }}</a>
-                  </span>
-            <span>
-                    @if (repo.error) {
-                      <span class="bb-sync bb-sync--danger" [title]="repo.error">falló</span>
-                    } @else {
-                      @let sync = syncInfo(repo.behind);
-                      <span class="bb-dot {{ syncDot(sync.cls) }}"></span>
-                      <span class="bb-sync {{ sync.cls }}">{{ sync.label }}</span>
-                    }
                   </span>
             <span>
                     @if (repo.error) {

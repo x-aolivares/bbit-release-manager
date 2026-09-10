@@ -153,10 +153,6 @@
   background: var(--bb-success);
 }
 
-.bb-dot--fail {
-  background: var(--bb-danger);
-}
-
 .bb-dot--pending {
   background: var(--bb-warning);
 }
@@ -698,29 +694,6 @@
 }
 
 .bb-stat--danger {
-  color: var(--bb-danger);
-}
-
-.bb-sync {
-  display: inline-block;
-  font-size: var(--bb-font-sm);
-  font-weight: 700;
-  border-radius: var(--bb-radius-pill);
-  padding: 3px 10px;
-}
-
-.bb-sync--ok {
-  background: var(--bb-success-bg);
-  color: var(--bb-success);
-}
-
-.bb-sync--warn {
-  background: var(--bb-warning-bg);
-  color: var(--bb-warning);
-}
-
-.bb-sync--danger {
-  background: var(--bb-danger-bg);
   color: var(--bb-danger);
 }
 

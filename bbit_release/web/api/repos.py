@@ -4,7 +4,7 @@ import re
 import time
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from ...bitbucket import client as bb
 from ...cache import DEFAULT_AWS_REGION, get_cache
@@ -659,7 +659,6 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
         no_changes = not client.has_commits_ahead(repo.slug, origin, destination)
     else:
         no_changes = False
-    behind = client.commits_behind(repo.slug, origin, destination)
     match_commit = commit
     if ci is not None and pr and pr.get("source_commit"):
         branch_head = client.commit_for_branch(repo.slug, origin, resolved=resolved)
@@ -723,7 +722,6 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
         "workspace": repo.workspace,
         "branch_url": client.branch_url(repo.slug, origin),
         "commit": commit,
-        "behind": behind,
         "no_changes": no_changes,
         "tags": tag_rows,
         "pr": _serialize_pr(pr),
@@ -747,7 +745,6 @@ def _failed_repo_item(repo, client, origin, exc):
         "workspace": repo.workspace,
         "branch_url": client.branch_url(repo.slug, origin),
         "commit": "",
-        "behind": None,
         "no_changes": False,
         "error": str(exc),
         "tags": [],
@@ -784,15 +781,32 @@ def _scan_repos(client, ci, repos, origin, destination, clean, ctx=None):
         ci_error = first_ci_error
 
     with_pr = sum(1 for it in items if it["pr"].get("exists"))
-    synced = sum(1 for it in items if it["behind"] == 0)
     prod = sum(1 for it in items if (it["deploys"].get("prod") or {}).get("status") == "success")
     stats = {
         "repos": len(items),
         "with_pr": with_pr,
-        "synced": synced,
         "prod": prod,
     }
     return items, ci_error, stats
+
+
+def _stream_scan(client, ci, repos, origin, destination, clean, ctx=None):
+    """Generador que emite (item, error) por cada repo completado en el scan paralelo.
+
+    Yield-ear tuplas de la forma ``(item, error)`` a medida que cada future
+    termina, manteniendo la concurrencia con ``ThreadPoolExecutor``. Al
+    agotarse los repos el generador termina; el cálculo de stats lo hace el
+    caller en el endpoint con los items acumulados.
+    """
+    workers = min(MAX_WORKERS, len(repos) or 1)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(_repo_scan, client, ci, repo, origin, destination, clean, ctx) for repo in repos]
+        for fut, repo in zip(futures, repos):
+            try:
+                yield fut.result()
+            except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+                log.warning("stream scan %s falló: %s", repo.slug, exc)
+                yield (_failed_repo_item(repo, client, origin, exc), None)
 
 
 @router.get("/flow")
@@ -891,6 +905,93 @@ def flow(
     return result
 
 
+@router.get("/flow/stream")
+def flow_stream(
+    origin: str,
+    destination: str = "master",
+    prefixes: str = "",
+    project_prefixes: str = "",
+    exclude: str = "",
+    mode: str = "diff",
+    force: int = 0,
+    repos: str = "",
+):
+    """Endpoint SSE de streaming del scan — entrega cada repo a medida que se completa.
+
+    Mismos parámetros que ``GET /api/flow``. Emite eventos SSE ``repo``
+    (por cada repo escaneado), ``stats`` (al terminar), ``diff``, y
+    ``done`` (sentinel de cierre). El frontend suscribe ``EventSource`` a
+    este endpoint para render incremental.
+    """
+    import json as _json
+
+    data = _require_session()
+    cfg_scan = Config()
+    cfg_diff = _session_config(data)
+    deploy_prefixes = [p.strip() for p in prefixes.split(",") if p.strip()] or cfg_scan.deploy_prefixes
+    ssm_prefixes = cfg_diff.ssm_prefixes
+    proj = _project_prefixes(cfg_scan, project_prefixes)
+    blocked = _exclude_repos(cfg_scan, exclude)
+    mode = mode if mode == "all" else "diff"
+    only_repos = {s.strip() for s in repos.split(",") if s.strip()}
+    cache = get_cache()
+
+    if force:
+        cache.invalidate(origin, destination, {
+            "repositories": {"excluded": sorted(blocked), "prefixes": sorted(proj or [])}
+        })
+
+    repos_list = _apply_filters(
+        _branch_repos_cached(data.client, origin, destination, proj, blocked),
+        proj, blocked,
+    )
+    scan_repos = repos_list if not only_repos else [r for r in repos_list if r.slug in only_repos]
+
+    ci = _circleci()
+    ci_configured = ci is not None
+    ci_error = None
+    if ci is None and cfg_scan.circleci_token == "":
+        ci_error = "Sin CIRCLECI_TOKEN configurado."
+
+    ctx: dict = {}
+
+    def _event(event_type: str, payload) -> str:
+        return f"retry: 5000\nevent: {event_type}\ndata: {_json.dumps(payload)}\n\n"
+
+    def _generate():
+        items = []
+        scan_ci_error = None
+        for item, err in _stream_scan(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx):
+            items.append(item)
+            if err:
+                scan_ci_error = scan_ci_error or err
+            yield _event("repo", item)
+
+        if scan_ci_error:
+            ci_error_local = ci_error or scan_ci_error
+            yield _event("error", {"message": ci_error_local})
+
+        items.sort(key=lambda x: x["slug"])
+        with_pr = sum(1 for it in items if it["pr"].get("exists"))
+        prod = sum(1 for it in items if (it["deploys"].get("prod") or {}).get("status") == "success")
+        stats = {
+            "repos": len(items),
+            "with_pr": with_pr,
+            "prod": prod,
+        }
+        yield _event("stats", stats)
+
+        diff_raw = _compute_diff(
+            data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
+        )
+        diff_enriched = _enrich_diff_ssm(diff_raw, cfg_diff)
+        yield _event("diff", diff_enriched)
+
+        yield _event("done", {})
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")
+
+
 @router.post("/pr")
 def create_pr(repo: str, origin: str, destination: str = "master", title: str = ""):
     data = _require_session()
@@ -985,7 +1086,6 @@ def generate_tags(origin: str, prefixes: str = "", repo: str = "", destination: 
     """
     data = _require_session()
     cfg = Config()
-    envs = [p.strip().lower() for p in prefixes.split(",") if p.strip()] or cfg.deploy_prefixes
     proj = _project_prefixes(cfg, project_prefixes)
     blocked = _exclude_repos(cfg, exclude)
     ci = _circleci()
@@ -994,6 +1094,52 @@ def generate_tags(origin: str, prefixes: str = "", repo: str = "", destination: 
             {"ok": False, "error": "Sin CIRCLECI_TOKEN no se puede resolver el pipeline del commit."},
             status_code=400,
         )
+
+    # When repo param is set, resolve ONLY that repo directly — skip
+    # _branch_repos_cached entirely and use provided prefixes as-is.
+    if repo:
+        envs = [p.strip().lower() for p in prefixes.split(",") if p.strip()] or cfg.deploy_prefixes
+        try:
+            commit = data.client.commit_for_branch(repo, origin)
+        except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)},
+                status_code=400,
+            )
+        # Verify the repo contains the branch by checking if commit_for_branch returned a value
+        if not commit:
+            return JSONResponse(
+                {"ok": False, "error": f"El repo '{repo}' no contiene la rama '{origin}'."},
+                status_code=400,
+            )
+        try:
+            pipeline_id = ci.pipeline_id_for_commit(repo, origin, commit)
+        except CircleCiError as exc:
+            items = [{"repo": repo, "commit": commit, "pipeline_id": None,
+                      "created": [], "skipped": [], "errors": [str(exc)]}]
+            return {"ok": True, "origin": origin, "envs": envs, "items": items}
+        if not pipeline_id:
+            items = [{"repo": repo, "commit": commit, "pipeline_id": None,
+                      "created": [], "skipped": [],
+                      "errors": [f"El commit {commit[:8]} no tiene pipeline en CircleCI"]}]
+            return {"ok": True, "origin": origin, "envs": envs, "items": items}
+        created, skipped, errors = [], [], []
+        for env in envs:
+            tag = f"{env}-{pipeline_id}"
+            try:
+                if data.client.tag_exists(repo, tag):
+                    skipped.append(tag)
+                    continue
+                data.client.create_tag(repo, tag, commit)
+                created.append(tag)
+            except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+                errors.append(f"{tag}: {exc}")
+        items = [{"repo": repo, "commit": commit, "pipeline_id": pipeline_id,
+                  "created": created, "skipped": skipped, "errors": errors}]
+        return {"ok": True, "origin": origin, "envs": envs, "items": items}
+
+    # Batch mode (no repo param): global resolution + cfg fallback
+    envs = [p.strip().lower() for p in prefixes.split(",") if p.strip()] or cfg.deploy_prefixes
 
     def _repos():
         for r in _apply_filters(_branch_repos_cached(data.client, origin, destination, proj, blocked), proj, blocked):

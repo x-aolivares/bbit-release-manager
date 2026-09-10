@@ -487,8 +487,6 @@ def test_scan_returns_repos_with_pr_and_params(monkeypatch):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch, resolved=""):
             return "abc123"
-        def commits_behind(self, repo, branch, base):
-            return 2
         def has_commits_ahead(self, repo, branch, base):
             return False
         def tags_on_commit(self, repo, commit):
@@ -517,10 +515,10 @@ def test_scan_returns_repos_with_pr_and_params(monkeypatch):
     assert body["scan"]["prefixes"] == ["uat"]
     assert body["scan"]["repos"][0]["slug"] == "r1"
     assert body["scan"]["repos"][0]["commit"] == "abc123"
-    assert body["scan"]["repos"][0]["behind"] == 2
+    assert "behind" not in body["scan"]["repos"][0]
     assert body["scan"]["repos"][0]["no_changes"] is True
     assert body["scan"]["stats"]["repos"] == 1
-    assert body["scan"]["stats"]["synced"] == 0
+    assert "synced" not in body["scan"]["stats"]
     assert body["scan"]["repos"][0]["pr"]["exists"] is False
     assert body["scan"]["repos"][0]["deploys"] == {"uat": None}
     assert body["scan"]["repos"][0]["match_tag"] == {"uat": None}
@@ -550,10 +548,6 @@ def test_flow_failed_repo_is_marked_not_500(monkeypatch):
                     SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch, resolved=""):
             return "abc123"
-        def commits_behind(self, repo, branch, base):
-            if repo == "r1":
-                raise BitbucketError("repo r1 rompido")
-            return 1
         def has_commits_ahead(self, repo, branch, base):
             return False
         def tags_on_commit(self, repo, commit):
@@ -570,20 +564,28 @@ def test_flow_failed_repo_is_marked_not_500(monkeypatch):
         def raw_file(self, repo, ref, path):
             return None
 
+    original_repo_scan = repos_mod._repo_scan
+
+    def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
+        if repo.slug == "r1":
+            raise BitbucketError("repo r1 rompido")
+        return original_repo_scan(client, ci, repo, origin, destination, clean, ctx)
+
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    monkeypatch.setattr(repos_mod, "_repo_scan", _failing_repo_scan)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.get("/api/flow", params={"origin": "release/x", "prefixes": "uat"}).json()
     assert body["scan"]["stats"]["repos"] == 2
     r1 = next(r for r in body["scan"]["repos"] if r["slug"] == "r1")
     assert "repo r1 rompido" in r1["error"]
-    assert r1["behind"] is None
+    assert "behind" not in r1
     assert r1["commit"] == ""
     assert r1["pr"]["exists"] is False
     r2 = next(r for r in body["scan"]["repos"] if r["slug"] == "r2")
     assert r2.get("error") is None
-    assert r2["behind"] == 1
+    assert "behind" not in r2
 
 
 def test_flow_repos_param_limits_scan_retry(monkeypatch):
@@ -604,10 +606,6 @@ def test_flow_repos_param_limits_scan_retry(monkeypatch):
                     SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch, resolved=""):
             return "abc123"
-        def commits_behind(self, repo, branch, base):
-            if repo == "r1":
-                raise BitbucketError("repo r1 rompido")
-            return 1
         def has_commits_ahead(self, repo, branch, base):
             return False
         def tags_on_commit(self, repo, commit):
@@ -624,8 +622,16 @@ def test_flow_repos_param_limits_scan_retry(monkeypatch):
         def raw_file(self, repo, ref, path):
             return None
 
+    original_repo_scan = repos_mod._repo_scan
+
+    def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
+        if repo.slug == "r1":
+            raise BitbucketError("repo r1 rompido")
+        return original_repo_scan(client, ci, repo, origin, destination, clean, ctx)
+
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    monkeypatch.setattr(repos_mod, "_repo_scan", _failing_repo_scan)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     # Reintento a demanda: se re-escanza SOLO r1, que vuelve a fallar; r2
@@ -659,8 +665,6 @@ def test_scan_reuses_pr_hash(monkeypatch):
         def commit_for_branch(self, repo, branch, resolved=""):
             commit_calls.append(branch)
             return "fromCommit"
-        def commits_behind(self, repo, branch, base):
-            return 1
         def tags_on_commit(self, repo, commit):
             return []
         def find_pr(self, repo, origin, destination):
@@ -702,8 +706,6 @@ def test_scan_deploys_from_tag(monkeypatch):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch, resolved=""):
             return "abc123"
-        def commits_behind(self, repo, branch, base):
-            return 0
         def has_commits_ahead(self, repo, branch, base):
             return True
         def tags_on_commit(self, repo, commit):
@@ -761,8 +763,6 @@ def test_scan_resolves_full_hash_with_pr(monkeypatch):
         def commit_for_branch(self, repo, branch, resolved=""):
             calls.append(branch)
             return "abc123456789000000000000000000000000000000"
-        def commits_behind(self, repo, branch, base):
-            return 0
         def tags_on_commit(self, repo, commit):
             return [{"name": "uat-7", "date": "x"}]
         def find_pr(self, repo, origin, destination):
@@ -1005,8 +1005,6 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
             )
         def has_commits_ahead(self, repo, branch, base):
             return False
-        def commits_behind(self, repo, branch, base):
-            return 0
         def tags_on_commit(self, repo, commit):
             return []
         def branch_url(self, repo, branch):
@@ -1061,8 +1059,6 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
             )
         def has_commits_ahead(self, repo, branch, base):
             return False
-        def commits_behind(self, repo, branch, base):
-            return 0
         def tags_on_commit(self, repo, commit):
             return []
         def branch_url(self, repo, branch):
@@ -1118,8 +1114,6 @@ def test_diff_resolve_master_lista_por_sha(monkeypatch):
             )
         def has_commits_ahead(self, repo, branch, base):
             return False
-        def commits_behind(self, repo, branch, base):
-            return 0
         def tags_on_commit(self, repo, commit):
             return []
         def branch_url(self, repo, branch):
@@ -1176,8 +1170,6 @@ def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
             )
         def has_commits_ahead(self, repo, branch, base):
             return False
-        def commits_behind(self, repo, branch, base):
-            return 0
         def tags_on_commit(self, repo, commit):
             return []
         def branch_url(self, repo, branch):
@@ -1242,8 +1234,6 @@ def test_diff_cache_key_incluye_ssm_prefixes(monkeypatch):
             )
         def has_commits_ahead(self, repo, branch, base):
             return False
-        def commits_behind(self, repo, branch, base):
-            return 0
         def tags_on_commit(self, repo, commit):
             return []
         def branch_url(self, repo, branch):
@@ -1303,8 +1293,6 @@ def test_diff_reutilizado_cuando_path_esta_en_master_del_mismo_repo(monkeypatch)
             )
         def has_commits_ahead(self, repo, branch, base):
             return False
-        def commits_behind(self, repo, branch, base):
-            return 0
         def tags_on_commit(self, repo, commit):
             return []
         def branch_url(self, repo, branch):
@@ -1358,8 +1346,6 @@ def test_diff_reutilizado_y_count_multirepo(monkeypatch):
             )
         def has_commits_ahead(self, repo, branch, base):
             return False
-        def commits_behind(self, repo, branch, base):
-            return 0
         def tags_on_commit(self, repo, commit):
             return []
         def branch_url(self, repo, branch):
@@ -1416,8 +1402,6 @@ def test_diff_repos_only_master_no_aparecen(monkeypatch):
             )
         def has_commits_ahead(self, repo, branch, base):
             return False
-        def commits_behind(self, repo, branch, base):
-            return 0
         def tags_on_commit(self, repo, commit):
             return []
         def branch_url(self, repo, branch):
@@ -1471,8 +1455,6 @@ def test_repos_cache_force_exclude(monkeypatch):
             return SimpleNamespace(files=[])
         def commit_for_branch(self, repo, branch, resolved=""):
             return "cafebabe"
-        def commits_behind(self, repo, branch, base):
-            return 0
         def has_commits_ahead(self, repo, branch, base):
             return False
         def tags_on_commit(self, repo, commit):
@@ -1777,8 +1759,6 @@ def test_scan_respects_exclude(monkeypatch):
             ]
         def commit_for_branch(self, repo, branch, resolved=""):
             return "abc123"
-        def commits_behind(self, repo, branch, base):
-            return 0
         def tags_on_commit(self, repo, commit):
             return []
         def find_pr(self, repo, origin, destination):
@@ -1907,8 +1887,6 @@ def test_scan_cache_hit_on_second_call(monkeypatch):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch, resolved=""):
             return "abc123"
-        def commits_behind(self, repo, branch, base):
-            return 1
         def has_commits_ahead(self, repo, branch, base):
             return False
         def tags_on_commit(self, repo, commit):
@@ -1957,8 +1935,6 @@ def test_scan_force_refreshes(monkeypatch):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch, resolved=""):
             return "abc123"
-        def commits_behind(self, repo, branch, base):
-            return 1
         def has_commits_ahead(self, repo, branch, base):
             return False
         def tags_on_commit(self, repo, commit):
@@ -2061,8 +2037,6 @@ def test_clear_cache_session_vuelve_a_consultar_apis(monkeypatch):
             return [SimpleNamespace(slug="myapp1", name="My App 1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch, resolved=""):
             return "abc123"
-        def commits_behind(self, repo, branch, base):
-            return 2
         def has_commits_ahead(self, repo, branch, base):
             return False
         def tags_on_commit(self, repo, commit):
@@ -2116,8 +2090,6 @@ def test_diff_enrich_aws_ok_and_missing(monkeypatch):
             )
         def has_commits_ahead(self, repo, branch, base):
             return False
-        def commits_behind(self, repo, branch, base):
-            return 0
         def tags_on_commit(self, repo, commit):
             return []
         def branch_url(self, repo, branch):
@@ -2195,3 +2167,434 @@ def test_diff_enrich_aws_ok_and_missing(monkeypatch):
     assert cached["diff"]["params"][0]["qa_value"] is None
     FakeConfig.aws_profile = ""
     FakeConfig.aws_region = ""
+
+
+# ---------------------------------------------------------------------------
+# BBIT-26: SSE streaming tests
+# ---------------------------------------------------------------------------
+
+
+def test_flow_stream_requires_session():
+    resp = client.get("/api/flow/stream", params={"origin": "release/x"})
+    assert resp.status_code == 401
+
+
+def test_flow_stream_events(monkeypatch):
+    """SSE endpoint streams repo events, stats, and done sentinel without `behind`."""
+    from bbit_release.web.api import repos as _repos
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
+                    SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return [{"name": "v1", "date": "x"}]
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def raw_file(self, repo, ref, path):
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr(_repos, "_circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    resp = client.get("/api/flow/stream", params={"origin": "release/x", "prefixes": "uat"})
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+
+    # Parse SSE events
+    events = []
+    current_event = None
+    for line in resp.text.splitlines():
+        if line.startswith("event:"):
+            current_event = line.split(":", 1)[1].strip()
+        elif line.startswith("data:") and current_event:
+            import json
+            payload = json.loads(line.split(":", 1)[1].strip())
+            events.append({"type": current_event, "data": payload})
+            current_event = None
+
+    event_types = [e["type"] for e in events]
+    assert "repo" in event_types
+    assert "stats" in event_types
+    assert "done" in event_types
+
+    # Each repo event has no `behind` key
+    repo_events = [e for e in events if e["type"] == "repo"]
+    assert len(repo_events) == 2
+    for re_ in repo_events:
+        assert "behind" not in re_["data"]
+        assert re_["data"]["commit"] == "abc123"
+
+    # Stats event has no `synced` key
+    stats_event = next(e for e in events if e["type"] == "stats")
+    assert "synced" not in stats_event["data"]
+    assert stats_event["data"]["repos"] == 2
+
+    # Done sentinel
+    done_event = next(e for e in events if e["type"] == "done")
+    assert done_event["data"] == {}
+
+
+def test_flow_stream_failed_repo_emits_error_item(monkeypatch):
+    """S4 — a repo failing during `_stream_scan` emits its error item as a
+    `repo` event without breaking the stream; other repos continue and
+    stats + done are still delivered."""
+    from bbit_release.bitbucket.client import BitbucketError
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
+                    SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return f"http://atlassian/{repo}/{branch}"
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def raw_file(self, repo, ref, path):
+            return None
+
+    original_repo_scan = repos_mod._repo_scan
+
+    def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
+        if repo.slug == "r1":
+            raise BitbucketError("repo r1 rompido")
+        return original_repo_scan(client, ci, repo, origin, destination, clean, ctx)
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    monkeypatch.setattr(repos_mod, "_repo_scan", _failing_repo_scan)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    resp = client.get("/api/flow/stream", params={"origin": "release/x", "prefixes": "uat"})
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+
+    events = []
+    current_event = None
+    for line in resp.text.splitlines():
+        if line.startswith("event:"):
+            current_event = line.split(":", 1)[1].strip()
+        elif line.startswith("data:") and current_event:
+            import json
+            payload = json.loads(line.split(":", 1)[1].strip())
+            events.append({"type": current_event, "data": payload})
+            current_event = None
+
+    event_types = [e["type"] for e in events]
+    assert "repo" in event_types
+    assert "stats" in event_types
+    assert "done" in event_types
+
+    # Both repos emit a repo event; the failed one carries the error item.
+    repo_events = [e for e in events if e["type"] == "repo"]
+    assert len(repo_events) == 2
+
+    r1_event = next(e for e in repo_events if e["data"]["slug"] == "r1")
+    assert "repo r1 rompido" in r1_event["data"]["error"]
+    assert r1_event["data"]["commit"] == ""
+    assert r1_event["data"]["pr"]["exists"] is False
+    assert "behind" not in r1_event["data"]
+
+    r2_event = next(e for e in repo_events if e["data"]["slug"] == "r2")
+    assert r2_event["data"].get("error") is None
+    assert r2_event["data"]["commit"] == "abc123"
+    assert "behind" not in r2_event["data"]
+
+    # Stats count the failed item too, and never carry `synced`.
+    stats_event = next(e for e in events if e["type"] == "stats")
+    assert stats_event["data"]["repos"] == 2
+    assert "synced" not in stats_event["data"]
+
+
+def test_flow_stream_error_no_session():
+    """SSE endpoint emits error event when session is missing."""
+    resp = client.get("/api/flow/stream", params={"origin": "release/x"})
+    assert resp.status_code == 401
+    body = resp.json()
+    assert "detail" in body or "error" in body or body.get("detail") is not None
+
+
+# ---------------------------------------------------------------------------
+# BBIT-27: Scoped generate_tags tests
+# ---------------------------------------------------------------------------
+
+
+def test_generate_tags_scoped_with_repo(monkeypatch):
+    """When `repo` param is set, only that repo's commit_for_branch is called
+    (not _branch_repos_cached), and prefixes are used as-is."""
+    branch_repos_calls = []
+    commit_calls = []
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            branch_repos_calls.append(True)
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
+                    SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master")]
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch, resolved=""):
+            commit_calls.append(repo)
+            return "abc123"
+        def tag_exists(self, slug, name):
+            return False
+        def create_tag(self, slug, name, commit):
+            pass
+
+    class StubCi:
+        def pipeline_id_for_commit(self, repo, branch, commit):
+            return 42
+
+    created_tags = []
+    orig_create_tag = StubClient.create_tag
+    def capture_tag(self_client, slug, name, commit):
+        created_tags.append((slug, name, commit))
+    StubClient.create_tag = capture_tag
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: StubCi())
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.post("/api/tags", params={
+        "origin": "release/x", "repo": "r1", "prefixes": "uat",
+    }).json()
+    assert body["ok"] is True
+    assert body["envs"] == ["uat"]
+    assert len(body["items"]) == 1
+    assert body["items"][0]["repo"] == "r1"
+    assert body["items"][0]["pipeline_id"] == 42
+
+    # Only r1 was resolved — no _branch_repos_cached call, no r2 commit_for_branch
+    assert commit_calls == ["r1"]
+    assert branch_repos_calls == []
+    assert created_tags == [("r1", "uat-42", "abc123")]
+
+
+def test_generate_tags_scoped_repo_not_found(monkeypatch):
+    """When `repo` param points to a non-existent repo, returns 400."""
+    from bbit_release.bitbucket.client import BitbucketError
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch, resolved=""):
+            raise BitbucketError(f"repo {repo} not found")
+
+    class StubCi:
+        pass
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: StubCi())
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    resp = client.post("/api/tags", params={
+        "origin": "release/x", "repo": "nonexistent", "prefixes": "uat",
+    })
+    assert resp.status_code == 400
+    assert "nonexistent" in resp.json()["error"]
+
+
+def test_generate_tags_scoped_no_pipeline(monkeypatch):
+    """G6 — when the repo's commit has no CircleCI pipeline (pipeline_id=None),
+    the scoped path returns an item with errors instead of crashing."""
+    branch_repos_calls = []
+    commit_calls = []
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            branch_repos_calls.append(True)
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch, resolved=""):
+            commit_calls.append(repo)
+            return "abc123"
+        def tag_exists(self, slug, name):
+            return False
+        def create_tag(self, slug, name, commit):
+            pass
+
+    class StubCi:
+        def pipeline_id_for_commit(self, repo, branch, commit):
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: StubCi())
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.post("/api/tags", params={
+        "origin": "release/x", "repo": "r1", "prefixes": "uat",
+    }).json()
+    assert body["ok"] is True
+    assert body["envs"] == ["uat"]
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert item["repo"] == "r1"
+    assert item["pipeline_id"] is None
+    assert item["created"] == []
+    assert item["skipped"] == []
+    assert len(item["errors"]) == 1
+    assert "no tiene pipeline" in item["errors"][0]
+
+    # Scoped path still applies: no _branch_repos_cached call, only r1 resolved.
+    assert branch_repos_calls == []
+    assert commit_calls == ["r1"]
+
+
+def test_generate_tags_no_circleci_token_400(monkeypatch):
+    """G5 — without CIRCLECI_TOKEN, POST /api/tags returns 400 with a clear message."""
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def tag_exists(self, slug, name):
+            return False
+        def create_tag(self, slug, name, commit):
+            pass
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    resp = client.post("/api/tags", params={
+        "origin": "release/x", "repo": "r1", "prefixes": "uat",
+    })
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["ok"] is False
+    assert "CIRCLECI_TOKEN" in body["error"]
+
+
+def test_generate_tags_batch_unchanged(monkeypatch):
+    """When `repo` param is omitted, batch behavior preserved (global resolution + cfg fallback)."""
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def tag_exists(self, slug, name):
+            return False
+        def create_tag(self, slug, name, commit):
+            pass
+
+    class StubCi:
+        def pipeline_id_for_commit(self, repo, branch, commit):
+            return 7
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: StubCi())
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    # No repo param → falls back to cfg.deploy_prefixes
+    body = client.post("/api/tags", params={"origin": "release/x"}).json()
+    assert body["ok"] is True
+    assert body["envs"] == ["uat", "stgp", "prod"]  # from FakeConfig.deploy_prefixes
