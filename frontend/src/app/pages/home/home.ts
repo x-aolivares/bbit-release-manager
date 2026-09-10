@@ -1160,7 +1160,7 @@ reportOpen = signal(false);
     if (!tag) return null;
     const deploy = repo.deploys?.[prefix.toLowerCase()];
     if (!deploy) {
-      return { label: `${tag} · pendiente`, cls: 'bb-deploy--pending' };
+      return { label: `${tag} · pendiente de aprobación`, cls: 'bb-deploy--pending' };
     }
     const s = deploy.status;
     if (s === 'success') {
