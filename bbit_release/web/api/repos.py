@@ -854,13 +854,6 @@ def flow(
             "repositories": {"excluded": sorted(blocked), "prefixes": sorted(proj or [])}
         })
 
-    if not force and not only_repos:
-        cached_flow = cache.get_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode)
-        if cached_flow is not None:
-            enriched = _enrich_diff_ssm(cached_flow["diff"], cfg_diff)
-            cached_flow["diff"] = enriched
-            return cached_flow
-
     repos = _apply_filters(
         _branch_repos_cached(data.client, origin, destination, proj, blocked),
         proj, blocked,
@@ -887,9 +880,20 @@ def flow(
         for r in repos
     ]
 
-    diff_raw = _compute_diff(
-        data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
-    )
+    if only_repos:
+        # Refresh liviano: reusar diff cacheado, solo scan del repo pedido.
+        cached_flow = cache.get_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode)
+        if cached_flow is not None:
+            diff_raw = cached_flow["diff"]
+        else:
+            diff_raw = _compute_diff(
+                data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
+            )
+    else:
+        diff_raw = _compute_diff(
+            data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
+        )
+
     diff_enriched = _enrich_diff_ssm(diff_raw, cfg_diff)
 
     result = {

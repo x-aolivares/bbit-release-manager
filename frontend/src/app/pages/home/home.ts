@@ -937,7 +937,7 @@ reportOpen = signal(false);
       projectPrefixes: this.projectPrefixParam(),
       exclude,
       scanMode: this.scanMode,
-      force: 1,
+      force: 0,
       repos: [slug],
     });
     this.http.get<any>(url).subscribe({
