@@ -1153,6 +1153,66 @@ def test_diff_resolve_master_lista_por_sha(monkeypatch):
     ]
 
 
+def test_diff_lee_params_del_snapshot_si_el_cliente_lo_soporta(monkeypatch):
+    """El diff usa snapshot() cuando el cliente lo ofrece (en vez de
+    list_files + raw_file por archivo): upstreams y master params se leen
+    del tarball descargado una vez por (slug, ref)."""
+    snapshot_calls, raw_calls = [], []
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def diff(self, repo, destination, origin):
+            f = SimpleNamespace(
+                path="config/x.yaml", status="modified",
+                added_lines=("k: {{resolve:ssm:/config/app/key}}",), removed_lines=(),
+            )
+            return SimpleNamespace(files=[f])
+        def find_pr(self, repo, origin, destination):
+            return None
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "headOrigin" if branch == "release/x" else "headDest"
+        def snapshot(self, slug, ref):
+            snapshot_calls.append(ref)
+            return {
+                "config/x.yaml": (
+                    "k: {{resolve:ssm:/config/app/key}}" if ref == "headOrigin" else "no ssm"
+                ),
+                "other/app.json": '{"k": "v"}',
+            }
+        def raw_file(self, repo, ref, path):
+            raw_calls.append((ref, path))
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
+    assert raw_calls == []
+    assert set(snapshot_calls) == {"headOrigin", "headDest"}
+    assert body["diff"]["params"] == [
+        {"param": "/config/app/key", "arn": "", "tipo": "nuevo", "qa_value": None, "aws_status": "skipped", "repos": ["r1"], "count": 1},
+    ]
+
+
 def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
     """El diff NO barre todos los repos del workspace: solo resuelve master
     params contra los repos que traen la rama origen (branch_repos).

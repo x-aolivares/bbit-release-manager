@@ -8,7 +8,9 @@ y obtención de diffs.
 from __future__ import annotations
 
 import httpx
+import io
 import re
+import tarfile
 import time
 import logging
 import threading
@@ -450,6 +452,47 @@ class BitbucketClient:
         if resp.status_code >= 400:
             return None
         return resp.text
+
+    def snapshot(self, slug: str, ref: str) -> dict[str, str] | None:
+        """Descarga en una request el árbol de un ref: {path: contenido}.
+
+        Usa el tarball de `bitbucket.org/{workspace}/{slug}/get/{ref}.tar.gz`
+        (la API de archive no existe en Bitbucket Cloud). Reemplaza
+        list_files + N raw_file por una sola descarga por (slug, ref).
+
+        Devuelve None si el ref no existe o el contenido no es un tarball
+        utilizable. Los paths salen relativos, sin el prefijo raíz
+        `{workspace}-{slug}-{sha}/` del tarball.
+        """
+        url = f"https://bitbucket.org/{self.workspace}/{slug}/get/{ref}.tar.gz"
+        _rate_limiter.acquire()
+        try:
+            resp = self._client.request(
+                "GET", url, headers={"Accept": "application/x-tar-gz"}
+            )
+        finally:
+            _rate_limiter.release()
+        if resp.status_code >= 400:
+            logger.info("snapshot %s %s: status %s", slug, ref, resp.status_code)
+            return None
+        out: dict[str, str] = {}
+        try:
+            with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
+                for member in tar.getmembers():
+                    if not member.isfile():
+                        continue
+                    parts = member.name.split("/", 1)
+                    path = parts[1] if len(parts) > 1 else parts[0]
+                    if not path:
+                        continue
+                    handle = tar.extractfile(member)
+                    if handle is None:
+                        continue
+                    out[path] = handle.read().decode("utf-8", errors="replace")
+        except tarfile.TarError as exc:
+            logger.warning("snapshot %s %s: tarball inválido (%s)", slug, ref, exc)
+            return None
+        return out
 
     def list_files(self, slug: str, ref: str, tree: str = "") -> list[str]:
         """Lista los paths de tipo archivo bajo un ref/árbol, recursivo.

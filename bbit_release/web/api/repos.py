@@ -126,14 +126,20 @@ NON_TEXT_EXT = {
 }
 
 
-def _read_files_params(client, slug: str, ref: str, files: list[str], prefixes) -> set:
-    """Parámetros SSM en los raw de un ref para archivos de tipo texto."""
+def _read_files_params(
+    client, slug: str, ref: str, files: list[str], prefixes,
+    source: dict[str, str] | None = None,
+) -> set:
+    """Parámetros SSM en los raw de un ref para archivos de tipo texto.
+
+    Con `source` (snapshot {path: contenido}) lee de memoria en vez de
+    raw_file por archivo: una sola descarga por (slug, ref)."""
     def _one(path: str):
         name = path.rsplit("/", 1)[-1]
         ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
         if ext and f".{ext}" in NON_TEXT_EXT:
             return set()
-        raw = client.raw_file(slug, ref, path)
+        raw = source.get(path) if source is not None else client.raw_file(slug, ref, path)
         if raw is None:
             return set()
         return set(extract_ssm_params([raw], prefixes))
@@ -1294,6 +1300,33 @@ def _compute_diff(
             log.warning("commit_for_branch %s %s falló: %s", slug, branch, exc)
             return branch
 
+    def _snapshot_for(client, slug: str, ref: str) -> dict[str, str] | None:
+        """Snapshot {path: contenido} con cache por (slug, ref) en ctx.
+
+        Si el cliente no ofrece snapshot (o el ref no existe) devuelve None
+        y el flujo cae en list_files + raw_file."""
+        entry = (ctx or {}).setdefault(slug, {})
+        snaps = entry.setdefault("snapshots", {})
+        if ref in snaps:
+            return snaps[ref]
+        if not hasattr(client, "snapshot"):
+            return None
+        try:
+            snap = client.snapshot(slug, ref)
+        except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+            log.warning("snapshot %s %s falló: %s", slug, ref, exc)
+            return None
+        snaps[ref] = snap
+        return snap
+
+    def _read_all_params(client, slug: str, ref: str, prefixes) -> set:
+        """Params SSM de todos los archivos de texto de un ref. Con snapshot
+        es un solo tarball; sin él, list_files + raw_file por archivo."""
+        snap = _snapshot_for(client, slug, ref)
+        if snap is not None:
+            return _read_files_params(client, slug, ref, list(snap), prefixes, source=snap)
+        return _read_files_params(client, slug, ref, client.list_files(slug, ref), prefixes)
+
     def _resolve_master(client, repo) -> set:
         """Master params de un repo (cache o lectura completa)."""
         cached_params = cache.get_master(repo.slug, destination)
@@ -1305,8 +1338,7 @@ def _compute_diff(
             dest_ref = _ref_for(repo.slug, destination)
             entry["dest_ref"] = dest_ref
         try:
-            params = _read_files_params(client, repo.slug, dest_ref,
-                                        client.list_files(repo.slug, dest_ref), prefixes)
+            params = _read_all_params(client, repo.slug, dest_ref, prefixes)
         except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
             log.warning("master params %s falló: %s", repo.slug, exc)
             return set()
@@ -1324,10 +1356,8 @@ def _compute_diff(
             slug = repo.slug
             try:
                 origin_ref, dest_ref = _repo_refs(client, repo)
-                origin_params = _read_files_params(client, slug, origin_ref,
-                                                   client.list_files(slug, origin_ref), prefixes)
-                dest_params = _read_files_params(client, slug, dest_ref,
-                                                 client.list_files(slug, dest_ref), prefixes)
+                origin_params = _read_all_params(client, slug, origin_ref, prefixes)
+                dest_params = _read_all_params(client, slug, dest_ref, prefixes)
             except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
                 log.warning("scan all %s falló: %s", slug, exc)
                 return slug, set(), set()
@@ -1375,8 +1405,14 @@ def _compute_diff(
         def _file_params(client, cand):
             slug, path, origin_ref, dest_ref = cand
             try:
-                raw_origin = client.raw_file(slug, origin_ref, path)
-                raw_dest = client.raw_file(slug, dest_ref, path)
+                snap_o = _snapshot_for(client, slug, origin_ref)
+                snap_d = _snapshot_for(client, slug, dest_ref)
+                if snap_o is not None and snap_d is not None:
+                    raw_origin = snap_o.get(path)
+                    raw_dest = snap_d.get(path)
+                else:
+                    raw_origin = client.raw_file(slug, origin_ref, path)
+                    raw_dest = client.raw_file(slug, dest_ref, path)
             except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
                 log.warning("raw %s %s falló: %s", slug, path, exc)
                 return set()
