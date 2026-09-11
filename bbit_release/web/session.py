@@ -110,6 +110,20 @@ def create_session(workspace: str, token: str, url: str = "", client_id: str = "
     if client_id:
         _client_to_sid[client_id] = sid  # BBIT-33: guardar mapping para reutilizar
     
+    # BBIT-33: Guardar credenciales en BD para recuperar después
+    try:
+        cfg = Config.for_client(client_id) if client_id else Config()
+        cfg.save_tokens(
+            bitbucket_token=token,
+            workspace=workspace,
+            bitbucket_url=url or "",
+        )
+        import sys
+        print(f"[SESSION] Credenciales guardadas en BD para client_id={client_id}", file=sys.stderr)
+    except Exception as exc:
+        import logging
+        logging.getLogger("bbit.session").warning(f"No se pudieron guardar credenciales: {exc}")
+    
     # BBIT-33: Precarga rápida de lista de repos en background (SIN clonar)
     # El cloning ocurre DESPUÉS del filtrado por prefijos en _branch_repos_cached()
     _preload_repos_list_background(client, info.slug)
