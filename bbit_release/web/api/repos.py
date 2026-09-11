@@ -1013,8 +1013,9 @@ def _stream_scan(client, ci, repos, origin, destination, clean, ctx=None):
     de envío: si un repo es lento, los que terminan primero se entregan antes
     por el SSE y el frontend los pinta apenas llegan.
     
-    BBIT-33: Si un repo no tiene la rama, _repo_scan retorna None,None y se
-    filtra silenciosamente (no se emite evento).
+    BBIT-33: Si un repo no tiene la rama, se emite un evento especial `skip`
+    para que el frontend lo elimine de la tabla (en lugar de quedarse con el
+    placeholder).
     """
     workers = min(MAX_WORKERS, len(repos) or 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -1026,9 +1027,10 @@ def _stream_scan(client, ci, repos, origin, destination, clean, ctx=None):
             repo = futures[fut]
             try:
                 item, err = fut.result()
-                # BBIT-33: Filtrar repos que no tienen la rama
+                # BBIT-33: Si un repo no tiene la rama, emitir evento `skip`
                 if item is None:
                     log.debug("stream_scan: %s ignorado (sin rama %s)", repo.slug, origin)
+                    yield ({"slug": repo.slug, "reason": "branch_not_found"}, "skip")
                     continue
                 yield item, err
             except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
@@ -1265,6 +1267,10 @@ def flow_stream(
 
             for item, err in _stream_scan(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx):
                 repo_count += 1
+                # BBIT-33: Si err == "skip", emitir evento skip para que el frontend elimine el repo
+                if err == "skip":
+                    yield _event("skip", {"slug": item["slug"]})
+                    continue
                 items.append(item)
                 if err:
                     scan_ci_error = scan_ci_error or err

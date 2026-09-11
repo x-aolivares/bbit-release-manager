@@ -944,6 +944,16 @@ reportOpen = signal(false);
       }
     });
 
+    es.addEventListener('skip', (e: MessageEvent) => {
+      console.log(`[SSE] Received skip event:`, e.data);
+      firstEventReceived = true;
+      const payload = JSON.parse(e.data);
+      // Eliminar el repo de la tabla si fue ignorado (rama no encontrada)
+      this.repos.update((current) =>
+        current.filter((r) => r.slug !== payload.slug)
+      );
+    });
+
     es.addEventListener('stats', (e: MessageEvent) => {
       console.log(`[SSE] Received stats event`);
       const parsed = processSseEvent('stats', e.data, repos);
