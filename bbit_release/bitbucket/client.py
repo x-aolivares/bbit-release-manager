@@ -13,44 +13,16 @@ import re
 import tarfile
 import time
 import logging
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable
 
-logger = logging.getLogger(__name__)
+from ..http import get_global_rate_limiter, MAX_RETRIES, RETRY_BASE_DELAY
 
-MAX_RETRIES = 1
-RETRY_BASE_DELAY = 1.0
+logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.bitbucket.org/2.0"
 MAX_WORKERS = 8
-
-
-class _RateLimiter:
-    """Token bucket simple para limitar requests concurrentes a Bitbucket."""
-
-    def __init__(self, max_concurrent: int = 4, min_interval: float = 0.25):
-        self._semaphore = threading.Semaphore(max_concurrent)
-        self._min_interval = min_interval
-        self._last_request_time = 0.0
-        self._lock = threading.Lock()
-
-    def acquire(self) -> None:
-        self._semaphore.acquire()
-        with self._lock:
-            now = time.monotonic()
-            elapsed = now - self._last_request_time
-            if elapsed < self._min_interval:
-                time.sleep(self._min_interval - elapsed)
-            self._last_request_time = time.monotonic()
-
-    def release(self) -> None:
-        self._semaphore.release()
-
-
-# Rate limiter global para todas las instancias de BitbucketClient
-_rate_limiter = _RateLimiter(max_concurrent=8, min_interval=0.125)
 
 
 class BitbucketError(Exception):
@@ -171,6 +143,7 @@ class BitbucketClient:
 
     def _request(self, method: str, path: str, params: dict | None = None):
         last_error: Exception | None = None
+        _rate_limiter = get_global_rate_limiter()
         for attempt in range(1, MAX_RETRIES + 1):
             _rate_limiter.acquire()
             try:
@@ -465,6 +438,7 @@ class BitbucketClient:
         `{workspace}-{slug}-{sha}/` del tarball.
         """
         url = f"https://bitbucket.org/{self.workspace}/{slug}/get/{ref}.tar.gz"
+        _rate_limiter = get_global_rate_limiter()
         _rate_limiter.acquire()
         try:
             resp = self._client.request(

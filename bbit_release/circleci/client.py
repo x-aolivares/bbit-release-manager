@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Callable
 
 import httpx
 
+from ..http import get_global_rate_limiter, MAX_RETRIES, RETRY_BASE_DELAY
+
 if TYPE_CHECKING:
     from ..cache import ReleaseCache
 
@@ -134,16 +136,41 @@ class CircleCiClient:
         return self._request("GET", "/me")
 
     def _request(self, method: str, path: str, params: dict | None = None):
-        resp = self._client.request(method, path, params=params)
-        if resp.status_code in (401, 403):
-            raise CircleCiAuthError(
-                f"CircleCI {resp.status_code}: token inválido o sin permisos"
-            )
-        if resp.status_code >= 400:
-            raise CircleCiError(
-                f"CircleCI {resp.status_code} en {path}: {resp.text[:300]}"
-            )
-        return resp.json()
+        last_error: CircleCiError | None = None
+        _rate_limiter = get_global_rate_limiter()
+        for attempt in range(1, MAX_RETRIES + 1):
+            _rate_limiter.acquire()
+            try:
+                resp = self._client.request(method, path, params=params)
+            finally:
+                _rate_limiter.release()
+            if resp.status_code in (401, 403):
+                raise CircleCiAuthError(
+                    f"CircleCI {resp.status_code}: token inválido o sin permisos"
+                )
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                if retry_after:
+                    delay = float(retry_after)
+                else:
+                    delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                last_error = CircleCiError(
+                    f"CircleCI 429 en {path}: rate limit alcanzado"
+                )
+                if attempt < MAX_RETRIES:
+                    log.warning(
+                        "CircleCI 429 en %s (intento %d/%d): esperando %.1fs",
+                        path, attempt, MAX_RETRIES, delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                break
+            if resp.status_code >= 400:
+                raise CircleCiError(
+                    f"CircleCI {resp.status_code} en {path}: {resp.text[:300]}"
+                )
+            return resp.json()
+        raise last_error  # type: ignore[misc]
 
     def _paginate(self, path: str, params: dict) -> list[dict]:
         items: list[dict] = []
