@@ -649,7 +649,10 @@ reportOpen = signal(false);
 
   constructor() {
     this.http.get<Health>('/api/health').subscribe({
-      next: (h) => this.health.set(h),
+      next: (h) => {
+        this.health.set(h);
+        console.log(`[BBit] Backend version: ${h.version} | Frontend: 0.48.3`);
+      },
       error: () => this.error.set('No se pudo contactar la API.'),
     });
     this.http.get<any>('/api/session').subscribe({
