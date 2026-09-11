@@ -941,11 +941,13 @@ def repos_quick(
 ):
     """Endpoint rápido: devuelve repos del workspace con filtros aplicados.
     
-    SIN hacer scan/diff/SSM - solo metadata básica. Permite al usuario
-    escribir origen/destino y filtrar localmente mientras se cargan datos
-    pesados en background.
+    SIN hacer scan/diff/SSM - SIN verificar branches.
+    Solo metadata básica de repos. Permite al usuario escribir origen/destino
+    y filtrar localmente mientras se cargan datos pesados (verificación de
+    branches, scan, diff, SSM) en background.
     
-    Típicamente: < 1 segundo de respuesta.
+    Típicamente: < 1 segundo de respuesta. CERO requests de verificación
+    de rama por repo.
     """
     data = _require_session()
     cfg = Config()
@@ -953,11 +955,10 @@ def repos_quick(
     blocked = _exclude_repos(cfg, exclude)
     
     # Obtener lista completa de repos (cacheada después de login)
-    repos = _apply_filters(
-        _all_repos_cached(data.client, proj, blocked) or 
-        data.client.list_repos(prefixes=proj),
-        proj, blocked,
-    )
+    # IMPORTANTE: NO llamar a repos_with_branch() aquí.
+    # Solo list_repos() que devuelve todos los repos del workspace.
+    all_repos = _all_repos_cached(data.client, proj, blocked) or data.client.list_repos(prefixes=proj)
+    repos = _apply_filters(all_repos, proj, blocked)
     
     return {
         "repos": [
