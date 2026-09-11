@@ -25,6 +25,7 @@ class SessionData:
 
 
 _sessions: dict[str, SessionData] = {}
+_client_to_sid: dict[str, str] = {}  # BBIT-33: client_id → session_id mapping
 
 
 def _recorder(entry: dict) -> None:
@@ -32,6 +33,21 @@ def _recorder(entry: dict) -> None:
         get_cache().record_service_call(**entry)
     except Exception:
         pass
+
+
+def get_or_create_session(workspace: str, token: str, url: str = "", client_id: str = "") -> SessionData:
+    """Obtiene sesión existente por client_id, o la crea.
+    
+    BBIT-33: Permite reutilizar sesión entre requests.
+    """
+    # Si ya existe sesión por este client_id, devolverla
+    if client_id and client_id in _client_to_sid:
+        sid = _client_to_sid[client_id]
+        if sid in _sessions:
+            return _sessions[sid]
+    
+    # Crear nueva sesión
+    return create_session(workspace, token, url=url, client_id=client_id)
 
 
 def _preload_repos_list_background(client: BitbucketClient, workspace: str) -> None:
@@ -91,6 +107,8 @@ def create_session(workspace: str, token: str, url: str = "", client_id: str = "
         client_id=client_id,
     )
     _sessions[sid] = data
+    if client_id:
+        _client_to_sid[client_id] = sid  # BBIT-33: guardar mapping para reutilizar
     
     # BBIT-33: Precarga rápida de lista de repos en background (SIN clonar)
     # El cloning ocurre DESPUÉS del filtrado por prefijos en _branch_repos_cached()
@@ -145,4 +163,20 @@ def destroy_session(sid: str) -> bool:
 
 
 def active_session_id() -> str | None:
+    """Obtiene el session_id activo.
+    
+    BBIT-33: Primero intenta recuperar por client_id guardado, luego retorna
+    el primer session_id disponible.
+    """
+    try:
+        cfg = Config()
+        client_id = cfg.client_id
+        if client_id and client_id in _client_to_sid:
+            sid = _client_to_sid[client_id]
+            if sid in _sessions:
+                return sid
+    except Exception:
+        pass
+    
+    # Fallback: retorna el primer session_id disponible
     return next(iter(_sessions), None)
