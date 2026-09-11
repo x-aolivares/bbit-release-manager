@@ -375,10 +375,12 @@ def _have_tool(name: str) -> bool:
 
 
 def _git_pull() -> None:
-    """Ejecutar git pull desde el remote."""
+    """Ejecutar git pull desde el remote (en el directorio del proyecto)."""
+    project_dir = Path(__file__).resolve().parent.parent  # bbit_release -> bbit-release-manager
     info("Haciendo git pull desde el remote...")
     result = subprocess.run(
         ["git", "pull"],
+        cwd=str(project_dir),
         capture_output=True,
         text=True,
         encoding="utf-8",

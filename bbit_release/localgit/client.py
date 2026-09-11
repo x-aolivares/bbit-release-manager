@@ -268,16 +268,31 @@ class LocalRepoClient:
         return matched
 
     def _resolve_for_branch(self, slug: str, branch: str) -> str:
-        """""" 
+        """Resuelve si la rama existe: local (git) o API fallback."""
+        # Si no hay clone, intentar API directamente
         if not self.available(slug):
             try:
                 return self._bb.resolve_branch(slug, branch)
             except Exception:
                 return ""
+        
+        # Si hay clone, asegurar que esté actualizado (clone o fetch)
         try:
+            if not self.ensure_repo(slug):
+                # Si ensure_repo falla, fallback a API
+                try:
+                    return self._bb.resolve_branch(slug, branch)
+                except Exception:
+                    return ""
+            
+            # Ahora intentar leer localmente
             return self._resolve_local(slug, branch)
         except (OSError, subprocess.TimeoutExpired):
-            return ""
+            # Git falló, intentar API
+            try:
+                return self._bb.resolve_branch(slug, branch)
+            except Exception:
+                return ""
 
     def commit_for_branch(self, slug: str, branch: str, resolved: str = "") -> str:
         """Último commit de la rama (hash completo)."""

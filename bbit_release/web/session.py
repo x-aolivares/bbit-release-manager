@@ -37,8 +37,10 @@ def _recorder(entry: dict) -> None:
 def _preload_repos_background(client: BitbucketClient, workspace: str) -> None:
     """Precarga repos en background en un thread separado.
     
-    Esto evita que el usuario espere 15-20 segundos cuando llega a /repos-quick.
-    Los repos se guardan en SQLite cache automáticamente.
+    Si el cliente es LocalRepoClient (clones configurados), clona los repos
+    para que luego las operaciones lean localmente (zero API calls).
+    
+    Si es solo BitbucketClient, cachea los repos en SQLite.
     
     Si falla, se ignora silenciosamente (no rompe la sesión).
     """
@@ -46,11 +48,21 @@ def _preload_repos_background(client: BitbucketClient, workspace: str) -> None:
     
     def _load():
         try:
-            # Llamar list_repos() que paginea y cachea automáticamente
-            # Los repos se guardan en SQLite en la función _all_repos_cached
-            from ..bitbucket.client import BitbucketClient as _BC
             if hasattr(client, 'list_repos'):
+                # Cachear repos
                 client.list_repos(prefixes=None)
+            
+            # Si es LocalRepoClient, clonar repos en paralelo en background
+            # para que repos_with_branch() lea localmente (zero 429s)
+            from ..localgit.client import LocalRepoClient
+            if isinstance(client, LocalRepoClient):
+                repos = client._bb.list_repos(prefixes=None)
+                for repo in repos:
+                    try:
+                        # ensure_repo clona o fetch incremental
+                        client.ensure_repo(repo.slug)
+                    except Exception:
+                        pass  # Ignorar fallos de clones, seguir con otros
         except Exception as exc:
             import logging
             logging.getLogger("bbit.session").warning(

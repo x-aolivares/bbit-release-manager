@@ -750,6 +750,10 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
     La columna de cada ambiente sale del tag `{env}-{pipeline_id}` del commit:
     el deploy es válido solo si el pipeline del tag tiene ese número, la
     revisión del commit y un workflow que mencione el ambiente.
+    
+    IMPORTANTE (BBIT-33): Si la rama NO existe en el repo (commit vacío),
+    retorna None para que se ignore en los resultados. Esto evita mostrar
+    repos que no tienen la rama buscada.
     """
     resolved = getattr(repo, "resolved_branch", "") or ""
     try:
@@ -761,6 +765,12 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
         commit = pr["source_commit"]
     else:
         commit = client.commit_for_branch(repo.slug, origin, resolved=resolved)
+    
+    # BBIT-33: Si la rama no existe (commit vacío), no incluir en resultados
+    if not commit:
+        log.debug("scan: %s rama %s no existe, ignorando", repo.slug, origin)
+        return None, None
+    
     if ctx is not None:
         ctx.setdefault(repo.slug, {})["pr"] = pr
         ctx.setdefault(repo.slug, {})["origin_ref"] = commit
@@ -883,6 +893,8 @@ def _scan_repos(client, ci, repos, origin, destination, clean, ctx=None):
 
     Un repo cuya consulta falla se marca como fallido en la tabla y no rompe
     el scan de los demás. Retorna (items, ci_error, stats).
+    
+    BBIT-33: Si un repo no tiene la rama, se filtra silenciosamente.
     """
     ci_error = None
     workers = min(MAX_WORKERS, len(repos) or 1)
@@ -891,7 +903,12 @@ def _scan_repos(client, ci, repos, origin, destination, clean, ctx=None):
         results = []
         for fut, repo in zip(futures, repos):
             try:
-                results.append(fut.result())
+                item, err = fut.result()
+                # BBIT-33: Filtrar repos que no tienen la rama
+                if item is not None:
+                    results.append((item, err))
+                else:
+                    log.debug("scan: %s ignorado (sin rama %s)", repo.slug, origin)
             except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
                 log.warning("scan %s falló: %s", repo.slug, exc)
                 results.append((_failed_repo_item(repo, client, origin, exc), None))
@@ -918,6 +935,9 @@ def _stream_scan(client, ci, repos, origin, destination, clean, ctx=None):
     Los repos se emiten a medida que terminan (``as_completed``), no en orden
     de envío: si un repo es lento, los que terminan primero se entregan antes
     por el SSE y el frontend los pinta apenas llegan.
+    
+    BBIT-33: Si un repo no tiene la rama, _repo_scan retorna None,None y se
+    filtra silenciosamente (no se emite evento).
     """
     workers = min(MAX_WORKERS, len(repos) or 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -928,7 +948,12 @@ def _stream_scan(client, ci, repos, origin, destination, clean, ctx=None):
         for fut in as_completed(futures):
             repo = futures[fut]
             try:
-                yield fut.result()
+                item, err = fut.result()
+                # BBIT-33: Filtrar repos que no tienen la rama
+                if item is None:
+                    log.debug("stream_scan: %s ignorado (sin rama %s)", repo.slug, origin)
+                    continue
+                yield item, err
             except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
                 log.warning("stream scan %s falló: %s", repo.slug, exc)
                 yield (_failed_repo_item(repo, client, origin, exc), None)

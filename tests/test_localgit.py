@@ -232,6 +232,27 @@ class TestReposWithBranch:
         matched = c.repos_with_branch("release/NOEXISTE-999", repos=repos)
         assert len(matched) == 0
 
+    def test_clones_on_demand_if_not_available(self, tmp_path, git_remote):
+        """Cuando se llama repos_with_branch() y el repo no está clonado aún,
+        debe clonarlo de forma sincrónica (on-demand) antes de buscar la rama.
+        
+        Esto evita el problema donde el user clickea "Obtener Repositorios"
+        antes de que el background thread termine de clonar (BBIT-33 fix).
+        """
+        c = _client(tmp_path, git_remote)
+        # NO llamamos ensure_repo: el repo aún no está clonado
+        assert c.available(REPO) is False
+        
+        repos = [Repository(slug=REPO, name=REPO, workspace=WORKSPACE)]
+        # repos_with_branch debe clonar el repo de forma sincrónica
+        matched = c.repos_with_branch("release/REP-123", repos=repos)
+        
+        # Debe encontrar la rama (se clonó automáticamente)
+        assert len(matched) == 1
+        assert matched[0].resolved_branch == "release/REP-123-V2"
+        # Y ahora el repo debe estar disponible
+        assert c.available(REPO)
+
 
 class TestFallback:
     """Cuando el repo no está clonado, delega al stub API sin explotar."""
