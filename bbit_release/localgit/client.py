@@ -289,71 +289,82 @@ class LocalRepoClient:
         prefixes: list[str] | None = None,
         repos: list[Repository] | None = None,
     ) -> list[Repository]:
-        """Repos que contienen la rama.
+        """Repos que contienen la rama - TODO async/paralelo (clon + validación simultánea).
         
-        BBIT-33 Phase 3: Clonar PRIMERO, luego resolver localmente.
+        BBIT-33 Phase 5: VERDADERO async - clone y validación en paralelo sin esperar.
         
         Flujo:
-        1. Clonar todos los repos en background (en paralelo, sin bloquear)
-        2. Resolver branch localmente (git, zero API)
-        3. Retornar solo repos con la rama
+        1. Clona repos (4 concurrent)
+        2. A medida que CADA clone termina → valida rama inmediatamente
+        3. Si rama existe → agregar a resultados
+        (No espera a que terminen TODOS los clones antes de validar)
         """
-        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         import sys
 
         repos = repos if repos is not None else self._bb.list_repos(prefixes=prefixes)
         if not repos:
             return []
         
-        # BBIT-33: Clonar repos en background (paralelo)
-        msg = f"[CLONE] Iniciando clone en background de {len(repos)} repos..."
+        msg = f"[REPOS_WITH_BRANCH] Iniciando async clone+validate de {len(repos)} repos..."
         print(msg, file=sys.stderr)
         log.info(msg)
         
-        clone_workers = min(4, len(repos) or 1)  # GIT_MAX_CONCURRENT
-        cloned = 0
-        failed = 0
-        with ThreadPoolExecutor(max_workers=clone_workers) as clone_ex:
-            clone_futures = [clone_ex.submit(self.ensure_repo, repo.slug) for repo in repos]
-            for i, (fut, repo) in enumerate(zip(clone_futures, repos), 1):
-                try:
-                    print(f"[CLONE {i}/{len(repos)}] {repo.slug}...", end=" ", file=sys.stderr, flush=True)
-                    ok = fut.result()
-                    if ok:
-                        cloned += 1
-                        print(f"✓\n", end="", file=sys.stderr)
-                        log.debug(f"✓ {repo.slug} clonado")
-                    else:
-                        failed += 1
-                        print(f"✗ (falló)\n", end="", file=sys.stderr)
-                        log.debug(f"✗ {repo.slug} clone falló")
-                except Exception as exc:
-                    failed += 1
-                    print(f"✗ ({exc})\n", end="", file=sys.stderr)
-                    log.warning(f"✗ {repo.slug} excepción: {exc}")
-        
-        msg = f"[CLONE] Cloning terminado: {cloned} OK, {failed} fallidos"
-        print(msg, file=sys.stderr)
-        log.info(msg)
-        
-        # BBIT-33: Ahora resolver branches localmente (git, cero API)
-        workers = min(8, len(repos) or 1)
         matched: list[Repository] = []
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = [(repo, ex.submit(self._resolve_for_branch, repo.slug, branch)) for repo in repos]
-            for repo, fut in futures:
+        clone_workers = min(4, len(repos) or 1)
+        validate_workers = min(8, len(repos) or 1)
+        
+        # BBIT-33 Phase 5: Clone + Validate en paralelo SIN esperar
+        with ThreadPoolExecutor(max_workers=clone_workers) as clone_ex:
+            # Lanzar clones para todos los repos
+            clone_tasks = {clone_ex.submit(self.ensure_repo, repo.slug): repo for repo in repos}
+            
+            # A medida que CADA clone termina, validar rama INMEDIATAMENTE
+            cloned_count = 0
+            for clone_fut in as_completed(clone_tasks):
+                repo = clone_tasks[clone_fut]
+                cloned_count += 1
+                
                 try:
-                    resolved = fut.result()
-                except Exception:
-                    continue
-                if resolved:
-                    matched.append(Repository(
-                        slug=repo.slug,
-                        name=repo.name,
-                        workspace=repo.workspace,
-                        default_branch=getattr(repo, "default_branch", "master"),
-                        resolved_branch=resolved,
-                    ))
+                    ok = clone_fut.result()
+                    if ok:
+                        print(f"[REPOS_WITH_BRANCH] {cloned_count}/{len(repos)} {repo.slug} clonado, validando rama...", file=sys.stderr, flush=True)
+                        # Clone OK → validar rama INMEDIATAMENTE (sin esperar otros clones)
+                        resolved = self._resolve_for_branch(repo.slug, branch)
+                        if resolved:
+                            print(f"  → ✓ rama existe: {resolved}\n", end="", file=sys.stderr)
+                            matched.append(Repository(
+                                slug=repo.slug,
+                                name=repo.name,
+                                workspace=repo.workspace,
+                                default_branch=getattr(repo, "default_branch", "master"),
+                                resolved_branch=resolved,
+                            ))
+                        else:
+                            print(f"  → ✗ rama NO existe\n", end="", file=sys.stderr)
+                    else:
+                        print(f"[REPOS_WITH_BRANCH] {cloned_count}/{len(repos)} {repo.slug} falló clone, fallback API", file=sys.stderr)
+                        # Clone falló → intenta API
+                        try:
+                            resolved = self._bb.resolve_branch(repo.slug, branch)
+                            if resolved:
+                                print(f"  → API: ✓ rama existe\n", end="", file=sys.stderr)
+                                matched.append(Repository(
+                                    slug=repo.slug,
+                                    name=repo.name,
+                                    workspace=repo.workspace,
+                                    default_branch=getattr(repo, "default_branch", "master"),
+                                    resolved_branch=resolved,
+                                ))
+                        except Exception:
+                            print(f"  → API falló también\n", end="", file=sys.stderr)
+                except Exception as exc:
+                    print(f"[REPOS_WITH_BRANCH] {cloned_count}/{len(repos)} {repo.slug} error: {exc}\n", end="", file=sys.stderr)
+        
+        msg = f"[REPOS_WITH_BRANCH] Completo: {len(matched)} repos con rama"
+        print(msg, file=sys.stderr)
+        log.info(msg)
+        
         return matched
 
     def _resolve_for_branch(self, slug: str, branch: str) -> str:
