@@ -712,8 +712,16 @@ reportOpen = signal(false);
     if (this.alias.trim()) {
       body['alias'] = this.alias.trim();
     }
+    
+    const startTime = Date.now();
+    const timeoutId = window.setTimeout(() => {
+      this.loading.set(false);
+      this.error.set('Timeout: no se pudo reusar la sesión. Revisá tus credenciales.');
+    }, 15000); // 15 segundos de timeout
+    
     this.http.post<any>('/api/session/reuse', body).subscribe({
       next: (r) => {
+        window.clearTimeout(timeoutId);
         if (r.ok) {
           this.connected.set(true);
           this.identity.set(r.identity ?? '');
@@ -724,16 +732,23 @@ reportOpen = signal(false);
           if (onSuccess) {
             onSuccess();
           }
+          this.releaseBusy(startTime, () => this.loading.set(false));
         } else {
           this.error.set(r.error ?? 'Error al reutilizar la sesión.');
           this.storedCreds.set(false);
+          this.releaseBusy(startTime, () => this.loading.set(false));
         }
       },
       error: (e) => {
+        window.clearTimeout(timeoutId);
         this.error.set(e.error?.error ?? 'Las credenciales guardadas dejaron de funcionar. Generá de nuevo.');
         this.storedCreds.set(false);
+        this.releaseBusy(startTime, () => this.loading.set(false));
       },
-      complete: () => this.loading.set(false),
+      complete: () => {
+        window.clearTimeout(timeoutId);
+        // Ya se maneja en next/error
+      }
     });
   }
 
@@ -755,8 +770,16 @@ reportOpen = signal(false);
     if (this.gitClonesDir().trim()) {
       body['git_clones_dir'] = this.gitClonesDir().trim();
     }
+    
+    const startTime = Date.now();
+    const timeoutId = window.setTimeout(() => {
+      this.loading.set(false);
+      this.error.set('Timeout: la conexión tardó demasiado. Revisá tus credenciales o la red.');
+    }, 15000); // 15 segundos de timeout
+    
     this.http.post<any>('/api/session', body).subscribe({
         next: (r) => {
+          window.clearTimeout(timeoutId);
           if (r.ok) {
             this.connected.set(true);
             this.identity.set(r.identity);
@@ -764,12 +787,21 @@ reportOpen = signal(false);
             this.services.set(r.services ?? {});
             this.clientAlias.set(r.client_alias ?? 'local');
             this.storedCreds.set(false);
+            this.releaseBusy(startTime, () => this.loading.set(false));
           } else {
             this.error.set(r.error ?? 'Error de conexión');
+            this.releaseBusy(startTime, () => this.loading.set(false));
           }
         },
-        error: () => this.error.set('Error de red al conectar.'),
-        complete: () => this.loading.set(false),
+        error: (e) => {
+          window.clearTimeout(timeoutId);
+          this.error.set(e.error?.error ?? 'Error de red al conectar.');
+          this.releaseBusy(startTime, () => this.loading.set(false));
+        },
+        complete: () => {
+          window.clearTimeout(timeoutId);
+          // Ya se maneja en next/error
+        }
       });
   }
 
