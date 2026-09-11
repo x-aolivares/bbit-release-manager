@@ -218,6 +218,26 @@
   font-size: var(--bb-font-base);
 }
 
+.bb-repos-head .bb-th {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.bb-repos-head .bb-th:hover,
+.bb-repos-head .bb-th:focus-visible {
+  color: var(--bb-accent, #3560c9);
+  text-decoration: underline;
+  outline: none;
+}
+
 .bb-table--repos .bb-repos-head,
 .bb-table--repos .bb-repos-row {
   grid-template-columns: var(--bb-cols, 16rem 1.4fr 1fr 1.6fr);

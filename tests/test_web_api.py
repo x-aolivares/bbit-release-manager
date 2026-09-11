@@ -2404,6 +2404,42 @@ def test_flow_stream_failed_repo_emits_error_item(monkeypatch):
     assert "synced" not in stats_event["data"]
 
 
+def test_stream_scan_emits_as_completed_not_submission_order(monkeypatch):
+    """BBIT-32 — `_stream_scan` entrega cada repo apenas termina
+    (as_completed): si el primer repo de la lista es el lento, los rápidos
+    se emiten primero y no bloquea el render incremental."""
+    import threading
+
+    from bbit_release.web.api import repos as repos_mod
+
+    r2_done = threading.Event()
+    released: list[str] = []
+
+    def _slow(client, ci, repo, origin, destination, clean, ctx=None):
+        r2_done.wait(timeout=5)
+        released.append(repo.slug)
+        return ({"slug": repo.slug, "name": repo.name}, None)
+
+    def _fast(client, ci, repo, origin, destination, clean, ctx=None):
+        released.append(repo.slug)
+        if repo.slug == "r2":
+            r2_done.set()
+        return ({"slug": repo.slug, "name": repo.name}, None)
+
+    def _pick(client, ci, repo, *a, **k):
+        return _slow(client, ci, repo, *a, **k) if repo.slug == "r1" else _fast(client, ci, repo, *a, **k)
+
+    monkeypatch.setattr(repos_mod, "_repo_scan", _pick)
+
+    r1 = SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")
+    r2 = SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master")
+    dummy = object()
+
+    items = list(repos_mod._stream_scan(dummy, None, [r1, r2], "release/x", "master", []))
+    assert [it[0]["slug"] for it in items] == ["r2", "r1"]
+    assert released == ["r2", "r1"]
+
+
 def test_flow_stream_error_no_session():
     """SSE endpoint emits error event when session is missing."""
     resp = client.get("/api/flow/stream", params={"origin": "release/x"})
