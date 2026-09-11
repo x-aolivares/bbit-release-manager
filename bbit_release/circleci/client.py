@@ -192,12 +192,12 @@ class CircleCiClient:
     def pipelines(self, repo: str, branch: str | None = None, tag: str | None = None) -> list[dict]:
         """Pipelines del proyecto, opcionalmente filtrados por rama o tag.
 
-        El endpoint v2 solo filtra por nombre de rama (`branch`); los pipilines
-        de tag traen ``vcs.branch=null`` y ``vcs.tag=<tag>``, asi que para tags
-        se pagina todo el proyecto UNA VEZ (cacheada) y se filtra client-side
-        por ``vcs.tag``, sin paginar el proyecto por cada tag.
+        BBIT-33 Phase 10: Optimización - Solo obtén la ÚLTIMA pipeline.
+        
+        En lugar de paginar todo el histórico (100+ requests), 
+        usa limit=1 para obtener solo la última pipeline de la rama/tag.
         """
-        params: dict = {"limit": 100}
+        params: dict = {"limit": 1}  # <-- OPTIMIZACIÓN: Solo la última
         key = ""
         kind = ""
         if branch:
@@ -205,41 +205,29 @@ class CircleCiClient:
             key, kind = branch, "branch"
         elif tag:
             key, kind = tag, "tag"
+        
         if self._cache is not None and key:
             cached = self._cache.get_circleci_pipelines(self.project_slug(repo), key, kind)
             if cached is not None:
                 return cached
+        
         if tag:
-            items = [p for p in self._project_pipelines(repo)
+            # Para tags: obtén solo la última pipeline del proyecto
+            # y filtra por tag client-side
+            project_pipelines = self._paginate_latest(self.project_slug(repo), limit=10)
+            items = [p for p in project_pipelines
                      if (p.get("vcs") or {}).get("tag") == tag]
         else:
+            # Para branches: CircleCI filtra server-side
             items = self._paginate(f"/project/{self.project_slug(repo)}/pipeline", params)
+        
         if self._cache is not None and key:
             self._cache.set_circleci_pipelines(self.project_slug(repo), key, kind, items)
         return items
 
-    def _project_pipelines(self, repo: str) -> list[dict]:
-        """Lista completa de pipelines de un proyecto (todas las páginas).
-
-        Se pagina una sola vez por proyecto y se cachea con clave vacía para
-        ser compartida entre todos los lookups por tag en caché fría. El lock
-        evita paginar el mismo proyecto duplicado cuando varios tags se
-        resuelven en paralelo (double-checked locking sobre la cache).
-        """
-        slug = self.project_slug(repo)
-        if self._cache is not None:
-            cached = self._cache.get_circleci_pipelines(slug, "", "")
-            if cached is not None:
-                return cached
-        with self._pipeline_lock:
-            if self._cache is not None:
-                cached = self._cache.get_circleci_pipelines(slug, "", "")
-                if cached is not None:
-                    return cached
-            items = self._paginate(f"/project/{slug}/pipeline", {"limit": 100})
-            if self._cache is not None:
-                self._cache.set_circleci_pipelines(slug, "", "", items)
-            return items
+    def _paginate_latest(self, project_slug: str, limit: int = 10) -> list[dict]:
+        """Obtén solo las últimas N pipelines del proyecto (sin paginar todo)."""
+        return self._paginate(f"/project/{project_slug}/pipeline", {"limit": limit})
 
     def workflows(self, pipeline_id: str) -> list[dict]:
         if self._cache is not None:
