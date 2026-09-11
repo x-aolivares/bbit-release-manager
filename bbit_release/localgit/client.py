@@ -271,24 +271,38 @@ class LocalRepoClient:
         """Resuelve si la rama existe: local (git) o API fallback."""
         # Si no hay clone, intentar API directamente
         if not self.available(slug):
+            log.debug(f"_resolve_for_branch {slug} {branch}: clone no disponible, fallback API")
             try:
-                return self._bb.resolve_branch(slug, branch)
-            except Exception:
+                result = self._bb.resolve_branch(slug, branch)
+                if result:
+                    log.debug(f"_resolve_for_branch {slug} {branch}: API retorna {result}")
+                return result
+            except Exception as exc:
+                log.debug(f"_resolve_for_branch {slug} {branch}: API falló: {exc}")
                 return ""
         
         # Si hay clone, asegurar que esté actualizado (clone o fetch)
         try:
+            log.debug(f"_resolve_for_branch {slug} {branch}: clone disponible, ensure_repo()...")
             if not self.ensure_repo(slug):
                 # Si ensure_repo falla, fallback a API
+                log.warning(f"_resolve_for_branch {slug} {branch}: ensure_repo falló, fallback API")
                 try:
                     return self._bb.resolve_branch(slug, branch)
                 except Exception:
                     return ""
             
             # Ahora intentar leer localmente
-            return self._resolve_local(slug, branch)
-        except (OSError, subprocess.TimeoutExpired):
+            log.debug(f"_resolve_for_branch {slug} {branch}: leyendo localmente...")
+            result = self._resolve_local(slug, branch)
+            if result:
+                log.debug(f"_resolve_for_branch {slug} {branch}: local git retorna {result}")
+            else:
+                log.debug(f"_resolve_for_branch {slug} {branch}: git local no encontró rama")
+            return result
+        except (OSError, subprocess.TimeoutExpired) as exc:
             # Git falló, intentar API
+            log.warning(f"_resolve_for_branch {slug} {branch}: git error {exc}, fallback API")
             try:
                 return self._bb.resolve_branch(slug, branch)
             except Exception:
