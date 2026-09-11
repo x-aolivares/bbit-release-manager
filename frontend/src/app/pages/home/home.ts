@@ -915,12 +915,17 @@ reportOpen = signal(false);
     const url = `/api/flow/stream?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}`;
 
     let firstEventReceived = false;
+    // BBIT-33: 3s era demasiado agresivo — el primer repo puede tardar
+    // 20-30s en resolver (PRs + CircleCI project/pipelines/workflows/jobs
+    // en cascada, sin caché tibia). Un timeout corto cortaba el streaming
+    // SSE antes de que el backend emitiera el primer evento, cayendo
+    // siempre a batch y perdiendo el render incremental.
     const timeout = setTimeout(() => {
       if (!firstEventReceived) {
         es.close();
         onTimeout();
       }
-    }, 3000);
+    }, 45000);
 
     let repos: ScanRepo[] = [];
     const es = new EventSource(url);
