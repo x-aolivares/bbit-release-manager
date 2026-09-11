@@ -1194,6 +1194,7 @@ def flow_stream(
     def _generate():
         items = []
         scan_ci_error = None
+        repo_count = 0
 
         # Overlap de fases: master params corren en un hilo paralelo al scan
         # (mismo rate limiter global). El executor se cierra al terminar o al
@@ -1205,9 +1206,13 @@ def flow_stream(
                 master_fut = ex.submit(_resolve_masters, data.client, repos_list, destination, ssm_prefixes, cache, ctx)
 
             for item, err in _stream_scan(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx):
+                repo_count += 1
                 items.append(item)
                 if err:
                     scan_ci_error = scan_ci_error or err
+                # BBIT-33: Log streaming en tiempo real
+                import sys
+                print(f"[STREAM] {repo_count}. {item['slug']}: commit={item['commit'][:12]} pr={'✓' if item['pr'].get('exists') else '✗'}", file=sys.stderr)
                 yield _event("repo", item)
 
             if scan_ci_error:
@@ -1222,6 +1227,7 @@ def flow_stream(
                 "with_pr": with_pr,
                 "prod": prod,
             }
+            print(f"[STREAM] DONE: {len(items)} repos, {with_pr} con PR", file=sys.stderr)
             yield _event("stats", stats)
 
             dest_by_repo = master_fut.result() if master_fut is not None else None
