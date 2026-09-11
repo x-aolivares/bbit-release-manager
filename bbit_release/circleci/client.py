@@ -8,7 +8,9 @@ Requiere un token de usuario (Circle-Token) y el project slug de la forma
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
@@ -63,6 +65,7 @@ class CircleCiClient:
         self.vcs = vcs
         self.org = org
         self._cache = cache
+        self._pipeline_lock = threading.Lock()
 
         hooks: dict[str, list[Callable]] = {}
         if recorder is not None:
@@ -219,17 +222,24 @@ class CircleCiClient:
         """Lista completa de pipelines de un proyecto (todas las páginas).
 
         Se pagina una sola vez por proyecto y se cachea con clave vacía para
-        ser compartida entre todos los lookups por tag en caché fría.
+        ser compartida entre todos los lookups por tag en caché fría. El lock
+        evita paginar el mismo proyecto duplicado cuando varios tags se
+        resuelven en paralelo (double-checked locking sobre la cache).
         """
         slug = self.project_slug(repo)
         if self._cache is not None:
             cached = self._cache.get_circleci_pipelines(slug, "", "")
             if cached is not None:
                 return cached
-        items = self._paginate(f"/project/{slug}/pipeline", {"limit": 100})
-        if self._cache is not None:
-            self._cache.set_circleci_pipelines(slug, "", "", items)
-        return items
+        with self._pipeline_lock:
+            if self._cache is not None:
+                cached = self._cache.get_circleci_pipelines(slug, "", "")
+                if cached is not None:
+                    return cached
+            items = self._paginate(f"/project/{slug}/pipeline", {"limit": 100})
+            if self._cache is not None:
+                self._cache.set_circleci_pipelines(slug, "", "", items)
+            return items
 
     def workflows(self, pipeline_id: str) -> list[dict]:
         if self._cache is not None:
@@ -386,17 +396,30 @@ class CircleCiClient:
         return None
 
     def deploys_for_tags(self, repo: str, tags: list[str]) -> dict[str, DeployJob | None]:
-        """Para cada tag, el último pipeline corrido sobre ese tag."""
+        """Para cada tag, el último pipeline corrido sobre ese tag.
+
+        Los pipelines de tags distintos se resuelven en paralelo (acotado a
+        pocos workers); ``ex.map`` preserva el orden de ``tags`` en el
+        resultado. El lock de ``_project_pipelines`` evita paginar dos veces
+        el mismo proyecto en caché fría.
+        """
         result: dict[str, DeployJob | None] = {t: None for t in tags}
         if not tags:
             return result
-        for tag in tags:
+
+        def _resolve(tag: str) -> DeployJob | None:
             pipelines = self.pipelines(repo, tag=tag)
             if not pipelines:
-                continue
+                return None
             pipeline = pipelines[0]
             for workflow in self.workflows(pipeline.get("id", "")):
                 if workflow.get("name", ""):
-                    result[tag] = self._deploy_from_workflow(repo, pipeline, workflow)
-                    break
+                    return self._deploy_from_workflow(repo, pipeline, workflow)
+            return None
+
+        with ThreadPoolExecutor(max_workers=min(len(tags), 4)) as ex:
+            resolved = list(ex.map(_resolve, tags))
+        for tag, deploy in zip(tags, resolved):
+            if deploy is not None:
+                result[tag] = deploy
         return result
