@@ -45,6 +45,7 @@ def _preload_repos_list_background(client: BitbucketClient, workspace: str) -> N
     BBIT-33 Phase 2: Cloning deferred until after prefix filtering.
     """
     import threading
+    import sys
     
     log_obj = __import__("logging").getLogger("bbit.session")
     
@@ -53,9 +54,14 @@ def _preload_repos_list_background(client: BitbucketClient, workspace: str) -> N
             if hasattr(client, 'list_repos'):
                 # Cachear lista completa de repos
                 repos = client.list_repos(prefixes=None)
-                log_obj.info(f"Precache: {len(repos) if repos else 0} repos obtenidos y cacheados")
+                count = len(repos) if repos else 0
+                msg = f"[PRECACHE] {count} repos cacheados (NO se clonan en login)"
+                print(msg, file=sys.stderr)
+                log_obj.info(msg)
         except Exception as exc:
-            log_obj.warning(f"Preload repos list background falló (no-critical): {exc}")
+            msg = f"[PRECACHE] Falló: {exc}"
+            print(msg, file=sys.stderr)
+            log_obj.warning(msg)
     
     thread = threading.Thread(target=_load, daemon=True)
     thread.start()

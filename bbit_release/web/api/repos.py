@@ -126,38 +126,55 @@ def _clone_repos_background(client, repos: list) -> None:
     que el usuario necesita (no todos los ~150).
     
     BBIT-33: Mejora sobre _preload_repos_background (que se ejecutaba en login).
+    
+    Imprime en terminal para visualizar el progreso del clone.
     """
     from ..localgit.client import LocalRepoClient
     
     # Solo si el cliente es LocalRepoClient
     if not isinstance(client, LocalRepoClient):
+        log.debug("_clone_repos_background: Cliente NO es LocalRepoClient, saltando")
         return
     
     if not repos:
+        log.debug("_clone_repos_background: lista vacía, saltando")
         return
     
     import threading
+    import sys
     
     def _load():
         try:
-            log.info(f"Clone background: iniciando {len(repos)} repos filtrados...")
+            msg = f"[CLONE] Iniciando clone en background de {len(repos)} repos filtrados..."
+            print(msg, file=sys.stderr)  # stderr para que se vea en la terminal
+            log.info(msg)
+            
             cloned = 0
             failed = 0
-            for repo in repos:
+            for i, repo in enumerate(repos, 1):
                 try:
+                    print(f"[CLONE {i}/{len(repos)}] {repo.slug}...", end=" ", file=sys.stderr, flush=True)
                     ok = client.ensure_repo(repo.slug)
                     if ok:
                         cloned += 1
+                        print(f"✓\n", end="", file=sys.stderr)
                         log.debug(f"✓ {repo.slug} clonado")
                     else:
                         failed += 1
-                        log.debug(f"✗ {repo.slug} falló")
+                        print(f"✗ (falló)\n", end="", file=sys.stderr)
+                        log.debug(f"✗ {repo.slug} clone falló")
                 except Exception as exc:
                     failed += 1
+                    print(f"✗ ({exc})\n", end="", file=sys.stderr)
                     log.warning(f"✗ {repo.slug} excepción: {exc}")
-            log.info(f"Clone background terminado: {cloned} OK, {failed} fallidos")
+            
+            msg = f"[CLONE] Terminado: {cloned} OK, {failed} fallidos"
+            print(msg, file=sys.stderr)
+            log.info(msg)
         except Exception as exc:
-            log.warning(f"Clone repos background falló: {exc}")
+            msg = f"[CLONE] Clone background falló: {exc}"
+            print(msg, file=sys.stderr)
+            log.warning(msg)
     
     thread = threading.Thread(target=_load, daemon=True)
     thread.start()
