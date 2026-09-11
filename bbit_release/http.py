@@ -11,8 +11,9 @@ import threading
 import time
 
 # Límites de retry compartidos ante 429 (por servicio).
-MAX_RETRIES = 1
-RETRY_BASE_DELAY = 1.0
+# Aumentado a 3 para manejar rate limits con backoff exponencial
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 0.5  # Reducido: backoff exponencial lo aumentará
 
 
 class RateLimiter:
@@ -44,7 +45,8 @@ class RateLimiter:
 
 
 # Rate limiter global compartido por todas las instancias de clientes.
-_global = RateLimiter(max_concurrent=8, min_interval=0.125)
+# Reducido a 4 para evitar rate limits de Bitbucket Cloud (429 Too Many Requests)
+_global = RateLimiter(max_concurrent=4, min_interval=0.25)
 
 
 def get_global_rate_limiter() -> RateLimiter:

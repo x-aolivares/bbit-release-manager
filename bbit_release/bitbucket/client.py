@@ -22,7 +22,7 @@ from ..http import get_global_rate_limiter, MAX_RETRIES, RETRY_BASE_DELAY
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.bitbucket.org/2.0"
-MAX_WORKERS = 8
+MAX_WORKERS = 4  # Reducido de 8 a evitar rate limits (429)
 
 
 class BitbucketError(Exception):
