@@ -934,6 +934,45 @@ def _stream_scan(client, ci, repos, origin, destination, clean, ctx=None):
                 yield (_failed_repo_item(repo, client, origin, exc), None)
 
 
+@router.get("/repos-quick")
+def repos_quick(
+    project_prefixes: str = "",
+    exclude: str = "",
+):
+    """Endpoint rápido: devuelve repos del workspace con filtros aplicados.
+    
+    SIN hacer scan/diff/SSM - solo metadata básica. Permite al usuario
+    escribir origen/destino y filtrar localmente mientras se cargan datos
+    pesados en background.
+    
+    Típicamente: < 1 segundo de respuesta.
+    """
+    data = _require_session()
+    cfg = Config()
+    proj = _project_prefixes(cfg, project_prefixes)
+    blocked = _exclude_repos(cfg, exclude)
+    
+    # Obtener lista completa de repos (cacheada después de login)
+    repos = _apply_filters(
+        _all_repos_cached(data.client, proj, blocked) or 
+        data.client.list_repos(prefixes=proj),
+        proj, blocked,
+    )
+    
+    return {
+        "repos": [
+            {
+                "slug": r.slug,
+                "name": r.name,
+                "workspace": r.workspace,
+                "default_branch": r.default_branch,
+            }
+            for r in repos
+        ],
+        "count": len(repos),
+    }
+
+
 @router.get("/flow")
 def flow(
     origin: str,
