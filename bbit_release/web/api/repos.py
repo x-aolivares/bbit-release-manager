@@ -1013,9 +1013,8 @@ def _stream_scan(client, ci, repos, origin, destination, clean, ctx=None):
     de envío: si un repo es lento, los que terminan primero se entregan antes
     por el SSE y el frontend los pinta apenas llegan.
     
-    BBIT-33: Si un repo no tiene la rama, se emite un evento especial `skip`
-    para que el frontend lo elimine de la tabla (en lugar de quedarse con el
-    placeholder).
+    BBIT-33: Si un repo no tiene la rama, emitir un evento repo con visible=false
+    para que el frontend lo excluya de la tabla pero lo registre en el evento.
     """
     workers = min(MAX_WORKERS, len(repos) or 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -1027,10 +1026,10 @@ def _stream_scan(client, ci, repos, origin, destination, clean, ctx=None):
             repo = futures[fut]
             try:
                 item, err = fut.result()
-                # BBIT-33: Si un repo no tiene la rama, emitir evento `skip`
+                # BBIT-33: Si un repo no tiene la rama, emitir evento repo con visible=false
                 if item is None:
                     log.debug("stream_scan: %s ignorado (sin rama %s)", repo.slug, origin)
-                    yield ({"slug": repo.slug, "reason": "branch_not_found"}, "skip")
+                    yield ({"slug": repo.slug, "visible": False, "reason": "branch_not_found"}, None)
                     continue
                 yield item, err
             except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
@@ -1267,15 +1266,16 @@ def flow_stream(
 
             for item, err in _stream_scan(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx):
                 repo_count += 1
-                # BBIT-33: Si err == "skip", emitir evento skip para que el frontend elimine el repo
-                if err == "skip":
-                    yield _event("skip", {"slug": item["slug"]})
-                    continue
+                # BBIT-33: Siempre emitir evento repo (incluso si visible=false para repos sin rama)
+                # El frontend filtra basado en visible, no en eventos skip
                 items.append(item)
                 if err:
                     scan_ci_error = scan_ci_error or err
-                # BBIT-33: Log streaming en tiempo real
-                print(f"[STREAM] {repo_count}. {item['slug']}: commit={item['commit'][:12]} pr={'✓' if item['pr'].get('exists') else '✗'}", file=sys.stderr)
+                # Log streaming en tiempo real
+                visible_marker = "✓" if item.get("visible", True) else "✗"
+                reason = f" ({item.get('reason', 'ok')})" if not item.get("visible", True) else ""
+                pr_marker = "✓" if item.get("pr", {}).get("exists") else "✗"
+                print(f"[STREAM] {repo_count}. {item['slug']}: commit={item.get('commit', 'N/A')[:12]} pr={pr_marker}{visible_marker}{reason}", file=sys.stderr)
                 yield _event("repo", item)
 
             if scan_ci_error:

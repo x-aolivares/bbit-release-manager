@@ -52,6 +52,8 @@ interface ScanRepo {
   commit: string;
   no_changes?: boolean;
   error?: string | null;
+  visible?: boolean;  // BBIT-33: false = no mostrar en tabla (sin rama)
+  reason?: string;    // BBIT-33: "branch_not_found" u otro motivo
   tags: TagRow[];
   pr: PrInfo;
   deploys: Record<string, DeployInfo | null>;
@@ -940,19 +942,17 @@ reportOpen = signal(false);
       const parsed = processSseEvent('repo', e.data, repos);
       if (parsed?.type === 'repo') {
         repos = parsed.repos;
-        onRepo(parsed.repos[parsed.repos.length - 1]);
+        const repo = parsed.repos[parsed.repos.length - 1];
+        // BBIT-33: Filtrar repos sin visible=true (repos sin rama no se muestran en tabla)
+        if (repo.visible !== false) {
+          onRepo(repo);
+        } else {
+          console.log(`[SSE] Repo ${repo.slug} sin rama (visible=false), excluido de tabla`);
+        }
       }
     });
 
-    es.addEventListener('skip', (e: MessageEvent) => {
-      console.log(`[SSE] Received skip event:`, e.data);
-      firstEventReceived = true;
-      const payload = JSON.parse(e.data);
-      // Eliminar el repo de la tabla si fue ignorado (rama no encontrada)
-      this.repos.update((current) =>
-        current.filter((r) => r.slug !== payload.slug)
-      );
-    });
+    // Nota: evento 'skip' ya no se usa; los repos sin rama vienen con visible=false en el evento 'repo'
 
     es.addEventListener('stats', (e: MessageEvent) => {
       console.log(`[SSE] Received stats event`);
