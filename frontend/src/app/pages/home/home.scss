@@ -1356,6 +1356,22 @@ button.bb-link {
   width: 150px;
 }
 
+.bb-input-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.bb-input-group .bb-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.bb-input-group .bb-btn-secondary {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 @media (max-width: 520px) {
   .bb-config-fields {
     grid-template-columns: 1fr;
@@ -1365,6 +1381,12 @@ button.bb-link {
     gap: 6px;
   }
   .bb-region-add .bb-input {
+    width: 100%;
+  }
+  .bb-input-group {
+    flex-direction: column;
+  }
+  .bb-input-group .bb-btn-secondary {
     width: 100%;
   }
 }

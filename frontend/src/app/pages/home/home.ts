@@ -422,6 +422,27 @@ export class Home implements OnInit {
     this.configForm[svc] = { ...this.configForm[svc], [key]: checked ? '1' : '' };
   }
 
+  onFolderSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    if (!input.files || input.files.length === 0) return;
+    
+    // Obtener la ruta de la carpeta del primer archivo seleccionado
+    // En navegadores modernos, webkitdirectory proporciona la ruta relativa
+    const firstFile = input.files[0];
+    const filePath = (firstFile as any).webkitRelativePath || '';
+    
+    if (filePath) {
+      // Extraer la carpeta base (antes del primer archivo)
+      const folderPath = filePath.split('/').slice(0, -1).join('/');
+      if (folderPath) {
+        this.gitClonesDir.set(folderPath);
+      }
+    }
+    
+    // Limpiar el input para permitir seleccionar la misma carpeta nuevamente
+    input.value = '';
+  }
+
   saveGitClonesDir(): void {
     this.configMessage.set(null);
     this.http.put<any>('/api/session/git', { clones_dir: this.gitClonesDir() }).subscribe({

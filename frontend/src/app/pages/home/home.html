@@ -656,10 +656,25 @@
           <div class="bb-config-fields">
             <div class="bb-config-field">
               <label class="bb-auth-label">Carpeta de clones</label>
-              <input class="bb-input bb-mono"
-                     [ngModel]="gitClonesDir()"
-                     (ngModelChange)="gitClonesDir.set($any($event))"
-                     placeholder="C:\clones\bbit-repos"/>
+              <div class="bb-input-group">
+                <input class="bb-input bb-mono"
+                       [ngModel]="gitClonesDir()"
+                       (ngModelChange)="gitClonesDir.set($any($event))"
+                       placeholder="C:\clones\bbit-repos"
+                       #folderInput/>
+                <button class="bb-btn-secondary bb-btn-sm" 
+                        (click)="folderPicker.click()"
+                        title="Buscar carpeta en el administrador de archivos">
+                  📁 Buscar
+                </button>
+                <input type="file" 
+                       webkitdirectory 
+                       mozdirectory 
+                       directory
+                       (change)="onFolderSelected($event)"
+                       #folderPicker
+                       style="display: none"/>
+              </div>
             </div>
           </div>
           @if (gitCloneStatus(); as st) {
