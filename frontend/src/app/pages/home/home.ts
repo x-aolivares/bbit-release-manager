@@ -968,6 +968,44 @@ reportOpen = signal(false);
       return;
     }
 
+    // QUICK LOAD: Cargar repos rápidamente primero (sin scan/diff/SSM)
+    // Permite al usuario filtrar y escribir mientras se cargan datos pesados
+    const projectPrefixesParam = this.projectPrefixParam();
+    const excludeParam = this.blacklisted().join(',');
+    
+    this.http.get<any>('/api/repos-quick', {
+      params: {
+        project_prefixes: projectPrefixesParam,
+        exclude: excludeParam,
+      }
+    }).subscribe({
+      next: (r) => {
+        if (r.repos) {
+          // Mostrar repos inmediatamente (sin metadata pesada)
+          const quickRepos: ScanRepo[] = r.repos.map((repo: any) => ({
+            slug: repo.slug,
+            name: repo.name,
+            workspace: repo.workspace,
+            default_branch: repo.default_branch,
+            pr: null,
+            commits: [],
+            tags: [],
+            deploys: [],
+          }));
+          this.repos.set(quickRepos);
+          this.clearSpinner();
+          // Ahora cargar datos pesados en background
+          this.loadReposHeavy(done);
+        }
+      },
+      error: () => {
+        // Si falla /repos-quick, fallback a SSE/batch
+        this.loadReposHeavy(done);
+      }
+    });
+  }
+
+  private loadReposHeavy(done: () => void): void {
     // Normal load: try SSE streaming first, fallback to batch on failure.
     let batchFallbackScheduled = false;
     const scheduleFallback = () => {
@@ -981,7 +1019,6 @@ reportOpen = signal(false);
 
     this.scanSse(
       (item) => {
-        this.clearSpinner();
         repos.push(item);
         this.repos.set([...repos]);
       },
