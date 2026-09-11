@@ -1055,12 +1055,20 @@ reportOpen = signal(false);
       this.loadReposBatch(false, done);
     };
 
-    const repos: ScanRepo[] = [];
-
     this.scanSse(
       (item) => {
-        repos.push(item);
-        this.repos.set([...repos]);
+        // Actualizar el signal DIRECTAMENTE: agregar el nuevo repo a la tabla
+        this.repos.update((current) => {
+          // Buscar si el repo ya existe (por slug)
+          const existing = current.find((r) => r.slug === item.slug);
+          if (existing) {
+            // Reemplazar: el repo fue re-escaneado, actualizar su info
+            return current.map((r) => (r.slug === item.slug ? item : r));
+          } else {
+            // Nuevo: agregar a la tabla
+            return [...current, item];
+          }
+        });
       },
       (stats) => {
         this.stats.set(stats as ScanStats);
