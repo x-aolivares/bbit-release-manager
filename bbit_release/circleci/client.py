@@ -189,15 +189,41 @@ class CircleCiClient:
                 break
         return items
 
+    def _paginate_capped(self, path: str, params: dict, max_pages: int = 1) -> list[dict]:
+        """Como ``_paginate`` pero se detiene tras ``max_pages`` páginas.
+
+        CircleCI devuelve ``next_page_token`` salvo que sea la última página
+        real, sin relación con ``limit``: pedir ``limit=1`` o ``limit=100``
+        solo cambia el tamaño de CADA página, no cuántas páginas se piden.
+        Sin este corte, ``pipelines(tag=...)`` termina paginando el histórico
+        completo del proyecto (100+ requests) igual que antes de BBIT-33
+        Phase 10, sólo que en páginas más chicas.
+        """
+        items: list[dict] = []
+        token: str | None = None
+        pages = 0
+        while True:
+            page_params = dict(params)
+            if token:
+                page_params["page-token"] = token
+            payload = self._request("GET", path, params=page_params)
+            items.extend(payload.get("items", []))
+            pages += 1
+            token = payload.get("next_page_token")
+            if not token or pages >= max_pages:
+                break
+        return items
+
     def pipelines(self, repo: str, branch: str | None = None, tag: str | None = None) -> list[dict]:
         """Pipelines del proyecto, opcionalmente filtrados por rama o tag.
 
-        BBIT-33 Phase 10: Optimización - Solo obtén la ÚLTIMA pipeline.
-        
-        En lugar de paginar todo el histórico (100+ requests), 
-        usa limit=1 para obtener solo la última pipeline de la rama/tag.
+        BBIT-33 Phase 10 (fix): ``limit`` en la query de CircleCI solo
+        controla el tamaño de CADA página — no cuántas páginas se piden.
+        El corte real de "no traer el histórico completo" es ``max_pages``
+        vía ``_paginate_capped``: una sola página (``limit`` pipelines) y
+        listo, sin seguir ``next_page_token``.
         """
-        params: dict = {"limit": 1}  # <-- OPTIMIZACIÓN: Solo la última
+        params: dict = {"limit": 20}
         key = ""
         kind = ""
         if branch:
@@ -212,22 +238,26 @@ class CircleCiClient:
                 return cached
         
         if tag:
-            # Para tags: obtén solo la última pipeline del proyecto
-            # y filtra por tag client-side
-            project_pipelines = self._paginate_latest(self.project_slug(repo), limit=10)
+            # Para tags: una sola página de las pipelines más recientes del
+            # proyecto (no hay filtro server-side por tag), filtrada
+            # client-side. Si el tag buscado no está en esa página reciente
+            # no se encuentra — trade-off aceptado a cambio de no paginar
+            # el histórico completo del proyecto por cada tag.
+            project_pipelines = self._paginate_capped(
+                f"/project/{self.project_slug(repo)}/pipeline", {"limit": 20}, max_pages=1,
+            )
             items = [p for p in project_pipelines
                      if (p.get("vcs") or {}).get("tag") == tag]
         else:
-            # Para branches: CircleCI filtra server-side
-            items = self._paginate(f"/project/{self.project_slug(repo)}/pipeline", params)
+            # Para branches: CircleCI filtra server-side por branch, así que
+            # una sola página alcanza (la última pipeline de esa rama).
+            items = self._paginate_capped(
+                f"/project/{self.project_slug(repo)}/pipeline", params, max_pages=1,
+            )
         
         if self._cache is not None and key:
             self._cache.set_circleci_pipelines(self.project_slug(repo), key, kind, items)
         return items
-
-    def _paginate_latest(self, project_slug: str, limit: int = 10) -> list[dict]:
-        """Obtén solo las últimas N pipelines del proyecto (sin paginar todo)."""
-        return self._paginate(f"/project/{project_slug}/pipeline", {"limit": limit})
 
     def workflows(self, pipeline_id: str) -> list[dict]:
         if self._cache is not None:

@@ -941,47 +941,6 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
     }
     return item, ci_error
 
-    def _env_deploy(task):
-        """Deploy por tag/env aislado: devuelve (env, payload, err) para
-        mergear el resultado en el hilo principal sin tocar ci_error."""
-        env, found_tag = task
-        deploy = None
-        err = None
-        log.info(
-            "scan: %s env=%s tag=%s commit=%s -> buscando deploy_for_tag",
-            repo.slug, env, found_tag, match_commit[:12],
-        )
-        try:
-            deploy = ci.deploy_for_tag(repo.slug, found_tag, match_commit, env)
-        except CircleCiError as exc:
-            err = str(exc)
-        log.info("scan: %s env=%s deploy=%s", repo.slug, env, f"{deploy.status}" if deploy else "None")
-        return env, _serialize_deploy(deploy), err
-
-    if env_tasks:
-        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(env_tasks) or 1)) as ex:
-            results = list(ex.map(_env_deploy, env_tasks))
-        for env, deploy, err in results:
-            deploys[env] = deploy
-            if err:
-                ci_error = ci_error or err
-
-    item = {
-        "slug": repo.slug,
-        "name": repo.name,
-        "workspace": repo.workspace,
-        "branch_url": client.branch_url(repo.slug, origin),
-        "commit": commit,
-        "no_changes": no_changes,
-        "tags": tag_rows,
-        "pr": _serialize_pr(pr),
-        "deploys": deploys,
-        "match_tag": match_tag,
-        "ci_project": ci_project,
-        "ci_vcs": ci.vcs if ci else None,
-    }
-    return item, ci_error
-
 
 def _failed_repo_item(repo, client, origin, exc):
     """Item de scan para un repo cuya consulta falló.
