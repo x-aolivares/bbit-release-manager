@@ -36,6 +36,7 @@ class FakeConfig:
     is_configured = False
     ssm_environments: dict = {}
     ssm_read_secrets = False
+    git_clones_dir = ""
 
     @classmethod
     def for_client(cls, c_id):

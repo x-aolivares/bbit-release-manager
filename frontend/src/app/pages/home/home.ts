@@ -199,6 +199,10 @@ export class Home implements OnInit {
   clientAlias = signal('local');
   savingService = signal<string | null>(null);
   configMessage = signal<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  gitClonesDir = signal('');
+  gitClonesEnabled = signal(false);
+  gitCloning = signal(false);
+  gitCloneStatus = signal<string | null>(null);
   userMenuPosition = signal<{ top: number; right: number }>({ top: 0, right: 0 });
   awsEnvironments = signal<AwsEnvironment[]>([]);
   awsEnvironmentLoading = signal(false);
@@ -418,6 +422,51 @@ export class Home implements OnInit {
     this.configForm[svc] = { ...this.configForm[svc], [key]: checked ? '1' : '' };
   }
 
+  saveGitClonesDir(): void {
+    this.configMessage.set(null);
+    this.http.put<any>('/api/session/git', { clones_dir: this.gitClonesDir() }).subscribe({
+      next: (r) => {
+        if (r.ok) {
+          this.gitClonesEnabled.set(!!r.git?.enabled);
+          this.configMessage.set({
+            kind: 'ok',
+            text: 'Carpeta de clones guardada. Reconectá la sesión para activar el motor local-git.',
+          });
+        } else {
+          this.configMessage.set({ kind: 'error', text: r.error ?? 'No se pudo guardar.' });
+        }
+      },
+      error: (e) => this.configMessage.set({
+        kind: 'error',
+        text: e.error?.error ?? e.error?.detail ?? 'Error de red al guardar.',
+      }),
+    });
+  }
+
+  cloneRepos(): void {
+    if (!this.gitClonesDir().trim()) return;
+    this.gitCloning.set(true);
+    this.gitCloneStatus.set(null);
+    this.configMessage.set(null);
+    this.http.post<any>('/api/session/clone', {}).subscribe({
+      next: (r) => {
+        if (r.ok) {
+          const repos: Array<{ ok: boolean; slug: string }> = r.repos ?? [];
+          const ok = repos.filter((x) => x.ok).length;
+          const failed = repos.length - ok;
+          this.gitCloneStatus.set(`Repos en carpeta: ${repos.length} (${ok} ok${failed ? `, ${failed} fallidos` : ''}).`);
+        } else {
+          this.configMessage.set({ kind: 'error', text: r.error ?? 'No se pudo clonar.' });
+        }
+      },
+      error: (e) => this.configMessage.set({
+        kind: 'error',
+        text: e.error?.error ?? e.error?.detail ?? 'No se pudo clonar.',
+      }),
+      complete: () => this.gitCloning.set(false),
+    });
+  }
+
   reposLoading = signal(false);
   paramsLoading = signal(false);
   tableLoaded = signal(false);
@@ -558,6 +607,8 @@ reportOpen = signal(false);
       next: (r) => {
         this.services.set(r.services ?? {});
         this.clientAlias.set(r.client_alias ?? 'local');
+        this.gitClonesDir.set(r.git?.clones_dir ?? '');
+        this.gitClonesEnabled.set(!!r.git?.enabled);
         if (r.active) {
           this.connected.set(true);
           this.identity.set(r.identity ?? '');
@@ -700,6 +751,9 @@ reportOpen = signal(false);
     }
     if (this.circleciToken) {
       body['circleci_token'] = this.circleciToken;
+    }
+    if (this.gitClonesDir().trim()) {
+      body['git_clones_dir'] = this.gitClonesDir().trim();
     }
     this.http.post<any>('/api/session', body).subscribe({
         next: (r) => {

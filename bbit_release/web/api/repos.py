@@ -385,6 +385,10 @@ def session_status():
     sid = active_session_id()
     data = get_session(sid) if sid else None
     states = cfg.service_states()
+    git = {
+        "enabled": bool(cfg.git_clones_dir),
+        "clones_dir": cfg.git_clones_dir or "",
+    }
     if data:
         return {
             "active": True,
@@ -395,6 +399,7 @@ def session_status():
             "services": states,
             "stored": bool(cfg.bitbucket_token),
             "needs_tokens": False,
+            "git": git,
         }
     configured = bool(cfg.bitbucket_token) and bool(cfg.workspace)
     return {
@@ -403,6 +408,7 @@ def session_status():
         "services": states,
         "stored": configured,
         "needs_tokens": not configured,
+        "git": git,
     }
 
 
@@ -521,6 +527,8 @@ def api_session(body: dict):
             project_prefixes=",".join(_project_prefixes(cfg, body.get("project_prefixes", "")) or []),
             exclude_repos=",".join(sorted(_exclude_repos(cfg, body.get("exclude_repos", "")))),
         )
+        if "git_clones_dir" in body:
+            cfg.save_git_clones_dir((body.get("git_clones_dir") or "").strip())
     except OSError as exc:
         return JSONResponse(
             {"ok": False, "error": f"Sesión OK pero no se pudo guardar la conexión en la DB: {exc}"},
@@ -610,6 +618,76 @@ def destroy(delete_credentials: bool = False):
                 status_code=500,
             )
     return {"ok": True, "delete_credentials": deleted}
+
+
+@router.put("/session/git")
+def session_git(body: dict):
+    """Persiste la carpeta de clones del motor local-git (BBIT-33)."""
+    clones_dir = (body.get("clones_dir") or "").strip()
+    try:
+        cfg = Config()
+        cfg.save_git_clones_dir(clones_dir)
+    except OSError as exc:
+        return JSONResponse(
+            {"ok": False, "error": f"No se pudo guardar la carpeta de clones: {exc}"},
+            status_code=500,
+        )
+    return {"ok": True, "git": {"enabled": bool(clones_dir), "clones_dir": clones_dir}}
+
+
+@router.post("/session/clone")
+def session_clone(body: dict | None = None):
+    """Clona (o hace fetch) de los repos del workspace en la carpeta de clones.
+
+    Sin ``repos`` explícito usa la lista completa del workspace (con caché).
+    Ejecuta en paralelo con la concurrencia acotada del motor git. Los slots que
+    ya existen solo reciben un fetch incremental (no destructivo).
+    """
+    cfg = Config()
+    clones_dir = cfg.git_clones_dir or ""
+    if not clones_dir:
+        raise HTTPException(
+            400, "Configurá la carpeta de clones (git_clones_dir) antes de clonar."
+        )
+    data = _require_session()
+    client = data.client
+
+    from ..localgit.client import LocalRepoClient
+
+    if not isinstance(client, LocalRepoClient):
+        raise HTTPException(
+            400,
+            "El motor git no está activo en esta sesión. Conectate de nuevo tras "
+            "guardar la carpeta de clones.",
+        )
+
+    body = body or {}
+    prefs = _project_prefixes(cfg, body.get("project_prefixes", ""))
+    blocked = _exclude_repos(cfg, body.get("exclude_repos", ""))
+
+    slugs = [s.strip() for s in (body.get("repos") or "").split(",") if s.strip()]
+    if not slugs:
+        base = _all_repos_cached(client, prefs, blocked)
+        if base is not None:
+            slugs = [r.slug for r in _apply_filters(base, prefs, blocked)]
+        else:
+            slugs = [r.slug for r in _apply_filters(client.list_repos(prefixes=prefs), prefs, blocked)]
+    if not slugs:
+        return {"ok": True, "clones_dir": clones_dir, "repos": []}
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    results = []
+    with ThreadPoolExecutor(max_workers=min(8, len(slugs) or 1)) as ex:
+        futures = {ex.submit(client.ensure_repo, s): s for s in slugs}
+        for fut, slug in futures.items():
+            try:
+                ok = fut.result(timeout=660)
+                results.append({"slug": slug, "ok": ok, "error": "" if ok else "clone/fetch falló"})
+            except Exception as exc:
+                results.append({"slug": slug, "ok": False, "error": str(exc)})
+    results.sort(key=lambda r: r["slug"])
+    return {"ok": True, "clones_dir": clones_dir, "repos": results}
 
 
 
