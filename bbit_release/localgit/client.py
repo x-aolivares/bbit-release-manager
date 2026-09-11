@@ -289,12 +289,54 @@ class LocalRepoClient:
         prefixes: list[str] | None = None,
         repos: list[Repository] | None = None,
     ) -> list[Repository]:
-        """Repos que contienen la rama (clonados → git; el resto → API por repo)."""
+        """Repos que contienen la rama.
+        
+        BBIT-33 Phase 3: Clonar PRIMERO, luego resolver localmente.
+        
+        Flujo:
+        1. Clonar todos los repos en background (en paralelo, sin bloquear)
+        2. Resolver branch localmente (git, zero API)
+        3. Retornar solo repos con la rama
+        """
         from concurrent.futures import ThreadPoolExecutor
+        import sys
 
         repos = repos if repos is not None else self._bb.list_repos(prefixes=prefixes)
         if not repos:
             return []
+        
+        # BBIT-33: Clonar repos en background (paralelo)
+        msg = f"[CLONE] Iniciando clone en background de {len(repos)} repos..."
+        print(msg, file=sys.stderr)
+        log.info(msg)
+        
+        clone_workers = min(4, len(repos) or 1)  # GIT_MAX_CONCURRENT
+        cloned = 0
+        failed = 0
+        with ThreadPoolExecutor(max_workers=clone_workers) as clone_ex:
+            clone_futures = [clone_ex.submit(self.ensure_repo, repo.slug) for repo in repos]
+            for i, (fut, repo) in enumerate(zip(clone_futures, repos), 1):
+                try:
+                    print(f"[CLONE {i}/{len(repos)}] {repo.slug}...", end=" ", file=sys.stderr, flush=True)
+                    ok = fut.result()
+                    if ok:
+                        cloned += 1
+                        print(f"✓\n", end="", file=sys.stderr)
+                        log.debug(f"✓ {repo.slug} clonado")
+                    else:
+                        failed += 1
+                        print(f"✗ (falló)\n", end="", file=sys.stderr)
+                        log.debug(f"✗ {repo.slug} clone falló")
+                except Exception as exc:
+                    failed += 1
+                    print(f"✗ ({exc})\n", end="", file=sys.stderr)
+                    log.warning(f"✗ {repo.slug} excepción: {exc}")
+        
+        msg = f"[CLONE] Cloning terminado: {cloned} OK, {failed} fallidos"
+        print(msg, file=sys.stderr)
+        log.info(msg)
+        
+        # BBIT-33: Ahora resolver branches localmente (git, cero API)
         workers = min(8, len(repos) or 1)
         matched: list[Repository] = []
         with ThreadPoolExecutor(max_workers=workers) as ex:
