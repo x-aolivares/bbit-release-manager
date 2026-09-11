@@ -392,12 +392,20 @@ def _git_pull() -> None:
 
 
 def _build_web_frontend() -> None:
+    import shutil
     frontend = Config().frontend_root
     npm = _have_tool("npm") and __import__("shutil").which("npm")
     if not npm:
         die("npm no está instalado — instalá Node.js (>= 24) para compilar el frontend")
     if not (frontend / "package.json").exists():
         die(f"No se encontró frontend/ en {frontend}")
+    
+    # BBIT-33: Limpiar dist/ antes de compilar para evitar builds stale
+    dist = frontend / "dist"
+    if dist.exists():
+        info(f"Limpiando {dist}...")
+        shutil.rmtree(str(dist))
+    
     info("Compilando frontend Angular (frontend/ -> dist/browser)...")
     result = subprocess.run(
         [npm, "run", "build"],
