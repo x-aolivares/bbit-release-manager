@@ -433,11 +433,36 @@ def session_reuse(body: dict | None = None):
             {"ok": False, "error": "No hay credenciales para este cliente. Conectate o ejecutá 'bbit login'."},
             status_code=400,
         )
+    
+    # Probar credenciales rápidamente SIN crear sesión completa
+    # para evitar loops si son inválidas
+    try:
+        import httpx
+        headers = {"Authorization": f"Bearer {tok}", "Accept": "application/json"}
+        with httpx.Client(headers=headers, timeout=5.0) as client:
+            resp = client.get("https://api.bitbucket.org/2.0/user")
+            if resp.status_code == 401:
+                return JSONResponse(
+                    {"ok": False, "error": "Las credenciales guardadas vencieron o ya no son válidas. Generá de nuevo."},
+                    status_code=401,
+                )
+            if resp.status_code >= 400:
+                return JSONResponse(
+                    {"ok": False, "error": f"Error al validar credenciales: {resp.status_code}"},
+                    status_code=401,
+                )
+    except Exception as exc:
+        return JSONResponse(
+            {"ok": False, "error": f"No se pudo validar las credenciales: {str(exc)}"},
+            status_code=500,
+        )
+    
+    # Credenciales OK, crear sesión completa
     try:
         data = create_session(ws, tok, client_id=cfg.client_id)
-    except (bb.BitbucketAuthError, bb.BitbucketError):
+    except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
         return JSONResponse(
-            {"ok": False, "error": "Las credenciales guardadas vencieron o ya no son válidas. Generá de nuevo."},
+            {"ok": False, "error": f"Error al crear sesión: {str(exc)}"},
             status_code=401,
         )
     return {
