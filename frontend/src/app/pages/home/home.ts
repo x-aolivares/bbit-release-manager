@@ -405,14 +405,31 @@ export class Home implements OnInit {
           this.configMessage.set({ kind: 'ok', text: `${this.serviceLabel(service)} guardado y validado.` });
           this.refreshClient();
           
-          // BBIT-33 Phase 7: Si guardó Bitbucket, intenta conectar automáticamente
+          // BBIT-33 Phase 7: Si guardó Bitbucket, destruye sesión antigua e intenta conectar con nueva
           if (service === 'bitbucket') {
-            window.setTimeout(() => {
-              this.reuseSession(() => {
-                this.configOpen.set(false);
-                this.loadLatestSession();
-              });
-            }, 500);
+            // Destruir sesión anterior (con workspace/token viejo)
+            this.http.delete<any>('/api/session').subscribe({
+              complete: () => {
+                // Desconectar UI localmente
+                this.connected.set(false);
+                this.identity.set('');
+                this.repoCount.set(0);
+                this.repos.set([]);
+                this.reposCache.set([]);
+                this.projects.set([]);
+                this.params.set([]);
+                this.removed.set([]);
+                this.stats.set(null);
+                
+                // Ahora reconectar con nuevas credenciales
+                window.setTimeout(() => {
+                  this.reuseSession(() => {
+                    this.configOpen.set(false);
+                    this.loadLatestSession();
+                  });
+                }, 500);
+              }
+            });
           }
         } else {
           this.configMessage.set({ kind: 'error', text: r.error ?? 'No se pudo guardar.' });
