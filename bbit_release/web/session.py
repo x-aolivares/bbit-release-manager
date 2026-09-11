@@ -48,15 +48,16 @@ def _preload_repos_background(client: BitbucketClient, workspace: str) -> None:
     
     def _load():
         try:
+            repos = None
             if hasattr(client, 'list_repos'):
-                # Cachear repos
-                client.list_repos(prefixes=None)
+                # Cachear repos (paginación a Bitbucket)
+                repos = client.list_repos(prefixes=None)
             
             # Si es LocalRepoClient, clonar repos en paralelo en background
             # para que repos_with_branch() lea localmente (zero 429s)
             from ..localgit.client import LocalRepoClient
-            if isinstance(client, LocalRepoClient):
-                repos = client._bb.list_repos(prefixes=None)
+            if isinstance(client, LocalRepoClient) and repos:
+                # Reutilizar repos ya obtenidos (no repetir paginación)
                 for repo in repos:
                     try:
                         # ensure_repo clona o fetch incremental
