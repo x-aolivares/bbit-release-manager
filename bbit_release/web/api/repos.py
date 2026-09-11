@@ -695,6 +695,7 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
 
     deploys: dict[str, dict | None] = {}
     match_tag: dict[str, str | None] = {}
+    env_tasks: list[tuple[str, str]] = []
     for prefix in clean:
         env = prefix.lower()
         found_tag = None
@@ -703,24 +704,36 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
                 found_tag = t["name"]
                 break
         match_tag[env] = found_tag
-        deploy = None
-        if ci is not None and found_tag and match_commit:
-            log.info(
-                "scan: %s env=%s tag=%s commit=%s -> buscando deploy_for_tag",
-                repo.slug, env, found_tag, match_commit[:12],
-            )
-            try:
-                deploy = ci.deploy_for_tag(repo.slug, found_tag, match_commit, env)
-            except CircleCiError as exc:
-                ci_error = ci_error or str(exc)
-            log.info(
-                "scan: %s env=%s deploy=%s",
-                repo.slug, env,
-                f"{deploy.status}" if deploy else "None",
-            )
-        elif ci is not None and not found_tag:
+        deploys[env] = None
+        if ci is not None and not found_tag:
             log.info("scan: %s env=%s sin tag %s-en en commit %s", repo.slug, env, env, match_commit[:12])
-        deploys[env] = _serialize_deploy(deploy)
+        if ci is not None and found_tag and match_commit:
+            env_tasks.append((env, found_tag))
+
+    def _env_deploy(task):
+        """Deploy por tag/env aislado: devuelve (env, payload, err) para
+        mergear el resultado en el hilo principal sin tocar ci_error."""
+        env, found_tag = task
+        deploy = None
+        err = None
+        log.info(
+            "scan: %s env=%s tag=%s commit=%s -> buscando deploy_for_tag",
+            repo.slug, env, found_tag, match_commit[:12],
+        )
+        try:
+            deploy = ci.deploy_for_tag(repo.slug, found_tag, match_commit, env)
+        except CircleCiError as exc:
+            err = str(exc)
+        log.info("scan: %s env=%s deploy=%s", repo.slug, env, f"{deploy.status}" if deploy else "None")
+        return env, _serialize_deploy(deploy), err
+
+    if env_tasks:
+        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(env_tasks) or 1)) as ex:
+            results = list(ex.map(_env_deploy, env_tasks))
+        for env, deploy, err in results:
+            deploys[env] = deploy
+            if err:
+                ci_error = ci_error or err
 
     item = {
         "slug": repo.slug,
@@ -870,8 +883,28 @@ def flow(
 
     # Contexto compartido por este request: por repo, el PR ya resuelto y los
     # refs de origen/destino ya calculados, para no re-consultarlos en el diff.
-    ctx: dict = {}
-    scan_items, scan_ci_error, stats = _scan_repos(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx)
+    ctx: dict = {r.slug: {} for r in repos}
+
+    # Refresh liviano: si solo se pide re-escanear repos fallidos y el flow
+    # completo ya está cacheado, se reusa el diff y no se lanza master params.
+    cached_flow = None
+    if only_repos:
+        cached_flow = cache.get_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode)
+
+    dest_by_repo = None
+    if cached_flow is None and mode == "diff":
+        # Overlap de fases: el scan y la resolución de master params corren en
+        # paralelo (comparten el rate limiter global de BBIT-30) y el diff
+        # reusa el resultado en vez de recomputarlo.
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            scan_fut = ex.submit(_scan_repos, data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx)
+            master_fut = ex.submit(_resolve_masters, data.client, repos, destination, ssm_prefixes, cache, ctx)
+            scan_items, scan_ci_error, stats = scan_fut.result()
+            dest_by_repo = master_fut.result()
+    else:
+        # En modo "all" no hay overlap: el diff re-resuelve los master params
+        # junto con los origin params en la misma fase.
+        scan_items, scan_ci_error, stats = _scan_repos(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx)
     if scan_ci_error:
         ci_error = ci_error or scan_ci_error
 
@@ -880,18 +913,12 @@ def flow(
         for r in repos
     ]
 
-    if only_repos:
-        # Refresh liviano: reusar diff cacheado, solo scan del repo pedido.
-        cached_flow = cache.get_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode)
-        if cached_flow is not None:
-            diff_raw = cached_flow["diff"]
-        else:
-            diff_raw = _compute_diff(
-                data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
-            )
+    if cached_flow is not None:
+        diff_raw = cached_flow["diff"]
     else:
         diff_raw = _compute_diff(
             data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
+            dest_by_repo=dest_by_repo,
         )
 
     diff_enriched = _enrich_diff_ssm(diff_raw, cfg_diff)
@@ -971,33 +998,45 @@ def flow_stream(
     def _generate():
         items = []
         scan_ci_error = None
-        for item, err in _stream_scan(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx):
-            items.append(item)
-            if err:
-                scan_ci_error = scan_ci_error or err
-            yield _event("repo", item)
 
-        if scan_ci_error:
-            ci_error_local = ci_error or scan_ci_error
-            yield _event("error", {"message": ci_error_local})
+        # Overlap de fases: master params corren en un hilo paralelo al scan
+        # (mismo rate limiter global). El executor se cierra al terminar o al
+        # cerrarse el generador (disconnect del cliente), sin bloquear el yield.
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            ctx.update({r.slug: {} for r in repos_list})
+            master_fut = None
+            if mode == "diff":
+                master_fut = ex.submit(_resolve_masters, data.client, repos_list, destination, ssm_prefixes, cache, ctx)
 
-        items.sort(key=lambda x: x["slug"])
-        with_pr = sum(1 for it in items if it["pr"].get("exists"))
-        prod = sum(1 for it in items if (it["deploys"].get("prod") or {}).get("status") == "success")
-        stats = {
-            "repos": len(items),
-            "with_pr": with_pr,
-            "prod": prod,
-        }
-        yield _event("stats", stats)
+            for item, err in _stream_scan(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx):
+                items.append(item)
+                if err:
+                    scan_ci_error = scan_ci_error or err
+                yield _event("repo", item)
 
-        diff_raw = _compute_diff(
-            data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
-        )
-        diff_enriched = _enrich_diff_ssm(diff_raw, cfg_diff)
-        yield _event("diff", diff_enriched)
+            if scan_ci_error:
+                ci_error_local = ci_error or scan_ci_error
+                yield _event("error", {"message": ci_error_local})
 
-        yield _event("done", {})
+            items.sort(key=lambda x: x["slug"])
+            with_pr = sum(1 for it in items if it["pr"].get("exists"))
+            prod = sum(1 for it in items if (it["deploys"].get("prod") or {}).get("status") == "success")
+            stats = {
+                "repos": len(items),
+                "with_pr": with_pr,
+                "prod": prod,
+            }
+            yield _event("stats", stats)
+
+            dest_by_repo = master_fut.result() if master_fut is not None else None
+            diff_raw = _compute_diff(
+                data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
+                dest_by_repo=dest_by_repo,
+            )
+            diff_enriched = _enrich_diff_ssm(diff_raw, cfg_diff)
+            yield _event("diff", diff_enriched)
+
+            yield _event("done", {})
 
     return StreamingResponse(_generate(), media_type="text/event-stream")
 
@@ -1253,6 +1292,109 @@ def circleci_config(origin: str, prefixes: str = "", repo: str = "", project_pre
 
 
 
+def _repo_refs(client, repo, origin: str, destination: str, ctx: dict | None = None):
+    """Refs para leer raws: head de origen (del PR si existe) y de destino.
+
+    Reutiliza el PR y los refs que el scan ya resolvió en este mismo
+    request (ctx), evitando repetir find_pr y commit_for_branch.
+    """
+    entry = (ctx or {}).setdefault(repo.slug, {})
+    if "pr" not in entry:
+        try:
+            pr = client.find_pr(repo.slug, origin, destination)
+        except bb.BitbucketError:
+            pr = None
+        entry["pr"] = pr
+    pr = entry["pr"]
+    origin_ref = entry.get("origin_ref") or ""
+    if not origin_ref:
+        if pr and pr.get("source_commit"):
+            origin_ref = pr["source_commit"]
+        if not origin_ref:
+            origin_ref = _ref_for(client, repo.slug, origin)
+        entry["origin_ref"] = origin_ref
+    dest_ref = entry.get("dest_ref") or ""
+    if not dest_ref:
+        dest_ref = _ref_for(client, repo.slug, destination)
+        entry["dest_ref"] = dest_ref
+    return origin_ref, dest_ref
+
+
+def _ref_for(client, slug: str, branch: str) -> str:
+    """Commit de una rama; si falla, degrada al nombre de la rama (sin romper)."""
+    try:
+        return client.commit_for_branch(slug, branch) or branch
+    except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+        log.warning("commit_for_branch %s %s falló: %s", slug, branch, exc)
+        return branch
+
+
+def _snapshot_for(client, slug: str, ref: str, ctx: dict | None = None) -> dict[str, str] | None:
+    """Snapshot {path: contenido} con cache por (slug, ref) en ctx.
+
+    Si el cliente no ofrece snapshot (o el ref no existe) devuelve None
+    y el flujo cae en list_files + raw_file."""
+    entry = (ctx or {}).setdefault(slug, {})
+    snaps = entry.setdefault("snapshots", {})
+    if ref in snaps:
+        return snaps[ref]
+    if not hasattr(client, "snapshot"):
+        return None
+    try:
+        snap = client.snapshot(slug, ref)
+    except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+        log.warning("snapshot %s %s falló: %s", slug, ref, exc)
+        return None
+    snaps[ref] = snap
+    return snap
+
+
+def _read_all_params(client, slug: str, ref: str, prefixes, ctx: dict | None = None) -> set:
+    """Params SSM de todos los archivos de texto de un ref. Con snapshot
+    es un solo tarball; sin él, list_files + raw_file por archivo."""
+    snap = _snapshot_for(client, slug, ref, ctx)
+    if snap is not None:
+        return _read_files_params(client, slug, ref, list(snap), prefixes, source=snap)
+    return _read_files_params(client, slug, ref, client.list_files(slug, ref), prefixes)
+
+
+def _resolve_master(client, repo, destination: str, prefixes, cache, ctx: dict | None = None) -> set:
+    """Master params de un repo (cache o lectura completa).
+
+    Devuelve el set de tuplas (path, arn) tal como se guarda en disco."""
+    cached_params = cache.get_master(repo.slug, destination)
+    if cached_params is not None:
+        return cached_params
+    entry = (ctx or {}).setdefault(repo.slug, {})
+    dest_ref = entry.get("dest_ref") or ""
+    if not dest_ref:
+        dest_ref = _ref_for(client, repo.slug, destination)
+        entry["dest_ref"] = dest_ref
+    try:
+        params = _read_all_params(client, repo.slug, dest_ref, prefixes, ctx)
+    except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+        log.warning("master params %s falló: %s", repo.slug, exc)
+        return set()
+    if params:
+        cache.set_master(repo.slug, destination, params)
+    return params
+
+
+def _resolve_masters(client, repos, destination: str, prefixes, cache, ctx: dict | None = None) -> dict[str, set]:
+    """Master params de todos los repos en paralelo: {slug: {paths sin ARN}}.
+
+    Se usa en el overlap scan+diff: esta fase corre en paralelo con el scan
+    y el resultado se le pasa a ``_compute_diff`` para no repetirla."""
+    dest_by_repo: dict[str, set] = {}
+    if not repos:
+        return dest_by_repo
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(repos) or 1)) as ex:
+        futures = {ex.submit(_resolve_master, client, r, destination, prefixes, cache, ctx): r.slug for r in repos}
+        for fut, slug in futures.items():
+            dest_by_repo[slug] = {p for p, _ in fut.result()}
+    return dest_by_repo
+
+
 def _compute_diff(
     client,
     origin: str,
@@ -1263,105 +1405,30 @@ def _compute_diff(
     prefixes: list[str],
     cache,
     ctx: dict | None = None,
+    dest_by_repo: dict[str, set] | None = None,
 ) -> dict:
-    """Computa el payload del diff (sin valores SSM; esos van por overlay)."""
+    """Computa el payload del diff (sin valores SSM; esos van por overlay).
+
+    Si se pasa ``dest_by_repo`` (paths de master por slug, ya resueltos por
+    el overlap de fases) se reutiliza en vez de recalcular los master params.
+    """
     master_repos = _apply_filters(_branch_repos_cached(client, origin, destination, proj, blocked), proj, blocked)
     branch_repos = master_repos
     by_slug = {r.slug: r for r in branch_repos}
 
-    def _repo_refs(client, repo):
-        """Refs para leer raws: head de origen (del PR si existe) y de destino.
-
-        Reutiliza el PR y los refs que el scan ya resolvió en este mismo
-        request (ctx), evitando repetir find_pr y commit_for_branch.
-        """
-        entry = (ctx or {}).setdefault(repo.slug, {})
-        if "pr" not in entry:
-            try:
-                pr = client.find_pr(repo.slug, origin, destination)
-            except bb.BitbucketError:
-                pr = None
-            entry["pr"] = pr
-        pr = entry["pr"]
-        origin_ref = entry.get("origin_ref") or ""
-        if not origin_ref:
-            if pr and pr.get("source_commit"):
-                origin_ref = pr["source_commit"]
-            if not origin_ref:
-                origin_ref = _ref_for(repo.slug, origin)
-            entry["origin_ref"] = origin_ref
-        dest_ref = entry.get("dest_ref") or ""
-        if not dest_ref:
-            dest_ref = _ref_for(repo.slug, destination)
-            entry["dest_ref"] = dest_ref
-        return origin_ref, dest_ref
-
-    def _ref_for(slug: str, branch: str) -> str:
-        """Commit de una rama; si falla, degrada al nombre de la rama (sin romper)."""
-        try:
-            return client.commit_for_branch(slug, branch) or branch
-        except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
-            log.warning("commit_for_branch %s %s falló: %s", slug, branch, exc)
-            return branch
-
-    def _snapshot_for(client, slug: str, ref: str) -> dict[str, str] | None:
-        """Snapshot {path: contenido} con cache por (slug, ref) en ctx.
-
-        Si el cliente no ofrece snapshot (o el ref no existe) devuelve None
-        y el flujo cae en list_files + raw_file."""
-        entry = (ctx or {}).setdefault(slug, {})
-        snaps = entry.setdefault("snapshots", {})
-        if ref in snaps:
-            return snaps[ref]
-        if not hasattr(client, "snapshot"):
-            return None
-        try:
-            snap = client.snapshot(slug, ref)
-        except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
-            log.warning("snapshot %s %s falló: %s", slug, ref, exc)
-            return None
-        snaps[ref] = snap
-        return snap
-
-    def _read_all_params(client, slug: str, ref: str, prefixes) -> set:
-        """Params SSM de todos los archivos de texto de un ref. Con snapshot
-        es un solo tarball; sin él, list_files + raw_file por archivo."""
-        snap = _snapshot_for(client, slug, ref)
-        if snap is not None:
-            return _read_files_params(client, slug, ref, list(snap), prefixes, source=snap)
-        return _read_files_params(client, slug, ref, client.list_files(slug, ref), prefixes)
-
-    def _resolve_master(client, repo) -> set:
-        """Master params de un repo (cache o lectura completa)."""
-        cached_params = cache.get_master(repo.slug, destination)
-        if cached_params is not None:
-            return cached_params
-        entry = (ctx or {}).setdefault(repo.slug, {})
-        dest_ref = entry.get("dest_ref") or ""
-        if not dest_ref:
-            dest_ref = _ref_for(repo.slug, destination)
-            entry["dest_ref"] = dest_ref
-        try:
-            params = _read_all_params(client, repo.slug, dest_ref, prefixes)
-        except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
-            log.warning("master params %s falló: %s", repo.slug, exc)
-            return set()
-        if params:
-            cache.set_master(repo.slug, destination, params)
-        return params
-
     # release_by_repo[slug] = paths en release (origen) del repo
     # dest_by_repo[slug] = paths en master (destino) del repo (solo paths, sin ARN)
     release_by_repo: dict[str, set] = {}
-    dest_by_repo: dict[str, set] = {}
+    if dest_by_repo is None:
+        dest_by_repo = {}
 
     if mode == "all":
         def _scan_all(client, repo):
             slug = repo.slug
             try:
-                origin_ref, dest_ref = _repo_refs(client, repo)
-                origin_params = _read_all_params(client, slug, origin_ref, prefixes)
-                dest_params = _read_all_params(client, slug, dest_ref, prefixes)
+                origin_ref, dest_ref = _repo_refs(client, repo, origin, destination, ctx)
+                origin_params = _read_all_params(client, slug, origin_ref, prefixes, ctx)
+                dest_params = _read_all_params(client, slug, dest_ref, prefixes, ctx)
             except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
                 log.warning("scan all %s falló: %s", slug, exc)
                 return slug, set(), set()
@@ -1384,11 +1451,10 @@ def _compute_diff(
                 log.warning("diff %s falló: %s", repo.slug, exc)
                 return repo.slug, None
 
-        # Master params de TODOS los repos (cache o lectura completa).
-        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(master_repos) or 1)) as ex:
-            futures = {ex.submit(_resolve_master, client, r): r.slug for r in master_repos}
-            for fut, slug in futures.items():
-                dest_by_repo[slug] = {p for p, _ in fut.result()}
+        # Master params de TODOS los repos (cache o lectura completa). Si
+        # el overlap ya los resolvió (dest_by_repo precomputado), se reusan.
+        if not dest_by_repo:
+            dest_by_repo = _resolve_masters(client, master_repos, destination, prefixes, cache, ctx)
 
         # Etapa A: diffs y selección de archivos con indicio SSM (solo branch repos).
         candidates: list[tuple[str, str, str, str]] = []
@@ -1401,7 +1467,7 @@ def _compute_diff(
                 pending = [f for f in d.files if _suggests_ssm(f, prefixes)]
                 if not pending:
                     continue
-                origin_ref, dest_ref = _repo_refs(client, repo)
+                origin_ref, dest_ref = _repo_refs(client, repo, origin, destination, ctx)
                 for f in pending:
                     candidates.append((slug, f.path, origin_ref, dest_ref))
 
@@ -1409,8 +1475,8 @@ def _compute_diff(
         def _file_params(client, cand):
             slug, path, origin_ref, dest_ref = cand
             try:
-                snap_o = _snapshot_for(client, slug, origin_ref)
-                snap_d = _snapshot_for(client, slug, dest_ref)
+                snap_o = _snapshot_for(client, slug, origin_ref, ctx)
+                snap_d = _snapshot_for(client, slug, dest_ref, ctx)
                 if snap_o is not None and snap_d is not None:
                     raw_origin = snap_o.get(path)
                     raw_dest = snap_d.get(path)
