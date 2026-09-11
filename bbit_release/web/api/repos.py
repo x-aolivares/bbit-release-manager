@@ -383,6 +383,14 @@ def save_service_auth(service: str, body: dict):
 
 
 @router.get("/session")
+def get_session_status():
+    """Retorna el estado de la sesión actual (activa o no).
+    
+    Permite que el usuario ingrese credenciales en el config incluso sin login previo.
+    """
+    return session_status()
+
+
 @router.post("/session/reset-git-clones")
 def reset_git_clones():
     """Limpia git_clones_dir para resetear a default (~/.bbit/clones).

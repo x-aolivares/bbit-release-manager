@@ -404,6 +404,16 @@ export class Home implements OnInit {
         if (r.ok) {
           this.configMessage.set({ kind: 'ok', text: `${this.serviceLabel(service)} guardado y validado.` });
           this.refreshClient();
+          
+          // BBIT-33 Phase 7: Si guardó Bitbucket, intenta conectar automáticamente
+          if (service === 'bitbucket') {
+            window.setTimeout(() => {
+              this.reuseSession(() => {
+                this.configOpen.set(false);
+                this.loadLatestSession();
+              });
+            }, 500);
+          }
         } else {
           this.configMessage.set({ kind: 'error', text: r.error ?? 'No se pudo guardar.' });
         }
@@ -640,6 +650,14 @@ reportOpen = signal(false);
           // Auto-reuse tras reiniciar el server: recupera la sesión guardada
           // ANTES de cargar la última sesión, para no disparar /scan sin sesión.
           this.reuseSession(() => this.loadLatestSession());
+        } else if (r.needs_tokens) {
+          // BBIT-33 Phase 7: Si falta token, abre Config automáticamente
+          // El usuario ingresa credenciales en Config → POST /api/auth/bitbucket
+          // → se guarda + reutiliza automáticamente
+          this.configOpen.set(true);
+          this.refreshClient();
+          this.loadAwsEnvironments();
+          this.storedCreds.set(false);
         } else {
           this.storedCreds.set(false);
         }
