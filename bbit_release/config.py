@@ -127,6 +127,7 @@ def _default_settings() -> dict:
         "deploy_prefixes": ["uat", "stgp", "prod"],
         "ssm_environments": {},       # {ambiente: región AWS} para la ssm-view
         "ssm_read_secrets": False,    # permite ver valores de secretos en la ssm-view
+        "git_clones_dir": "",         # carpeta de clones locales para el motor git (BBIT-33)
     }
 
 
@@ -530,6 +531,14 @@ class Config:
         return list(self._settings.get("deploy_prefixes") or [])
 
     @property
+    def git_clones_dir(self) -> str:
+        """Carpeta donde el motor local-git clona los repos (fase 1 BBIT-33).
+
+        Vacía ⇒ el flujo sigue 100% API Bitbucket (comportamiento previo).
+        """
+        return (self._settings.get("git_clones_dir") or "").strip()
+
+    @property
     def frontend_root(self) -> Path:
         return _PROJECT_ROOT / "frontend"
 
@@ -625,6 +634,14 @@ class Config:
         details["settings"]["exclude_repos"] = []
         get_cache().save_connection(details)
         self.reload()
+
+    def save_git_clones_dir(self, git_clones_dir: str = "") -> int:
+        """Persiste la carpeta de clones locales del motor git (settings)."""
+        details = self._connection_details()
+        details["settings"]["git_clones_dir"] = (git_clones_dir or "").strip()
+        sid = get_cache().save_connection(details)
+        self.reload()
+        return sid
 
     def save_ssm_settings(
         self,

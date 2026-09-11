@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 from ..bitbucket.client import BitbucketClient, BitbucketError, BitbucketAuthError
 from ..cache import get_cache
+from ..config import Config
 
 
 @dataclass
@@ -40,6 +41,7 @@ def create_session(workspace: str, token: str, url: str = "", client_id: str = "
     except (BitbucketAuthError, BitbucketError):
         client.close()
         raise
+    client = _wrap_local_git(client, client_id)
     sid = secrets.token_urlsafe(16)
     data = SessionData(
         session_id=sid,
@@ -51,6 +53,22 @@ def create_session(workspace: str, token: str, url: str = "", client_id: str = "
     )
     _sessions[sid] = data
     return data
+
+
+def _wrap_local_git(client: BitbucketClient, client_id: str) -> BitbucketClient:
+    """Si el cliente tiene carpeta de clones configurada, envuelve al cliente
+    con el motor local-git (BBIT-33); si no, devuelve el cliente API tal cual
+    (comportamiento previo)."""
+    try:
+        cfg = Config.for_client(client_id) if client_id else Config()
+        clones_dir = cfg.git_clones_dir or ""
+    except Exception:
+        clones_dir = ""
+    if not clones_dir:
+        return client
+    from ..localgit.client import LocalRepoClient
+
+    return LocalRepoClient(client, clones_dir, cfg=cfg)
 
 
 def get_session(sid: str) -> SessionData | None:

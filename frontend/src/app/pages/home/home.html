@@ -634,6 +634,37 @@
           }
         </div>
         }
+        <div class="bb-config-service">
+          <div class="bb-config-service-head">
+            <span class="bb-config-service-name">Motor local-git</span>
+            @if (gitClonesEnabled()) {
+            <span class="bb-badge bb-badge--ok">Activo</span>
+            } @else {
+            <span class="bb-badge bb-badge--neutral">API directo</span>
+            }
+          </div>
+          <div class="bb-config-fields">
+            <div class="bb-config-field">
+              <label class="bb-auth-label">Carpeta de clones</label>
+              <input class="bb-input bb-mono"
+                     [ngModel]="gitClonesDir()"
+                     (ngModelChange)="gitClonesDir.set($any($event))"
+                     placeholder="C:\clones\bbit-repos"/>
+            </div>
+          </div>
+          @if (gitCloneStatus(); as st) {
+          <div class="bb-muted">{{ st }}</div>
+          }
+          <div class="bb-modal-row">
+            <button class="bb-btn-primary bb-btn-sm" (click)="saveGitClonesDir()">Guardar carpeta</button>
+            <button class="bb-btn-secondary bb-btn-sm"
+                    [disabled]="gitCloning() || !gitClonesDir().trim()"
+                    (click)="cloneRepos()">
+              @if (gitCloning()) { <span class="bb-spinner-inline"></span> }
+              Clonar repos
+            </button>
+          </div>
+        </div>
         <div class="bb-modal-row bb-modal-actions">
           <button class="bb-btn-secondary bb-btn-sm" (click)="configOpen.set(false)">Cerrar</button>
         </div>
