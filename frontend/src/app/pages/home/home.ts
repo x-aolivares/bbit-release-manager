@@ -11,7 +11,8 @@ import { IonCardContent } from '@ionic/angular/ion-card-content';
 import { IonIcon } from '@ionic/angular';
 import { SessionHistoryService, SessionConfig } from '../../services/session-history.service';
 import { SessionSidebarComponent } from '../../components/session-sidebar/session-sidebar';
-import { buildFlowUrl, processSseEvent, repoUrl as flowRepoUrl } from './flow-utils';
+import { buildFlowUrl, processSseEvent, repoUrl as flowRepoUrl, sortRepos } from './flow-utils';
+import type { RepoSortKey, RepoSortDir } from './flow-utils';
 
 interface Health {
   status: string;
@@ -422,6 +423,49 @@ export class Home implements OnInit {
   tableLoaded = signal(false);
   paramsLoaded = signal(false);
 
+  /** Modal de "Procesando…": se cierra al pintar la primera fila o a los 2 s. */
+  spinnerVisible = signal(false);
+  private spinnerTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Orden de la tabla por headers clickeables. */
+  repoSortKey = signal<RepoSortKey>('name');
+  repoSortEnv = signal<string | null>(null);
+  repoSortDir = signal<RepoSortDir>('asc');
+
+  readonly sortedRepos = computed(() =>
+    sortRepos(this.repos(), this.repoSortKey(), this.repoSortDir(), this.repoSortEnv() ?? undefined),
+  );
+
+  toggleRepoSort(key: RepoSortKey, env?: string): void {
+    if (this.repoSortKey() === key && this.repoSortEnv() === (env ?? null)) {
+      this.repoSortDir.set(this.repoSortDir() === 'asc' ? 'desc' : 'asc');
+    } else {
+      this.repoSortKey.set(key);
+      this.repoSortEnv.set(env ?? null);
+      this.repoSortDir.set('asc');
+    }
+  }
+
+  sortArrow(key: RepoSortKey, env?: string): string {
+    if (this.repoSortKey() !== key || this.repoSortEnv() !== (env ?? null)) {
+      return '';
+    }
+    return this.repoSortDir() === 'asc' ? '↑' : '↓';
+  }
+
+  private clearSpinner(): void {
+    if (this.spinnerTimer !== undefined) {
+      clearTimeout(this.spinnerTimer);
+      this.spinnerTimer = undefined;
+    }
+    this.spinnerVisible.set(false);
+  }
+
+  private scheduleSpinnerCap(): void {
+    this.spinnerVisible.set(true);
+    this.spinnerTimer = setTimeout(() => this.spinnerVisible.set(false), 2000);
+  }
+
   creatingPr = signal<string | null>(null);
   tagging = signal(false);
   taggingRepo = signal<string | null>(null);
@@ -794,6 +838,7 @@ reportOpen = signal(false);
     this.reposLoading.set(true);
     this.error.set(null);
     this.creatingPr.set(null);
+    this.scheduleSpinnerCap();
     if (!retryOnly) {
       this.paramsLoading.set(true);
       this.tableLoaded.set(true);
@@ -803,6 +848,7 @@ reportOpen = signal(false);
     }
     const startedAt = Date.now();
     const done = () => this.releaseBusy(startedAt, () => {
+      this.clearSpinner();
       this.reposLoading.set(false);
       if (!retryOnly) {
         this.paramsLoading.set(false);
@@ -828,6 +874,7 @@ reportOpen = signal(false);
 
     this.scanSse(
       (item) => {
+        this.clearSpinner();
         repos.push(item);
         this.repos.set([...repos]);
       },

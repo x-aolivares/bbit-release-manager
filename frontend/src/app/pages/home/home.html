@@ -292,14 +292,24 @@
         <div class="bb-table bb-table--repos"
              [style.--bb-cols]="'1.4fr 1fr 1.4fr' + prefixCols()">
           <div class="bb-repos-head">
-            <span>Repositorio</span>
+            <span>
+              <button class="bb-th" type="button" (click)="toggleRepoSort('name')"
+                      [title]="'Ordenar por repositorio (' + (repoSortDir() === 'asc' ? 'desc' : 'asc') + ')'">
+                Repositorio {{ sortArrow('name') }}
+              </button>
+            </span>
             <span>PR</span>
             <span>Tagged Commit</span>
             @for (p of prefixes(); track p) {
-            <span class="bb-deploy-col bb-mono">{{ p }}</span>
+            <span class="bb-deploy-col bb-mono">
+              <button class="bb-th" type="button" (click)="toggleRepoSort('status', p)"
+                      [title]="'Ordenar por estado de ' + p">
+                {{ p }} {{ sortArrow('status', p) }}
+              </button>
+            </span>
             }
           </div>
-          @for (repo of repos(); track repo.slug) {
+          @for (repo of sortedRepos(); track repo.slug) {
           <div class="bb-repos-row">
                   <span>
                     <a class="bb-link bb-repo-name" [href]="repo.branch_url" target="_blank"
@@ -640,7 +650,7 @@
       </div>
     </div>
     }
-    @if (reposLoading() || paramsLoading()) {
+    @if (spinnerVisible()) {
     <div class="bb-modal-mask">
       <div class="bb-modal bb-modal--loading" (click)="$event.stopPropagation()">
         <ion-spinner name="dots" class="bb-spinner bb-spinner--lg"></ion-spinner>

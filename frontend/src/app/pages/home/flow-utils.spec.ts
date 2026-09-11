@@ -9,7 +9,9 @@ import {
   repoUrl,
   buildFlowUrl,
   processSseEvent,
+  sortRepos,
   FlowRepoItem,
+  SortableRepo,
 } from './flow-utils';
 
 // ─── repoUrl ────────────────────────────────────────────────────────
@@ -269,5 +271,75 @@ describe('processSseEvent', () => {
     if (result?.type === 'repo') {
       expect(result.repos.map((r) => r.slug)).toEqual(['a', 'b', 'c', 'd']);
     }
+  });
+});
+
+// ─── sortRepos ──────────────────────────────────────────────────────
+
+describe('sortRepos', () => {
+  const repo = (
+    slug: string,
+    overrides: Partial<SortableRepo> = {},
+  ): SortableRepo => ({
+    slug,
+    name: slug,
+    match_tag: { uat: `${slug}-uat`, prod: `${slug}-prod` },
+    deploys: { uat: { status: 'success' }, prod: { status: 'on_hold' } },
+    ...overrides,
+  });
+
+  it('sorts by name ascending by default', () => {
+    const rows = [repo('zapp'), repo('alpha'), repo('mid')];
+    expect(sortRepos(rows, 'name', 'asc').map((r) => r.slug)).toEqual([
+      'alpha',
+      'mid',
+      'zapp',
+    ]);
+  });
+
+  it('sorts by name descending', () => {
+    const rows = [repo('alpha'), repo('zapp'), repo('mid')];
+    expect(sortRepos(rows, 'name', 'desc').map((r) => r.slug)).toEqual([
+      'zapp',
+      'mid',
+      'alpha',
+    ]);
+  });
+
+  it('does not mutate the input array', () => {
+    const rows = [repo('b'), repo('a')];
+    const before = rows.slice();
+    sortRepos(rows, 'name', 'asc');
+    expect(rows).toEqual(before);
+  });
+
+  it('sorts by env status: ok before running before missing tag', () => {
+    const rows = [
+      repo('b', { match_tag: { uat: 'b-uat' }, deploys: { uat: { status: 'queued' } } }),
+      repo('a', { match_tag: { uat: 'a-uat' }, deploys: { uat: { status: 'success' } } }),
+      repo('c', { match_tag: { uat: null } }),
+    ];
+    expect(sortRepos(rows, 'status', 'asc', 'uat').map((r) => r.slug)).toEqual([
+      'c', // sin tag primero
+      'a', // ok
+      'b', // corriendo
+    ]);
+  });
+
+  it('sorts failed repos (error) after the rest', () => {
+    const rows = [
+      repo('ok', { match_tag: { uat: 'ok-uat' }, deploys: { uat: { status: 'success' } } }),
+      repo('bad', { error: 'crash', match_tag: { uat: 'bad-uat' } }),
+    ];
+    expect(sortRepos(rows, 'status', 'asc', 'uat').map((r) => r.slug)).toEqual([
+      'ok',
+      'bad',
+    ]);
+  });
+
+  it('ties break by slug so order is stable', () => {
+    const rows = [repo('b'), repo('a2'), repo('a1')];
+    const out = sortRepos(rows, 'name', 'asc');
+    expect(out.map((r) => r.slug)).toEqual(['a1', 'a2', 'b']);
   });
 });

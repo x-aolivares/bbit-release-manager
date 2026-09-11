@@ -31,6 +31,65 @@ export interface FlowEventPayload {
   error?: string;
 }
 
+export type RepoSortKey = 'name' | 'status';
+export type RepoSortDir = 'asc' | 'desc';
+
+export interface SortableRepo {
+  slug: string;
+  name?: string;
+  error?: string | null;
+  match_tag?: Record<string, string | null>;
+  deploys?: Record<string, { status?: string } | null>;
+}
+
+/**
+ * Sort value rank for a repo in a given env column (badge state).
+ * Missing tag first (no deploy attempted), then success, then the rest.
+ */
+function statusRank(repo: SortableRepo, env: string): string {
+  if (repo.error) return 'zz';
+  const tag = repo.match_tag?.[env.toLowerCase()] ?? null;
+  if (!tag) return 'a-sin-tag';
+  const status = repo.deploys?.[env.toLowerCase()]?.status ?? '';
+  switch (status) {
+    case 'success':
+      return 'b-ok';
+    case 'running':
+    case 'queued':
+      return 'c-corriendo';
+    case 'on_hold':
+      return 'd-esperando';
+    default:
+      return status ? 'e-' + status : 'f-sin-deploy';
+  }
+}
+
+/**
+ * Sort the repo rows by a table header key.
+ *
+ * - `name`: sorts by repo name (tie-break by slug).
+ * - `status`: sorts by the badge state of the given env column.
+ *
+ * The array is copied (previous rows are untouched) and ties break by slug
+ * so the order is stable regardless of the SSE completion order.
+ */
+export function sortRepos<T extends SortableRepo>(
+  rows: T[],
+  key: RepoSortKey,
+  dir: RepoSortDir,
+  env?: string,
+): T[] {
+  const factor = dir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const va = key === 'status' && env ? statusRank(a, env) : (a.name || a.slug).toLowerCase();
+    const vb = key === 'status' && env ? statusRank(b, env) : (b.name || b.slug).toLowerCase();
+    if (va !== vb) {
+      return va < vb ? -factor : factor;
+    }
+    return a.slug.localeCompare(b.slug);
+  });
+}
+
 /**
  * Returns the URL to navigate to when clicking a repo name.
  * Points to the branch URL (origin branch) rather than the repo root.

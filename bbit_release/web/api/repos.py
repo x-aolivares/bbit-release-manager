@@ -1,4 +1,4 @@
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import re
 import time
@@ -812,15 +812,18 @@ def _scan_repos(client, ci, repos, origin, destination, clean, ctx=None):
 def _stream_scan(client, ci, repos, origin, destination, clean, ctx=None):
     """Generador que emite (item, error) por cada repo completado en el scan paralelo.
 
-    Yield-ear tuplas de la forma ``(item, error)`` a medida que cada future
-    termina, manteniendo la concurrencia con ``ThreadPoolExecutor``. Al
-    agotarse los repos el generador termina; el cálculo de stats lo hace el
-    caller en el endpoint con los items acumulados.
+    Los repos se emiten a medida que terminan (``as_completed``), no en orden
+    de envío: si un repo es lento, los que terminan primero se entregan antes
+    por el SSE y el frontend los pinta apenas llegan.
     """
     workers = min(MAX_WORKERS, len(repos) or 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [ex.submit(_repo_scan, client, ci, repo, origin, destination, clean, ctx) for repo in repos]
-        for fut, repo in zip(futures, repos):
+        futures = {
+            ex.submit(_repo_scan, client, ci, repo, origin, destination, clean, ctx): repo
+            for repo in repos
+        }
+        for fut in as_completed(futures):
+            repo = futures[fut]
             try:
                 yield fut.result()
             except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
