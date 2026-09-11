@@ -34,6 +34,33 @@ def _recorder(entry: dict) -> None:
         pass
 
 
+def _preload_repos_background(client: BitbucketClient, workspace: str) -> None:
+    """Precarga repos en background en un thread separado.
+    
+    Esto evita que el usuario espere 15-20 segundos cuando llega a /repos-quick.
+    Los repos se guardan en SQLite cache automáticamente.
+    
+    Si falla, se ignora silenciosamente (no rompe la sesión).
+    """
+    import threading
+    
+    def _load():
+        try:
+            # Llamar list_repos() que paginea y cachea automáticamente
+            # Los repos se guardan en SQLite en la función _all_repos_cached
+            from ..bitbucket.client import BitbucketClient as _BC
+            if hasattr(client, 'list_repos'):
+                client.list_repos(prefixes=None)
+        except Exception as exc:
+            import logging
+            logging.getLogger("bbit.session").warning(
+                f"Preload repos background falló (no-critical): {exc}"
+            )
+    
+    thread = threading.Thread(target=_load, daemon=True)
+    thread.start()
+
+
 def create_session(workspace: str, token: str, url: str = "", client_id: str = "") -> SessionData:
     client = BitbucketClient(
         workspace, 
@@ -58,6 +85,10 @@ def create_session(workspace: str, token: str, url: str = "", client_id: str = "
         client_id=client_id,
     )
     _sessions[sid] = data
+    
+    # Precarga repos en background (BBIT-36: evitar espera al filtrar)
+    _preload_repos_background(client, info.slug)
+    
     return data
 
 
