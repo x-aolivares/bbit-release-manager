@@ -448,6 +448,28 @@ def save_service_auth(service: str, body: dict):
 
 
 @router.get("/session")
+@router.post("/session/reset-git-clones")
+def reset_git_clones():
+    """Limpia git_clones_dir para resetear a default (~/.bbit/clones).
+    
+    Útil cuando la config está apuntando a una ruta inválida o de test.
+    """
+    cfg = Config()
+    conn = get_cache().get_connection()
+    if conn:
+        settings = conn.get("settings", {})
+        settings["git_clones_dir"] = ""  # Vacío = default
+        conn["settings"] = settings
+        get_cache().save_connection(conn)
+    
+    cfg.reload()
+    return {
+        "ok": True,
+        "git_clones_dir": cfg.git_clones_dir,
+        "message": "git_clones_dir reseteado a default"
+    }
+
+
 def session_status():
     cfg = Config()
     sid = active_session_id()
