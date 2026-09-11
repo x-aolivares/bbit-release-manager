@@ -34,59 +34,28 @@ def _recorder(entry: dict) -> None:
         pass
 
 
-def _preload_repos_background(client: BitbucketClient, workspace: str) -> None:
-    """Precarga repos en background en un thread separado.
+def _preload_repos_list_background(client: BitbucketClient, workspace: str) -> None:
+    """Precarga lista de repos en background en un thread separado.
     
-    Si el cliente es LocalRepoClient (clones configurados), clona los repos
-    para que luego las operaciones lean localmente (zero API calls).
+    SOLO cachea la lista en SQLite (paginación). NO clona.
     
-    Si es solo BitbucketClient, cachea los repos en SQLite.
+    El cloning ocurre DESPUÉS del filtrado por prefijos en _branch_repos_cached().
+    Así se clonan SOLO los repos que el usuario necesita (no todos ~150).
     
-    Si falla, se ignora silenciosamente (no rompe la sesión).
+    BBIT-33 Phase 2: Cloning deferred until after prefix filtering.
     """
     import threading
-    import logging
     
-    log = logging.getLogger("bbit.session")
+    log_obj = __import__("logging").getLogger("bbit.session")
     
     def _load():
         try:
-            repos = None
             if hasattr(client, 'list_repos'):
-                # Cachear repos (paginación a Bitbucket)
+                # Cachear lista completa de repos
                 repos = client.list_repos(prefixes=None)
-                log.info(f"Precache: {len(repos) if repos else 0} repos obtenidos")
-            
-            # Si es LocalRepoClient, clonar repos en paralelo en background
-            # para que repos_with_branch() lea localmente (zero 429s)
-            from ..localgit.client import LocalRepoClient
-            if isinstance(client, LocalRepoClient):
-                log.info(f"Usando LocalRepoClient, clones_dir: {client._clones_dir}")
-                if repos:
-                    log.info(f"Iniciando clone en background de {len(repos)} repos...")
-                    cloned = 0
-                    failed = 0
-                    # Reutilizar repos ya obtenidos (no repetir paginación)
-                    for repo in repos:
-                        try:
-                            # ensure_repo clona o fetch incremental
-                            ok = client.ensure_repo(repo.slug)
-                            if ok:
-                                cloned += 1
-                                log.debug(f"✓ {repo.slug} clonado/actualizado")
-                            else:
-                                failed += 1
-                                log.debug(f"✗ {repo.slug} clone falló")
-                        except Exception as exc:
-                            failed += 1
-                            log.warning(f"✗ {repo.slug} excepción: {exc}")
-                    log.info(f"Clone background terminado: {cloned} OK, {failed} fallidos")
-                else:
-                    log.warning("No hay repos para clonar (repos es None)")
-            else:
-                log.info("Cliente NO es LocalRepoClient, usando solo API")
+                log_obj.info(f"Precache: {len(repos) if repos else 0} repos obtenidos y cacheados")
         except Exception as exc:
-            log.warning(f"Preload repos background falló (no-critical): {exc}")
+            log_obj.warning(f"Preload repos list background falló (no-critical): {exc}")
     
     thread = threading.Thread(target=_load, daemon=True)
     thread.start()
@@ -117,8 +86,9 @@ def create_session(workspace: str, token: str, url: str = "", client_id: str = "
     )
     _sessions[sid] = data
     
-    # Precarga repos en background (BBIT-36: evitar espera al filtrar)
-    _preload_repos_background(client, info.slug)
+    # BBIT-33: Precarga rápida de lista de repos en background (SIN clonar)
+    # El cloning ocurre DESPUÉS del filtrado por prefijos en _branch_repos_cached()
+    _preload_repos_list_background(client, info.slug)
     
     return data
 

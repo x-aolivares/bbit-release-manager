@@ -93,6 +93,9 @@ def _branch_repos_cached(client, origin: str, destination: str, prefs: list[str]
     En el primer llamado usa la lista completa cacheada como base para evitar
     re-barrer el workspace (el `list_repos` paginado). Si la lista completa
     tampoco está disponible/cacheada, cae en `repos_with_branch` que la obtiene.
+    
+    BBIT-33: Después del filtrado, clona los repos en background
+    (si el cliente es LocalRepoClient).
     """
     cache = get_cache()
     cached = cache.get_branch_repos(origin, destination, prefs, exclude)
@@ -104,12 +107,60 @@ def _branch_repos_cached(client, origin: str, destination: str, prefs: list[str]
         repos = client.repos_with_branch(origin, prefixes=prefs, repos=base)
     else:
         repos = client.repos_with_branch(origin, prefixes=prefs)
+    
+    # BBIT-33: Clonar repos filtrados en background
+    _clone_repos_background(client, repos)
+    
     items = [{
         "repo_name": r.slug, "name": r.name, "workspace": r.workspace,
         "default_branch": r.default_branch, "resolved_branch": getattr(r, "resolved_branch", ""),
     } for r in repos]
     cache.set_branch_repos(origin, destination, prefs, exclude, items)
     return repos
+
+
+def _clone_repos_background(client, repos: list) -> None:
+    """Clona los repos filtrados en background (daemon thread).
+    
+    Se ejecuta después del filtrado por prefijos, así se clonan SOLO los repos
+    que el usuario necesita (no todos los ~150).
+    
+    BBIT-33: Mejora sobre _preload_repos_background (que se ejecutaba en login).
+    """
+    from ..localgit.client import LocalRepoClient
+    
+    # Solo si el cliente es LocalRepoClient
+    if not isinstance(client, LocalRepoClient):
+        return
+    
+    if not repos:
+        return
+    
+    import threading
+    
+    def _load():
+        try:
+            log.info(f"Clone background: iniciando {len(repos)} repos filtrados...")
+            cloned = 0
+            failed = 0
+            for repo in repos:
+                try:
+                    ok = client.ensure_repo(repo.slug)
+                    if ok:
+                        cloned += 1
+                        log.debug(f"✓ {repo.slug} clonado")
+                    else:
+                        failed += 1
+                        log.debug(f"✗ {repo.slug} falló")
+                except Exception as exc:
+                    failed += 1
+                    log.warning(f"✗ {repo.slug} excepción: {exc}")
+            log.info(f"Clone background terminado: {cloned} OK, {failed} fallidos")
+        except Exception as exc:
+            log.warning(f"Clone repos background falló: {exc}")
+    
+    thread = threading.Thread(target=_load, daemon=True)
+    thread.start()
 
 
 def _suggests_ssm(file, prefixes) -> bool:
