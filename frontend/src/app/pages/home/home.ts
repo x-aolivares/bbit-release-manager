@@ -181,6 +181,7 @@ export class Home implements OnInit {
 
   repos = signal<ScanRepo[]>([]);
   projects = signal<ScanProject[]>([]);
+  reposCache = signal<{slug: string, name: string, workspace: string, default_branch: string}[]>([]);
   params = signal<SsmParam[]>([]);
   removed = signal<RemovedParam[]>([]);
   scanMode = 'diff';
@@ -834,6 +835,7 @@ reportOpen = signal(false);
         this.identity.set('');
         this.repoCount.set(0);
         this.repos.set([]);
+        this.reposCache.set([]);
         this.projects.set([]);
         this.params.set([]);
         this.removed.set([]);
@@ -968,8 +970,16 @@ reportOpen = signal(false);
       return;
     }
 
-    // QUICK LOAD: Cargar repos rápidamente primero (sin scan/diff/SSM)
-    // Permite al usuario filtrar y escribir mientras se cargan datos pesados
+    // QUICK LOAD: Si ya tenemos repos en caché LOCAL, usarlos sin HTTP.
+    // Si no, hacer llamada a /repos-quick primero.
+    if (this.reposCache().length > 0) {
+      // Ya tenemos repos: mostrar tabla filtrada, cargar datos pesados en background
+      this.displayFilteredRepos();
+      this.loadReposHeavy(done);
+      return;
+    }
+    
+    // Primera vez: cargar repos desde backend
     const projectPrefixesParam = this.projectPrefixParam();
     const excludeParam = this.blacklisted().join(',');
     
@@ -981,18 +991,10 @@ reportOpen = signal(false);
     }).subscribe({
       next: (r) => {
         if (r.repos) {
-          // Mostrar repos inmediatamente (sin metadata pesada)
-          const quickRepos: ScanRepo[] = r.repos.map((repo: any) => ({
-            slug: repo.slug,
-            name: repo.name,
-            workspace: repo.workspace,
-            default_branch: repo.default_branch,
-            pr: null,
-            commits: [],
-            tags: [],
-            deploys: [],
-          }));
-          this.repos.set(quickRepos);
+          // Guardar en caché LOCAL (cliente)
+          this.reposCache.set(r.repos);
+          // Mostrar repos filtrados inmediatamente
+          this.displayFilteredRepos();
           this.clearSpinner();
           // Ahora cargar datos pesados en background
           this.loadReposHeavy(done);
@@ -1003,6 +1005,44 @@ reportOpen = signal(false);
         this.loadReposHeavy(done);
       }
     });
+  }
+
+  private displayFilteredRepos(): void {
+    // Filtrar repos cacheados localmente (cliente-side, sin HTTP)
+    const projectPrefixesParam = this.projectPrefixParam();
+    const blacklist = this.blacklisted();
+    
+    const filtered = this.reposCache().filter((r: any) => {
+      // Aplicar filtros de prefijo de proyecto
+      if (projectPrefixesParam) {
+        const prefixes = projectPrefixesParam.split(',').filter(p => p.trim());
+        const slug = r.slug.toLowerCase();
+        if (!prefixes.some(p => slug.startsWith(p.toLowerCase()))) {
+          return false;
+        }
+      }
+      // Aplicar blacklist
+      if (blacklist.includes(r.slug.toLowerCase())) {
+        return false;
+      }
+      return true;
+    });
+
+    // Convertir a ScanRepo para mostrar en tabla (sin metadata pesada todavía)
+    const quickRepos: ScanRepo[] = filtered.map((repo: any) => ({
+      slug: repo.slug,
+      name: repo.name,
+      workspace: repo.workspace,
+      default_branch: repo.default_branch,
+      branch_url: '',
+      commit: '',
+      pr: { exists: false },
+      tags: [],
+      deploys: {},
+      match_tag: {},
+    }));
+    
+    this.repos.set(quickRepos);
   }
 
   private loadReposHeavy(done: () => void): void {
