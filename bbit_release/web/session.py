@@ -103,15 +103,32 @@ def _wrap_local_git(client: BitbucketClient, client_id: str) -> BitbucketClient:
     """Si el cliente tiene carpeta de clones configurada, envuelve al cliente
     con el motor local-git (BBIT-33); si no, devuelve el cliente API tal cual
     (comportamiento previo)."""
+    import logging
+    import sys
+    log = logging.getLogger("bbit.session")
+    
     try:
         cfg = Config.for_client(client_id) if client_id else Config()
         clones_dir = cfg.git_clones_dir or ""
-    except Exception:
+        msg = f"[WRAP_LOCAL_GIT] clones_dir={clones_dir} (client_id={client_id})"
+        print(msg, file=sys.stderr)
+        log.info(msg)
+    except Exception as exc:
+        msg = f"[WRAP_LOCAL_GIT] Config error: {exc}"
+        print(msg, file=sys.stderr)
+        log.warning(msg)
         clones_dir = ""
+    
     if not clones_dir:
+        msg = "[WRAP_LOCAL_GIT] NO clones_dir, usando BitbucketClient puro (API)"
+        print(msg, file=sys.stderr)
+        log.warning(msg)
         return client
+    
     from ..localgit.client import LocalRepoClient
-
+    msg = f"[WRAP_LOCAL_GIT] Envolviendo con LocalRepoClient (clones_dir={clones_dir})"
+    print(msg, file=sys.stderr)
+    log.info(msg)
     return LocalRepoClient(client, clones_dir, cfg=cfg)
 
 
