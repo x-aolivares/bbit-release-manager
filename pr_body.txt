@@ -1,0 +1,16 @@
+Closes #29
+
+## Cambios
+- El comando `bbit web` ahora ejecuta automáticamente `git pull` del remote antes de cualquier operación
+- Compila el frontend (Angular) si es necesario
+- Garantiza que la web siempre está sincronizada y con assets frescos
+
+## Flujo
+1. `git pull` desde el remote (validación de resultado)
+2. Build del frontend (si falta dist/browser o el código está desactualizado)
+3. Levanta la app en modo prod o dev
+
+## Testing
+- Verificado que el código compila sin errores de sintaxis
+- La función `_git_pull()` maneja errores y reporta el resultado
+- Se integra transparentemente con el flow existente

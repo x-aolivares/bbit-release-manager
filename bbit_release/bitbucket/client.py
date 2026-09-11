@@ -77,12 +77,14 @@ class BitbucketClient:
         timeout: float = 20.0,
         transport: httpx.BaseTransport | None = None,
         recorder: Callable[[dict], None] | None = None,
+        cache: "ReleaseCache | None" = None,
     ):
         if not workspace:
             raise ValueError("workspace es obligatorio")
         if not token:
             raise ValueError("token es obligatorio")
         self.workspace = workspace
+        self.cache = cache
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
         hooks: dict[str, list[Callable]] = {}
@@ -206,6 +208,21 @@ class BitbucketClient:
         filter_names: list[str] | None = None,
         prefixes: list[str] | None = None,
     ) -> list[Repository]:
+        # CACHE L1: Si hay prefijos, intentar obtener desde caché primero
+        if self.cache and prefixes:
+            cached_repos = self.cache.get_repos_by_prefix(self.workspace, prefixes)
+            if cached_repos is not None:
+                repos = [
+                    Repository(
+                        slug=r["slug"],
+                        name=r["name"],
+                        workspace=r.get("workspace", self.workspace),
+                        default_branch=r.get("default_branch", "master"),
+                    )
+                    for r in cached_repos
+                ]
+                return repos
+        
         allowed = {n.lower() for n in (filter_names or [])}
         prefs = [p.lower() for p in (prefixes or [])]
 
@@ -241,6 +258,20 @@ class BitbucketClient:
             url = (payload.get("next") or "").replace(API_BASE, "")
             if not url:
                 break
+        
+        # CACHE L1: Guardar repos por prefijo si hay caché
+        if self.cache and prefixes:
+            repos_data = [
+                {
+                    "slug": r.slug,
+                    "name": r.name,
+                    "workspace": r.workspace,
+                    "default_branch": r.default_branch,
+                }
+                for r in repos
+            ]
+            self.cache.set_repos_by_prefix(self.workspace, prefixes, repos_data)
+        
         return repos
 
     def has_branch(self, slug: str, branch: str) -> bool:
@@ -250,10 +281,22 @@ class BitbucketClient:
     def list_branches(self, slug: str, prefix: str = "") -> list[str]:
         """Nombres de ramas de un repo (paginado), opcionalmente limitado a un
         prefijo de nombre."""
+        # CACHE L2: Obtener todas las branches cacheadas
+        if self.cache:
+            cached_branches = self.cache.get_repo_branches(self.workspace, slug)
+            if cached_branches is not None:
+                names = [b["name"] for b in cached_branches]
+                # Filtrar por prefijo localmente
+                if prefix:
+                    p = prefix.lower()
+                    names = [n for n in names if n.lower().startswith(p)]
+                return names
+        
         names: list[str] = []
         url: str | None = f"/repositories/{self.workspace}/{slug}/refs/branches"
         params: dict | None = {"pagelen": 100}
         p = prefix.lower()
+        all_branches = []
         while url:
             payload = self._request("GET", url, params=params)
             if payload is None:
@@ -261,12 +304,19 @@ class BitbucketClient:
             params = None
             for item in payload.get("values", []):
                 name = item.get("name", "")
+                all_branches.append(name)
                 if p and not name.lower().startswith(p):
                     continue
                 names.append(name)
             url = (payload.get("next") or "").replace(API_BASE, "")
             if not url:
                 break
+        
+        # CACHE L2: Guardar todas las branches del repo
+        if self.cache:
+            branches_data = [{"name": b} for b in all_branches]
+            self.cache.set_repo_branches(self.workspace, slug, branches_data)
+        
         return names
 
     @staticmethod

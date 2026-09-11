@@ -35,7 +35,13 @@ def _recorder(entry: dict) -> None:
 
 
 def create_session(workspace: str, token: str, url: str = "", client_id: str = "") -> SessionData:
-    client = BitbucketClient(workspace, token, url=url, recorder=_recorder)
+    client = BitbucketClient(
+        workspace, 
+        token, 
+        url=url, 
+        recorder=_recorder,
+        cache=get_cache(),  # Pasar caché agresiva
+    )
     try:
         info, identity = client.session()
     except (BitbucketAuthError, BitbucketError):
