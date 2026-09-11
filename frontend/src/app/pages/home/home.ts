@@ -917,14 +917,11 @@ reportOpen = signal(false);
     const force = this.forceCache() ? 1 : 0;
     const url = `/api/flow/stream?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}`;
 
+    console.log(`[SSE] Opening connection to: ${url}`);
     let firstEventReceived = false;
-    // BBIT-33: 3s era demasiado agresivo — el primer repo puede tardar
-    // 20-30s en resolver (PRs + CircleCI project/pipelines/workflows/jobs
-    // en cascada, sin caché tibia). Un timeout corto cortaba el streaming
-    // SSE antes de que el backend emitiera el primer evento, cayendo
-    // siempre a batch y perdiendo el render incremental.
     const timeout = setTimeout(() => {
       if (!firstEventReceived) {
+        console.warn(`[SSE] Timeout after 45s, no events received. Closing connection.`);
         es.close();
         onTimeout();
       }
@@ -933,7 +930,12 @@ reportOpen = signal(false);
     let repos: ScanRepo[] = [];
     const es = new EventSource(url);
 
+    es.addEventListener('open', () => {
+      console.log(`[SSE] Connection opened successfully`);
+    });
+
     es.addEventListener('repo', (e: MessageEvent) => {
+      console.log(`[SSE] Received repo event:`, e.data.substring(0, 100));
       firstEventReceived = true;
       const parsed = processSseEvent('repo', e.data, repos);
       if (parsed?.type === 'repo') {
@@ -943,6 +945,7 @@ reportOpen = signal(false);
     });
 
     es.addEventListener('stats', (e: MessageEvent) => {
+      console.log(`[SSE] Received stats event`);
       const parsed = processSseEvent('stats', e.data, repos);
       if (parsed?.type === 'stats') {
         onStats(parsed.stats as unknown as ScanStats);
@@ -950,6 +953,7 @@ reportOpen = signal(false);
     });
 
     es.addEventListener('diff', (e: MessageEvent) => {
+      console.log(`[SSE] Received diff event`);
       const parsed = processSseEvent('diff', e.data, repos);
       if (parsed?.type === 'diff') {
         onDiff(parsed.diff as unknown as DiffResponse);
@@ -957,6 +961,7 @@ reportOpen = signal(false);
     });
 
     es.addEventListener('done', () => {
+      console.log(`[SSE] Received done event`);
       clearTimeout(timeout);
       es.close();
       onDone();
@@ -966,6 +971,7 @@ reportOpen = signal(false);
       // Server-sent `event: error` carries data; network-level errors
       // dispatch an Event without data and are handled by es.onerror below.
       if (!e.data) return;
+      console.error(`[SSE] Received error event:`, e.data);
       clearTimeout(timeout);
       es.close();
       const parsed = processSseEvent('error', e.data, repos);
@@ -976,7 +982,8 @@ reportOpen = signal(false);
       }
     });
 
-    es.onerror = () => {
+    es.onerror = (e) => {
+      console.error(`[SSE] Connection error (readyState=${es.readyState}):`, e);
       clearTimeout(timeout);
       es.close();
       onTimeout();
