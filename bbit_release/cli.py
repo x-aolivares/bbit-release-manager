@@ -374,6 +374,21 @@ def _have_tool(name: str) -> bool:
     return shutil.which(name) is not None
 
 
+def _git_pull() -> None:
+    """Ejecutar git pull desde el remote."""
+    info("Haciendo git pull desde el remote...")
+    result = subprocess.run(
+        ["git", "pull"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        die(f"Falló git pull:\n{result.stdout}\n{result.stderr}")
+    success("Git pull completado.")
+
+
 def _build_web_frontend() -> None:
     frontend = Config().frontend_root
     npm = _have_tool("npm") and __import__("shutil").which("npm")
@@ -412,13 +427,25 @@ def web(
         "solo si falta dist/browser o el código está desactualizado.",
     ),
 ):
-    """Levantar la web de BBit (SPA + API)."""
+    """Levantar la web de BBit (SPA + API).
+    
+    Siempre ejecuta:
+      1. git pull (desde el remote)
+      2. Build del frontend (si es necesario)
+      3. Levanta la app
+    """
+    # Paso 1: Git pull
+    _git_pull()
+    
+    # Paso 2: Build del frontend
+    if build or (build is None and _frontend_needs_build()):
+        _build_web_frontend()
+    
+    # Paso 3: Levantar la app
     if dev:
         from .web.run import run_dev
         run_dev(port=port, open_browser=not no_browser)
         return
-    if build or (build is None and _frontend_needs_build()):
-        _build_web_frontend()
     from .web.run import run
     run(port=port, open_browser=not no_browser)
 
