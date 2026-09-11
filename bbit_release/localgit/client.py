@@ -158,7 +158,16 @@ class LocalRepoClient:
             return 0.0  # muy reciente -> no fetch
 
     def ensure_repo(self, slug: str, *, force: bool = False) -> bool:
-        """Clona si falta o hace fetch incremental. Devuelve True si queda usable."""
+        """Clona si falta, luego hace pull (fetch + merge / reset --hard si conflictos).
+        
+        BBIT-33: Estrategia mejorada:
+        1. Clone si no existe
+        2. git pull para traer latest refs
+        3. Si hay conflictos → git reset --hard origin/HEAD
+        4. Devuelve True si usable
+        
+        Devuelve True si queda usable, False si falló.
+        """
         with self._repo_lock(slug):
             path = self.repo_path(slug)
             try:
@@ -174,19 +183,57 @@ class LocalRepoClient:
                     if proc.returncode != 0:
                         log.warning("clone %s falló: %s", slug, proc.stderr.decode("utf-8", "replace")[-400:])
                         return False
-                    return path.exists()
-                need_fetch = force or not (path / ".git" / "FETCH_HEAD").exists() or \
+                    if not path.exists():
+                        return False
+                    # Clone exitoso, hacer pull inmediatamente
+                    return self._pull_repo(slug)
+                
+                # Repo ya existe: hacer pull para traer latest
+                need_pull = force or not (path / ".git" / "FETCH_HEAD").exists() or \
                     (time.time() - self._last_fetch_age(slug)) > FETCH_MIN_AGE
-                if need_fetch:
-                    proc = self._run(slug, ["fetch", "--prune", "origin"], timeout=GIT_FETCH_TIMEOUT)
-                    if proc.returncode == 0:
-                        return True
-                    # Fetch fallido: si ya hay refs, seguimos con lo que hay.
-                    log.warning("fetch %s falló: %s", slug, proc.stderr.decode("utf-8", "replace")[-300:])
+                if need_pull:
+                    return self._pull_repo(slug)
+                
                 return path.exists()
             except (OSError, subprocess.TimeoutExpired) as exc:
                 log.warning("ensure_repo %s falló: %s", slug, exc)
                 return False
+
+    def _pull_repo(self, slug: str) -> bool:
+        """Hace git pull (fetch + merge) en el repo. Si hay conflictos, reset --hard.
+        
+        Estrategia robusta:
+        1. git fetch --prune origin (traer latest)
+        2. git pull origin HEAD (merge con rama actual)
+        3. Si falla (conflictos): git reset --hard origin/HEAD
+        4. Devuelve True si éxito
+        """
+        try:
+            # Paso 1: fetch
+            proc = self._run(slug, ["fetch", "--prune", "origin"], timeout=GIT_FETCH_TIMEOUT)
+            if proc.returncode != 0:
+                log.warning("fetch %s falló: %s", slug, proc.stderr.decode("utf-8", "replace")[-300:])
+                # Continuamos igual, quizás hay refs locales
+            
+            # Paso 2: pull origin HEAD
+            proc = self._run(slug, ["pull", "origin", "HEAD", "--no-rebase"], timeout=GIT_FETCH_TIMEOUT)
+            if proc.returncode == 0:
+                log.debug("pull %s exitoso", slug)
+                return True
+            
+            # Paso 3: conflicto → reset --hard
+            log.info("pull %s tuvo conflictos, resolviendo con reset --hard origin/HEAD", slug)
+            proc = self._run(slug, ["reset", "--hard", "origin/HEAD"], timeout=GIT_FETCH_TIMEOUT)
+            if proc.returncode == 0:
+                log.debug("reset %s exitoso", slug)
+                return True
+            
+            # Si reset también falló, pero el repo existe, seguimos (refs pueden ser válidas)
+            log.warning("reset %s falló, continuando igual", slug)
+            return self.repo_path(slug).exists()
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            log.warning("_pull_repo %s falló: %s", slug, exc)
+            return False
 
     @staticmethod
     def _refs(branch_or_sha: str) -> list[str]:
