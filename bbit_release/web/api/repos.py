@@ -1182,10 +1182,16 @@ def flow_stream(
             "repositories": {"excluded": sorted(blocked), "prefixes": sorted(proj or [])}
         })
 
+    # BBIT-33 Phase 8: Obtener repos con rama RÁPIDAMENTE (API paralela, clone background)
+    # No esperamos al clone - devolvemos rápido y enviamos eventos SSE inmediatamente
+    import sys
+    print(f"[FLOW_STREAM] Obteniendo repos con rama {origin}...", file=sys.stderr)
     repos_list = _apply_filters(
         _branch_repos_cached(data.client, origin, destination, proj, blocked),
         proj, blocked,
     )
+    print(f"[FLOW_STREAM] ✓ {len(repos_list)} repos con rama (sin bloquear clone)", file=sys.stderr)
+    
     scan_repos = repos_list if not only_repos else [r for r in repos_list if r.slug in only_repos]
 
     ci = _circleci()
@@ -1219,7 +1225,6 @@ def flow_stream(
                 if err:
                     scan_ci_error = scan_ci_error or err
                 # BBIT-33: Log streaming en tiempo real
-                import sys
                 print(f"[STREAM] {repo_count}. {item['slug']}: commit={item['commit'][:12]} pr={'✓' if item['pr'].get('exists') else '✗'}", file=sys.stderr)
                 yield _event("repo", item)
 
