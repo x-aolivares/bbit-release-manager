@@ -25,6 +25,26 @@ def test_me_auth_error():
         client.close()
 
 
+def test_rate_limit_429_no_retry():
+    """Con MAX_RETRIES=1 un 429 de CircleCI falla al primer intento (sin backoff)."""
+    calls = 0
+
+    def notif(request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(429, headers={"Retry-After": "0.5"}, json={"message": "rate limit"})
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/me"): notif,
+    }))
+    try:
+        with pytest.raises(CircleCiError, match="rate limit alcanzado"):
+            client.me()
+    finally:
+        client.close()
+    assert calls == 1
+
+
 def test_project_slug():
     client = CircleCiClient("tok", vcs="bb", org="my_org", transport=_transport({}))
     assert client.project_slug("repo") == "bb/my_org/repo"
