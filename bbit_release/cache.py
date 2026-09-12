@@ -20,6 +20,7 @@ reutilizar la conexión entre hilos.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -244,6 +245,20 @@ class ReleaseCache:
             );
             CREATE INDEX IF NOT EXISTS idx_sc_source_created
                 ON service_call (sc_source, sc_created_at);
+
+            CREATE TABLE IF NOT EXISTS raw_stash (
+                rs_key TEXT PRIMARY KEY,          -- huella canónica del request
+                rs_source TEXT NOT NULL,
+                rs_method TEXT NOT NULL,
+                rs_url TEXT NOT NULL,
+                rs_params TEXT,                   -- JSON canónico (sorted)
+                rs_status INTEGER NOT NULL,       -- incluye 404/errores (no solo 200)
+                rs_response TEXT NOT NULL,        -- raw tal cual respondió el servicio
+                rs_created_at REAL NOT NULL,
+                rs_ttl_seconds INTEGER NOT NULL DEFAULT 600
+            );
+            CREATE INDEX IF NOT EXISTS idx_rs_source_created
+                ON raw_stash (rs_source, rs_created_at);
 
             CREATE TABLE IF NOT EXISTS ssm_value (
                 sv_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -785,6 +800,71 @@ class ReleaseCache:
             return False
         return (time.time() - created_at) > ttl_seconds
 
+    @staticmethod
+    def _raw_key(source: str, method: str, url: str, params: dict | None) -> str:
+        """Huella canónica de una llamada HTTP para el stash.
+
+        ``params`` se serializa ordenado para que dos invocaciones con los
+        mismos parámetros (en distinto orden) caigan en la misma clave.
+        """
+        canonical = json.dumps(params, sort_keys=True, default=str) if params else ""
+        return hashlib.sha256(f"{source}|{method}|{url}|{canonical}".encode("utf-8")).hexdigest()
+
+    def get_raw(self, source: str, method: str, url: str, params: dict | None = None) -> dict | None:
+        """Respuesta cruda persistida de una llamada (incluye status != 200).
+
+        Devuelve ``{"status", "response", "created_at"}`` si hay un stash
+        vigente (dentro del TTL) para esa huella; ``None`` si miss o expiró.
+        """
+        key = self._raw_key(source, method, url, params)
+        row = self._fetchone(
+            "SELECT rs_status, rs_response, rs_created_at, rs_ttl_seconds "
+            "FROM raw_stash WHERE rs_key = ?",
+            (key,),
+        )
+        if row is None:
+            return None
+        status, response, created_at, ttl = row
+        if self.is_expired(created_at, ttl):
+            return None
+        return {"status": status, "response": response, "created_at": created_at}
+
+    def set_raw(
+        self,
+        *,
+        source: str,
+        method: str,
+        url: str,
+        params: dict | None = None,
+        status: int,
+        response: str,
+        ttl_seconds: int = 600,
+    ) -> None:
+        """Upsert de una respuesta cruda en el stash por huella canónica."""
+        key = self._raw_key(source, method, url, params)
+        with self._lock:
+            self._execute(
+                "INSERT INTO raw_stash "
+                "(rs_key, rs_source, rs_method, rs_url, rs_params, rs_status, "
+                " rs_response, rs_created_at, rs_ttl_seconds) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(rs_key) DO UPDATE SET "
+                " rs_status = excluded.rs_status, "
+                " rs_response = excluded.rs_response, "
+                " rs_created_at = excluded.rs_created_at, "
+                " rs_ttl_seconds = excluded.rs_ttl_seconds",
+                (
+                    key, source, method, url,
+                    json.dumps(params, sort_keys=True, default=str) if params else None,
+                    status, response, time.time(), ttl_seconds,
+                ),
+            )
+
+    def count_raw(self) -> int:
+        """Cantidad de respuestas crudas persistidas (diagnóstico)."""
+        row = self._fetchone("SELECT COUNT(*) FROM raw_stash", ())
+        return int(row[0]) if row else 0
+
     def latest_success(self, rt_id: int, session_id: int) -> dict | None:
         """Último request SUCCESS no expirado para un tipo/sesión.
 
@@ -835,7 +915,7 @@ class ReleaseCache:
     def invalidate_all(self) -> None:
         counts: dict[str, int] = {}
         with self._lock:
-            for table in ("request", "init_sesion"):
+            for table in ("request", "init_sesion", "raw_stash"):
                 cur = self._conn.cursor()
                 try:
                     if table == "init_sesion":
@@ -851,9 +931,10 @@ class ReleaseCache:
                     cur.close()
             self._conn.commit()
         log.info(
-            "cache invalidate_all: %d request(s), %d sesion(es) borrados de SQLite",
+            "cache invalidate_all: %d request(s), %d sesion(es), %d raw_stash(es) borrados de SQLite",
             counts.get("request", 0),
             counts.get("init_sesion", 0),
+            counts.get("raw_stash", 0),
         )
 
     def clear_all(self) -> dict:
@@ -861,7 +942,7 @@ class ReleaseCache:
         eliminaron de cada una. Devuelve el desglose por tabla."""
         counts: dict[str, int] = {}
         with self._lock:
-            for table in ("request", "init_sesion", "service_call"):
+            for table in ("request", "init_sesion", "service_call", "raw_stash"):
                 cur = self._conn.cursor()
                 try:
                     if table == "init_sesion":
@@ -877,10 +958,11 @@ class ReleaseCache:
                     cur.close()
             self._conn.commit()
         log.info(
-            "cache clear_all: %d request(s), %d sesion(es), %d service_call(s) borrados de SQLite",
+            "cache clear_all: %d request(s), %d sesion(es), %d service_call(s), %d raw_stash(es) borrados de SQLite",
             counts.get("request", 0),
             counts.get("init_sesion", 0),
             counts.get("service_call", 0),
+            counts.get("raw_stash", 0),
         )
         return counts
 

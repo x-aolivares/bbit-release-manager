@@ -30,7 +30,19 @@ _client_to_sid: dict[str, str] = {}  # BBIT-33: client_id → session_id mapping
 
 def _recorder(entry: dict) -> None:
     try:
-        get_cache().record_service_call(**entry)
+        cache = get_cache()
+        cache.record_service_call(**entry)
+    except Exception:
+        pass
+    try:
+        get_cache().set_raw(
+            source=entry["source"],
+            method=entry["method"],
+            url=entry["url"],
+            params=entry.get("params"),
+            status=entry["status"],
+            response=entry.get("response", ""),
+        )
     except Exception:
         pass
 
