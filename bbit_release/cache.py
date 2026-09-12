@@ -87,6 +87,11 @@ _SEED_REQUEST_TYPES = {
         f"{_BITBUCKET_BASE}/repositories/{{workspace}}/{{repo}}/commits/{{branch}}",
         {"method": "GET"},
     ),
+    "scan_repo": (
+        "Bitbucket", 1800,
+        f"{_BITBUCKET_BASE}/repositories/{{workspace}}/{{repo}}/commits/{{branch}}",
+        {"method": "GET"},
+    ),
     "diff_ssm": (
         "Bitbucket", 1800,
         f"{_BITBUCKET_BASE}/repositories/{{workspace}}/{{repo}}/diff/{{to}}?from={{from}}",
@@ -1027,15 +1032,22 @@ class ReleaseCache:
         )
 
     def get_branch_repos(self, origin: str, destination: str, prefixes: list[str] | None, exclude: set[str] | None):
+        """Índice de repos con la rama, key filter-free (BBIT-36 P1).
+
+        Los filtros (project_prefixes/blacklist) se ignoran en el key: el
+        índice persiste TODOS los repos del par de ramas y el filtrado se
+        aplica como vista al leer (``_apply_filters`` en repos.py). Cambiar
+        filtros no invalida el índice ni re-consulta Bitbucket.
+        """
         return self._get_cached(
             "get_branch_repositories", origin, destination,
-            _repo_details(prefixes, exclude),
+            _repo_details(None, None),
         )
 
     def set_branch_repos(self, origin: str, destination: str, prefixes: list[str] | None, exclude: set[str] | None, repos: list[dict]) -> None:
         self._set_cached(
             "get_branch_repositories", origin, destination,
-            _repo_details(prefixes, exclude), repos,
+            _repo_details(None, None), repos,
         )
 
     def get_scan(self, origin: str, destination: str, project_prefixes: list[str] | None, exclude: set[str] | None, deploy_prefixes: list[str] | None = None):
@@ -1050,6 +1062,21 @@ class ReleaseCache:
             _repo_details(project_prefixes, exclude, deploy_prefixes), data,
         )
 
+    # -- scan por repositorio (BBIT-36 P2) ------------------------------------
+
+    def get_scan_repo(self, origin: str, destination: str, slug: str) -> dict | None:
+        """Item de scan de UN repo, key por (origin, destination, slug).
+
+        El scan de cada repo se persiste por separado (BBIT-36 P2), sin
+        filtros en el key: al cambiar project_prefixes/blacklist solo se
+        consultan los repos NUEVOS visibles; los ya cacheados se sirven de
+        memoria. ``invalidate`` borra la pareja completa por par de ramas.
+        """
+        return self._get_cached("scan_repo", origin, destination, {"repo": slug})
+
+    def set_scan_repo(self, origin: str, destination: str, slug: str, payload: dict) -> None:
+        self._set_cached("scan_repo", origin, destination, {"repo": slug}, payload)
+
     def get_diff(self, origin: str, destination: str, prefixes: list[str] | None, exclude: set[str] | None, ssm_prefixes: list[str] | None = None):
         return self._get_cached(
             "diff_ssm", origin, destination,
@@ -1062,14 +1089,16 @@ class ReleaseCache:
             _repo_details(prefixes, exclude, ssm_prefixes=ssm_prefixes), data,
         )
 
-    def get_flow(self, origin: str, destination: str, project_prefixes: list[str] | None, exclude: set[str] | None, deploy_prefixes: list[str] | None = None, ssm_prefixes: list[str] | None = None, mode: str = "diff"):
+    def get_flow(self, origin: str, destination: str, project_prefixes: list[str] | None, exclude: set[str] | None, deploy_prefixes: list[str] | None = None, ssm_prefixes: list[str] | None = None, mode: str = "diff", with_tags: int = 1):
         details = _repo_details(project_prefixes, exclude, deploy_prefixes, ssm_prefixes=ssm_prefixes)
         details["mode"] = mode
+        details["with_tags"] = bool(with_tags)
         return self._get_cached("flow_release", origin, destination, details)
 
-    def set_flow(self, origin: str, destination: str, project_prefixes: list[str] | None, exclude: set[str] | None, deploy_prefixes: list[str] | None, ssm_prefixes: list[str] | None, mode: str, data: dict) -> None:
+    def set_flow(self, origin: str, destination: str, project_prefixes: list[str] | None, exclude: set[str] | None, deploy_prefixes: list[str] | None, ssm_prefixes: list[str] | None, mode: str, data: dict, with_tags: int = 1) -> None:
         details = _repo_details(project_prefixes, exclude, deploy_prefixes, ssm_prefixes=ssm_prefixes)
         details["mode"] = mode
+        details["with_tags"] = bool(with_tags)
         self._set_cached("flow_release", origin, destination, details, data)
 
     def get_master(self, slug: str, destination: str) -> set | None:
