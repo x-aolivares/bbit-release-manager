@@ -393,15 +393,15 @@ def get_session_status():
 
 @router.post("/session/reset-git-clones")
 def reset_git_clones():
-    """Limpia git_clones_dir para resetear a default (~/.bbit/clones).
-    
+    """Limpia git_clones_dir para desactivar el motor local-git (full API).
+
     Útil cuando la config está apuntando a una ruta inválida o de test.
     """
     cfg = Config()
     conn = get_cache().get_connection()
     if conn:
         settings = conn.get("settings", {})
-        settings["git_clones_dir"] = ""  # Vacío = default
+        settings["git_clones_dir"] = ""  # Vacío = local-git off (full API)
         conn["settings"] = settings
         get_cache().save_connection(conn)
     
@@ -409,7 +409,7 @@ def reset_git_clones():
     return {
         "ok": True,
         "git_clones_dir": cfg.git_clones_dir,
-        "message": "git_clones_dir reseteado a default"
+        "message": "git_clones_dir limpiado: motor local-git desactivado"
     }
 
 
