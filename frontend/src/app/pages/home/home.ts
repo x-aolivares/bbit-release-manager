@@ -527,6 +527,10 @@ export class Home implements OnInit {
   spinnerVisible = signal(false);
   private spinnerTimer: ReturnType<typeof setTimeout> | undefined;
 
+  /** Fase final del stream: el backend ya emitió todos los repos y está
+   *  cerrando (stats → diff → done). Muestra "Finalizando consultas…". */
+  finalizing = signal(false);
+
   /** Orden de la tabla por headers clickeables. */
   repoSortKey = signal<RepoSortKey>('name');
   repoSortEnv = signal<string | null>(null);
@@ -958,6 +962,9 @@ reportOpen = signal(false);
       console.log(`[SSE] Received stats event`);
       const parsed = processSseEvent('stats', e.data, repos);
       if (parsed?.type === 'stats') {
+        // Todos los repos escaneados: el backend está cerrando (diff + done).
+        this.finalizing.set(true);
+        this.spinnerVisible.set(true);
         onStats(parsed.stats as unknown as ScanStats);
       }
     });
@@ -974,6 +981,8 @@ reportOpen = signal(false);
       console.log(`[SSE] Received done event`);
       clearTimeout(timeout);
       es.close();
+      this.finalizing.set(false);
+      this.clearSpinner();
       onDone();
     });
 
@@ -986,6 +995,8 @@ reportOpen = signal(false);
       es.close();
       const parsed = processSseEvent('error', e.data, repos);
       if (parsed?.type === 'error') {
+        this.finalizing.set(false);
+        this.clearSpinner();
         onError(parsed.message);
       } else {
         onError('Stream error');
@@ -996,6 +1007,8 @@ reportOpen = signal(false);
       console.error(`[SSE] Connection error (readyState=${es.readyState}):`, e);
       clearTimeout(timeout);
       es.close();
+      this.finalizing.set(false);
+      this.clearSpinner();
       onTimeout();
     };
 
@@ -1007,6 +1020,7 @@ reportOpen = signal(false);
     this.reposLoading.set(true);
     this.error.set(null);
     this.creatingPr.set(null);
+    this.finalizing.set(false);
     this.scheduleSpinnerCap();
     if (!retryOnly) {
       this.paramsLoading.set(true);
