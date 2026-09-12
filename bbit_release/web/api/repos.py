@@ -946,7 +946,7 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
                 break
         match_tag[env] = found_tag
         deploys[env] = None
-        if ci is not None and not found_tag:
+        if ci is not None and with_tags and not found_tag:
             log.info("scan: %s env=%s sin tag %s-en en commit %s", repo.slug, env, env, match_commit[:12])
         if ci is not None and found_tag and match_commit:
             env_tasks.append((env, found_tag))
