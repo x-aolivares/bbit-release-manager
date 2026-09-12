@@ -889,12 +889,11 @@ class ReleaseCache:
     # -- invalidación -----------------------------------------------------------
 
     def invalidate(self, source: str, target: str, details: dict) -> None:
-        """Borra las sesiones y requests de una pareja de ramas.
+        """Borra las sesiones, requests y stash crudo de una pareja de ramas.
 
-        Una sesión de consulta se identifica por su par (origen, destino):
-        al forzar consultas o al eliminar la sesión se debe re-consultar las
-        APIs, sin importar con qué prefijos/exclusiones/filtros se cacheó el
-        primer día. ``details`` se conserva por retrocompatibilidad y se ignora.
+        ``details`` se conserva por retrocompatibilidad y se ignora.  El
+        `raw_stash` se borra completo porque no está vinculado a una sesión
+        específica (es un cache de corto plazo entre corridas).
         """
         rows = self._fetchall(
             "SELECT is_id FROM init_sesion "
@@ -907,8 +906,9 @@ class ReleaseCache:
             for is_id in ids:
                 self._execute("DELETE FROM request WHERE is_id = ?", (is_id,))
                 self._execute("DELETE FROM init_sesion WHERE is_id = ?", (is_id,))
+            self._execute("DELETE FROM raw_stash", ())
         log.info(
-            "cache invalidate %s->%s: %d sesion(es) y sus requests borrados de SQLite",
+            "cache invalidate %s->%s: %d sesion(es), sus requests y raw_stash borrados",
             source, target, len(ids),
         )
 

@@ -7,6 +7,7 @@ Requiere un token de usuario (Circle-Token) y el project slug de la forma
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -138,7 +139,24 @@ class CircleCiClient:
     def me(self) -> dict:
         return self._request("GET", "/me")
 
+    def _stash_parts(self, method: str, path: str, params: dict | None = None) -> tuple[str, dict | None]:
+        req = self._client.build_request(method, path, params=params)
+        url = req.url
+        return (
+            str(url.path) + (f"?{url.query}" if url.query else ""),
+            dict(url.params) if url.params else None,
+        )
+
+    def _stash_get(self, method: str, path: str, params: dict | None = None) -> dict | None:
+        if self._cache is None:
+            return None
+        url, p = self._stash_parts(method, path, params)
+        return self._cache.get_raw("circleci", method, url, p)
+
     def _request(self, method: str, path: str, params: dict | None = None):
+        stash = self._stash_get(method, path, params)
+        if stash is not None and stash["status"] == 200:
+            return json.loads(stash["response"])
         last_error: CircleCiError | None = None
         _rate_limiter = get_global_rate_limiter()
         for attempt in range(1, MAX_RETRIES + 1):
