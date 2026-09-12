@@ -279,7 +279,7 @@ class LocalRepoClient:
         from concurrent.futures import ThreadPoolExecutor
         import sys
 
-        repos = repos if repos is not None else self._bb.list_repos(prefixes=prefixes)
+        repos = repos if repos is not None else self.list_repos(prefixes=prefixes)
         if not repos:
             return []
         
@@ -291,7 +291,7 @@ class LocalRepoClient:
         workers = min(8, len(repos) or 1)
         matched: list[Repository] = []
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = [(repo, ex.submit(self._bb.resolve_branch, repo.slug, branch)) for repo in repos]
+            futures = [(repo, ex.submit(self.resolve_branch, repo.slug, branch)) for repo in repos]
             for repo, fut in futures:
                 try:
                     resolved = fut.result()

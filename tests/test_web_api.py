@@ -503,6 +503,20 @@ def test_scan_returns_repos_with_pr_and_params(monkeypatch):
         def raw_file(self, repo, ref, path):
             return None
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
 
@@ -517,7 +531,7 @@ def test_scan_returns_repos_with_pr_and_params(monkeypatch):
     assert body["scan"]["repos"][0]["slug"] == "r1"
     assert body["scan"]["repos"][0]["commit"] == "abc123"
     assert "behind" not in body["scan"]["repos"][0]
-    assert body["scan"]["repos"][0]["no_changes"] is True
+    assert "no_changes" not in body["scan"]["repos"][0]
     assert body["scan"]["stats"]["repos"] == 1
     assert "synced" not in body["scan"]["stats"]
     assert body["scan"]["repos"][0]["pr"]["exists"] is False
@@ -565,6 +579,20 @@ def test_flow_failed_repo_is_marked_not_500(monkeypatch):
         def raw_file(self, repo, ref, path):
             return None
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     original_repo_scan = repos_mod._repo_scan
 
     def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
@@ -623,6 +651,20 @@ def test_flow_repos_param_limits_scan_retry(monkeypatch):
         def raw_file(self, repo, ref, path):
             return None
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     original_repo_scan = repos_mod._repo_scan
 
     def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
@@ -643,7 +685,7 @@ def test_flow_repos_param_limits_scan_retry(monkeypatch):
     assert "repo r1 rompido" in body["scan"]["repos"][0]["error"]
 
 
-def test_scan_reuses_pr_hash(monkeypatch):
+def test_scan_resolves_origin_once(monkeypatch):
     commit_calls = []
 
     class StubClient:
@@ -665,7 +707,7 @@ def test_scan_reuses_pr_hash(monkeypatch):
             return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
         def commit_for_branch(self, repo, branch, resolved=""):
             commit_calls.append(branch)
-            return "fromCommit"
+            return "abc123"
         def tags_on_commit(self, repo, commit):
             return []
         def find_pr(self, repo, origin, destination):
@@ -673,15 +715,30 @@ def test_scan_reuses_pr_hash(monkeypatch):
         def branch_url(self, repo, branch):
             return "http://atlassian/branch"
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.get("/api/flow", params={"origin": "release/x", "prefixes": "uat"}).json()
     assert body["scan"]["repos"][0]["commit"] == "abc123"
-    # el hash de la rama origen vino del PR, no de GET /commits/{origin}; el
-    # único commit_for_branch es la resolución de master del lado del diff.
-    assert commit_calls == ["master"]
+    # BBIT-34: el scan resuelve el head de la rama origen UNA sola vez
+    # (sin el re-check duplicado) y no consulta has_commits_ahead; el único
+    # commit_for_branch adicional es la resolución de master del diff.
+    assert commit_calls == ["release/x", "master"]
     assert body["scan"]["stats"]["with_pr"] == 1
     assert body["scan"]["repos"][0]["deploys"] == {"uat": None}
     assert body["scan"]["repos"][0]["match_tag"] == {"uat": None}
@@ -716,14 +773,25 @@ def test_scan_deploys_from_tag(monkeypatch):
         def branch_url(self, repo, branch):
             return "http://atlassian/branch"
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     class StubCi:
         vcs = "bb"
-        def deploys_for_tags(self, repo, tags):
-            return {"uat-7": SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7", job="deploy-uat", approval="success")}
-        def deploy_for_tag(self, repo, tag, commit, prefix):
-            if tag == "uat-7" and commit == "abc123" and prefix == "uat":
-                return SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7", job="deploy-uat", approval="success")
-            return None
+        def deploys_for_envs(self, repo, tags, commit, prefixes):
+            deploy = SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7", job="deploy-uat", approval="success")
+            return {"tags": {"uat-7": deploy}, "envs_by_tag": {"uat-7": {"uat": deploy}}}
         def project_id(self, repo):
             return "9beb07c8-cc3b-4da1-8bc4-e9121667fbb7"
 
@@ -771,13 +839,26 @@ def test_scan_resolves_full_hash_with_pr(monkeypatch):
         def branch_url(self, repo, branch):
             return "http://atlassian/branch"
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     class StubCi:
         vcs = "bb"
-        def deploys_for_tags(self, repo, tags):
-            return {}
-        def deploy_for_tag(self, repo, tag, commit, prefix):
+        def deploys_for_envs(self, repo, tags, commit, prefixes):
             assert commit == "abc123456789000000000000000000000000000000"
-            return SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7", job="deploy-uat", approval="success")
+            deploy = SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7", job="deploy-uat", approval="success")
+            return {"tags": {}, "envs_by_tag": {"uat-7": {"uat": deploy}}}
         def project_id(self, repo):
             return None
 
@@ -817,6 +898,20 @@ def test_generate_tags(monkeypatch):
         def create_tag(self, slug, name, commit):
             created.append((slug, name, commit))
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     class StubCi:
         def pipeline_id_for_commit(self, repo, branch, commit):
             return 7
@@ -861,6 +956,20 @@ def test_circleci_config_creates(monkeypatch):
             calls.append((branch, path, "uat-deploy-on-tag" in content, message))
             return {"hash": "h1", "subject": "x"}
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
@@ -922,6 +1031,20 @@ def test_circleci_config_skips_when_present(monkeypatch):
         def upsert_file(self, *a, **k):
             raise AssertionError("no debería escribir cuando ya existe")
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
@@ -966,6 +1089,20 @@ def test_circleci_config_remigra_forma_triggers_invalida(monkeypatch):
             calls.append((branch, path, content, message))
             return {"hash": "h2", "subject": "x"}
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
@@ -1032,6 +1169,15 @@ def test_diff_skips_raw_without_ssm(monkeypatch):
                 return "k: {{resolve:ssm:config/app/key}}"
             return "no ssm"
 
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
@@ -1086,6 +1232,15 @@ def test_diff_mode_all_lists_whole_repo(monkeypatch):
         def commit_for_branch(self, repo, branch, resolved=""):
             return "headOrigin" if branch == "release/x" else "headDest"
 
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
@@ -1142,6 +1297,15 @@ def test_diff_resolve_master_lista_por_sha(monkeypatch):
             raw_refs.append(ref)
             return "k: {{resolve:ssm:/config/app/key}}" if ref == "headOrigin" else "no ssm"
 
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
@@ -1202,6 +1366,9 @@ def test_diff_lee_params_del_snapshot_si_el_cliente_lo_soporta(monkeypatch):
             raw_calls.append((ref, path))
             return None
 
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
@@ -1264,6 +1431,15 @@ def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
                 return "v: {{resolve:ssm:/config/shared/secret}}"
             return "no ssm"
 
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
@@ -1321,6 +1497,15 @@ def test_diff_cache_key_incluye_ssm_prefixes(monkeypatch):
         def raw_file(self, repo, ref, path):
             return "k: {{resolve:ssm:/config/app/key}}" if ref == "headO" else "no ssm"
 
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
@@ -1382,6 +1567,15 @@ def test_diff_reutilizado_cuando_path_esta_en_master_del_mismo_repo(monkeypatch)
                 return "k: {{resolve:ssm:/config/shared/secret}}"
             return "k: {{resolve:ssm:/config/shared/secret}}"
 
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
@@ -1440,6 +1634,15 @@ def test_diff_reutilizado_y_count_multirepo(monkeypatch):
             # en ambos repos el path está tanto en release como en master
             return "k: {{resolve:ssm:/config/dup}}"
 
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
@@ -1492,6 +1695,15 @@ def test_diff_repos_only_master_no_aparecen(monkeypatch):
                 return "k: {{resolve:ssm:/config/productivo}}"
             return "sin ssm"
 
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
@@ -1534,6 +1746,20 @@ def test_repos_cache_force_exclude(monkeypatch):
             calls["n"] += 1
             return [SimpleNamespace(slug="orders-app", name="OA", workspace="ws", default_branch="master")]
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
@@ -1600,6 +1826,14 @@ def test_create_missing_prs(monkeypatch):
         def create_pr(self, repo, origin, dest, title=None):
             return {"url": "u", "title": title, "state": "OPEN", "id": 1}
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", PClient)
     client.post("/api/session", json={"workspace": "ws3", "token": "tok"})
     resp = client.post("/api/prs/create-missing", params={"origin": "release/x", "destination": "master", "title": "Titulo comun"})
@@ -1662,6 +1896,14 @@ def test_create_missing_skips_no_changes(monkeypatch):
             calls.append(repo)
             return {"url": "u", "title": title, "state": "OPEN", "id": 1}
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", PClient)
     client.post("/api/session", json={"workspace": "ws5", "token": "tok"})
     resp = client.post("/api/prs/create-missing", params={"origin": "release/x", "destination": "master", "title": "T"})
@@ -1691,6 +1933,14 @@ def test_update_pr_titles(monkeypatch):
         def update_pr_title(self, repo, pr_id, title):
             return {"id": pr_id, "title": title, "url": "u", "state": "OPEN"}
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", PClient)
     client.post("/api/session", json={"workspace": "ws4", "token": "tok"})
     resp = client.post("/api/prs/update-titles", params={"origin": "release/x", "destination": "master", "title": "Nuevo titulo"})
@@ -1833,6 +2083,20 @@ def test_scan_respects_exclude(monkeypatch):
         def raw_file(self, repo, ref, path):
             return None
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
@@ -1871,6 +2135,14 @@ def test_create_missing_prs_filters_prefixes(monkeypatch):
             seen.append(repo)
             return {"url": "u", "title": title, "state": "OPEN", "id": 1}
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", PClient)
     client.post("/api/session", json={"workspace": "ws6", "token": "tok"})
 
@@ -1911,6 +2183,20 @@ def test_tags_respect_exclude(monkeypatch):
         def create_tag(self, slug, name, commit):
             created.append(slug)
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     class StubCi:
         def pipeline_id_for_commit(self, repo, branch, commit):
             return 7
@@ -1961,6 +2247,20 @@ def test_scan_cache_hit_on_second_call(monkeypatch):
         def raw_file(self, repo, ref, path):
             return None
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
@@ -2009,6 +2309,20 @@ def test_scan_force_refreshes(monkeypatch):
         def raw_file(self, repo, ref, path):
             return None
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
@@ -2114,6 +2428,20 @@ def test_clear_cache_session_vuelve_a_consultar_apis(monkeypatch):
         def raw_file(self, repo, ref, path):
             return None
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
@@ -2179,6 +2507,15 @@ def test_diff_enrich_aws_ok_and_missing(monkeypatch):
                 return ""
             return "a: {{resolve:ssm:/config/a}}\nb: {{resolve:ssm:/config/nope}}"
 
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     class FakeSsmClient:
         def __init__(self):
             self.calls = []
@@ -2274,6 +2611,20 @@ def test_flow_stream_events(monkeypatch):
         def raw_file(self, repo, ref, path):
             return None
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr(_repos, "_circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
@@ -2352,6 +2703,20 @@ def test_flow_stream_failed_repo_emits_error_item(monkeypatch):
         def raw_file(self, repo, ref, path):
             return None
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     original_repo_scan = repos_mod._repo_scan
 
     def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
@@ -2488,6 +2853,20 @@ def test_generate_tags_scoped_with_repo(monkeypatch):
         def create_tag(self, slug, name, commit):
             pass
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     class StubCi:
         def pipeline_id_for_commit(self, repo, branch, commit):
             return 42
@@ -2542,6 +2921,20 @@ def test_generate_tags_scoped_repo_not_found(monkeypatch):
         def commit_for_branch(self, repo, branch, resolved=""):
             raise BitbucketError(f"repo {repo} not found")
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     class StubCi:
         pass
 
@@ -2589,6 +2982,20 @@ def test_generate_tags_scoped_no_pipeline(monkeypatch):
         def create_tag(self, slug, name, commit):
             pass
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     class StubCi:
         def pipeline_id_for_commit(self, repo, branch, commit):
             return None
@@ -2643,6 +3050,20 @@ def test_generate_tags_no_circleci_token_400(monkeypatch):
         def create_tag(self, slug, name, commit):
             pass
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
@@ -2683,6 +3104,20 @@ def test_generate_tags_batch_unchanged(monkeypatch):
         def create_tag(self, slug, name, commit):
             pass
 
+
+        def list_repos(self, prefixes=None):
+            try:
+                return self.repos_with_branch("", prefixes=prefixes)
+            except TypeError:
+                return self.repos_with_branch("")
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def resolve_branch(self, slug, branch):
+            return branch or ""
+
+        def snapshot(self, slug, ref):
+            return None
     class StubCi:
         def pipeline_id_for_commit(self, repo, branch, commit):
             return 7

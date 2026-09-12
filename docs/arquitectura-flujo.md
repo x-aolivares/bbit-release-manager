@@ -102,10 +102,15 @@ commit, 3×E de CircleCI duplicado, re-resolución de rama en el diff.
 
 ## 4. Plan de implementación por fases (sin romper)
 
-1. `ScanContext`/`RepoState` tipados + `scan_repo` puro (remueve double
-   commit-head y CircleCI por-env). Commit `refactor(BBIT-{N})`.
-2. Eliminar `has_commits_ahead` del scan + frontend (campo `no_changes`,
-   estado "Sin cambios contra", test `stats` sin `synced`). Commit `feat`/`fix`.
+1. ✅ `scan_repo` lean + dedup de consultas (fase 1, commit `refactor(BBIT-34)`):
+   círculo de metadata en 3 consultas (find_pr, commit_for_branch,
+   tags_on_commit) con un solo head (sin re-check), CircleCI en UNA pasada
+   vía `deploys_for_envs` (sin el loop por-env `deploy_for_tag` que
+   re-pagiaba pipelines/workflows/jobs). Se mantiene `_repo_scan` como nombre
+   y contrato `(item, err)` por compatibilidad de tests.
+2. ✅ Eliminar `has_commits_ahead`/`no_changes` del scan + frontend (fase 2,
+   commit `fix(BBIT-34)`): campo `no_changes` fuera del item, botón "Sin PR a
+   {dest}" siempre que no haya PR (el "sin cambios" se infiere del diff).
 3. Diff reusa Resolve (sacar `_branch_repos_cached` de `_compute_diff:1689`).
 4. `create_pr`/`create_missing_prs` reusan `RepoState` (Ctrl+C).
 5. Bump de versión + CI (pytest + ng build/test en `feature/**`).

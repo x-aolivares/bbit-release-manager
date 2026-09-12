@@ -785,145 +785,67 @@ def _safe_call(fn, default):
 def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
     """Payload de un repo (etapa paralela de /scan).
 
-    BBIT-33 Phase 9: Paralelización total de requests.
-    
-    En lugar de hacer requests secuencialmente (PR → commit → tags → deploys),
-    lanza TODOS los requests en paralelo desde el inicio:
-    - GET PRs
-    - GET commit de rama
-    - GET tags en commit
-    - GET deploys de CircleCI (si existe PR + tags)
-    
-    Los resultados se procesan a medida que completan, NO bloqueando.
+    BBIT-34: scan lean de metadata sin consultas duplicadas:
+    - find_pr + commit_for_branch en paralelo (UN solo head: el commit
+      valida la rama; el re-check del head de BBIT-33 Phase 9 se eliminó).
+    - tags_on_commit sobre ese mismo head.
+    - CircleCI en UNA pasada por tag via ``deploys_for_envs`` (sin el loop
+      por-env ``deploy_for_tag`` que re-paginaba pipelines/workflows/jobs).
+    - Sin ``has_commits_ahead`` / ``no_changes``: el estado de sync se
+      infiere del diff (etapa Content), no del scan.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    
+    from concurrent.futures import ThreadPoolExecutor
+
     resolved = getattr(repo, "resolved_branch", "") or ""
-    
-    # FASE 1: Lanzar requests en paralelo (non-blocking)
+
+    # FASE 1: requests en paralelo (non-blocking)
     with ThreadPoolExecutor(max_workers=4) as ex:
         # Request 1: Buscar PR
         pr_fut = ex.submit(lambda: _safe_call(lambda: client.find_pr(repo.slug, origin, destination), None))
-        
-        # Request 2: Obtener commit de la rama
+
+        # Request 2: Obtener commit de la rama (valida que la rama existe)
         commit_fut = ex.submit(lambda: client.commit_for_branch(repo.slug, origin, resolved=resolved))
-        
-        # Esperar commit primero (necesario para validar rama)
         commit = commit_fut.result()
-        
+
         # BBIT-33: Si la rama no existe, abort
         if not commit:
             log.debug("scan: %s rama %s no existe, ignorando", repo.slug, origin)
             return None, None
-        
-        # PR y commit listos, lanzar requests dependientes
+
         pr = pr_fut.result()
-        
+
         # Request 3: Tags en commit (depende de commit)
-        tags_fut = ex.submit(lambda: client.tags_on_commit(repo.slug, commit))
-        
-        # Request 4: Validar si hay commits ahead (solo si no hay PR)
-        has_commits_fut = None
-        if not pr:
-            has_commits_fut = ex.submit(lambda: client.has_commits_ahead(repo.slug, origin, destination))
-        
-        # Obtener tags
-        tags = tags_fut.result()
-        
-        # Request 5: Obtener branch head actual (solo si hay PR)
-        branch_head_fut = None
-        if ci is not None and pr and pr.get("source_commit"):
-            branch_head_fut = ex.submit(lambda: client.commit_for_branch(repo.slug, origin, resolved=resolved))
-        
-        # Request 6: CircleCI deploys (depende de tags)
+        tags = client.tags_on_commit(repo.slug, commit)
+
+        # Request 4: CircleCI en UNA pasada (solo si hay tags para deploys)
         ci_deploys_fut = None
         ci_project_fut = None
         if ci is not None and tags:
-            ci_deploys_fut = ex.submit(lambda: _safe_call(
-                lambda: ci.deploys_for_tags(repo.slug, [t["name"] for t in tags]),
-                {}
-            ))
+            ci_deploys_fut = ex.submit(lambda: _ci_deploys(ci, repo.slug, [t["name"] for t in tags], commit, clean))
             ci_project_fut = ex.submit(lambda: _safe_call(lambda: ci.project_id(repo.slug), None))
-    
-    # FASE 2: Recopilar resultados (ya están esperados)
+
+    # FASE 2: Recopilar resultados (estado tipado para el diff)
     if ctx is not None:
         ctx.setdefault(repo.slug, {})["pr"] = pr
         ctx.setdefault(repo.slug, {})["origin_ref"] = commit
-    
-    no_changes = False
-    if not pr and has_commits_fut:
-        no_changes = not has_commits_fut.result()
-    
-    match_commit = commit
-    if ci is not None and pr and pr.get("source_commit") and branch_head_fut:
-        branch_head = branch_head_fut.result()
-        log.info(
-            "scan: %s pr.source_commit=%s branch_head=%s match_commit=%s",
-            repo.slug,
-            commit[:12],
-            (branch_head or "?")[:12],
-            (branch_head or commit)[:12],
-        )
-        match_commit = branch_head or commit
-    
-    # Procesar tags y deploys
-    ci_error = None
-    ci_project = None
-    tag_rows = []
-    tag_deploys = {}
-    
-    if ci_deploys_fut:
-        tag_deploys = ci_deploys_fut.result()
-        ci_error = None  # Si llegamos acá, no hay error
-    
-    if ci_project_fut:
-        ci_project = ci_project_fut.result()
-    
-    for t in tags:
-        tag_rows.append({"name": t["name"], "deploy": _serialize_deploy(tag_deploys.get(t["name"]))})
+
+    ci_result = {"tags": {}, "envs_by_tag": {}}
+    ci_err = None
+    if ci_deploys_fut is not None:
+        ci_result, ci_err = ci_deploys_fut.result()
+    ci_project = ci_project_fut.result() if ci_project_fut is not None else None
+
+    tag_deploys = ci_result.get("tags", {})
+    tag_rows = [{"name": t["name"], "deploy": _serialize_deploy(tag_deploys.get(t["name"]))} for t in tags]
 
     deploys: dict[str, dict | None] = {}
     match_tag: dict[str, str | None] = {}
-    env_tasks: list[tuple[str, str]] = []
+    envs_by_tag = ci_result.get("envs_by_tag", {})
     for prefix in clean:
         env = prefix.lower()
-        found_tag = None
-        for t in tags:
-            if _tag_match(env).match(t["name"]):
-                found_tag = t["name"]
-                break
+        found_tag = next((t["name"] for t in tags if _tag_match(env).match(t["name"])), None)
         match_tag[env] = found_tag
-        deploys[env] = None
-        if ci is not None and not found_tag:
-            log.info("scan: %s env=%s sin tag %s-en en commit %s", repo.slug, env, env, match_commit[:12])
-        if ci is not None and found_tag and match_commit:
-            env_tasks.append((env, found_tag))
-    
-    # Lanzar requests de deploy_for_tag en paralelo
-    def _env_deploy(task):
-        """Deploy por tag/env aislado: devuelve (env, payload, err) para
-        mergear el resultado en el hilo principal sin tocar ci_error."""
-        env, found_tag = task
-        deploy = None
-        err = None
-        log.info(
-            "scan: %s env=%s tag=%s commit=%s -> buscando deploy_for_tag",
-            repo.slug, env, found_tag, match_commit[:12],
-        )
-        try:
-            deploy = ci.deploy_for_tag(repo.slug, found_tag, match_commit, env)
-        except CircleCiError as exc:
-            err = str(exc)
-        log.info("scan: %s env=%s deploy=%s", repo.slug, env, f"{deploy.status}" if deploy else "None")
-        return env, _serialize_deploy(deploy), err
-
-    if env_tasks:
-        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(env_tasks) or 1)) as ex:
-            results = list(ex.map(_env_deploy, env_tasks))
-        for env, deploy, err in results:
-            deploys[env] = deploy
-            if err:
-                ci_error = ci_error or err
+        deploys[env] = _serialize_deploy(envs_by_tag.get(found_tag, {}).get(env)) if found_tag else None
 
     item = {
         "slug": repo.slug,
@@ -931,7 +853,6 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
         "workspace": repo.workspace,
         "branch_url": client.branch_url(repo.slug, origin),
         "commit": commit,
-        "no_changes": no_changes,
         "tags": tag_rows,
         "pr": _serialize_pr(pr),
         "deploys": deploys,
@@ -939,7 +860,17 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
         "ci_project": ci_project,
         "ci_vcs": ci.vcs if ci else None,
     }
-    return item, ci_error
+    return item, ci_err
+
+
+def _ci_deploys(ci, slug, tags, commit, clean):
+    """Resuelve deploys de CircleCI en una pasada; retorna (resultado, error)."""
+    try:
+        return ci.deploys_for_envs(slug, tags, commit, clean), None
+    except CircleCiError as exc:
+        log.warning("scan: %s CircleCI falló: %s", slug, exc)
+        return {"tags": {}, "envs_by_tag": {}}, str(exc)
+
 
 
 def _failed_repo_item(repo, client, origin, exc):
@@ -954,7 +885,6 @@ def _failed_repo_item(repo, client, origin, exc):
         "workspace": repo.workspace,
         "branch_url": client.branch_url(repo.slug, origin),
         "commit": "",
-        "no_changes": False,
         "error": str(exc),
         "tags": [],
         "pr": {"exists": False},
@@ -1283,8 +1213,8 @@ def flow_stream(
                 yield _event("error", {"message": ci_error_local})
 
             items.sort(key=lambda x: x["slug"])
-            with_pr = sum(1 for it in items if it["pr"].get("exists"))
-            prod = sum(1 for it in items if (it["deploys"].get("prod") or {}).get("status") == "success")
+            with_pr = sum(1 for it in items if (it.get("pr") or {}).get("exists"))
+            prod = sum(1 for it in items if ((it.get("deploys") or {}).get("prod") or {}).get("status") == "success")
             stats = {
                 "repos": len(items),
                 "with_pr": with_pr,

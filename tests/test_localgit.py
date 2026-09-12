@@ -36,6 +36,12 @@ class _FakeBBClient:
     def __init__(self, workspace: str = "testorg"):
         self.workspace = workspace
 
+    def list_repos(self, prefixes=None):
+        return []
+
+    def resolve_branch(self, slug, branch):
+        return branch if branch == "release/REP-123-V2" else ""
+
     def raw_file(self, slug, ref, path):
         return None
 
@@ -217,11 +223,14 @@ class TestSnapshot:
 
 
 class TestReposWithBranch:
+    """BBIT-34: repos_with_branch delega la verificación de rama al cliente
+    (coincidencia literal, sin variantes) y mantiene resolved_branch."""
+
     def test_includes_matching_repos(self, tmp_path, git_remote):
         c = _client(tmp_path, git_remote)
         c.ensure_repo(REPO, force=True)
         repos = [Repository(slug=REPO, name=REPO, workspace=WORKSPACE)]
-        matched = c.repos_with_branch("release/REP-123", repos=repos)
+        matched = c.repos_with_branch("release/REP-123-V2", repos=repos)
         assert len(matched) == 1
         assert matched[0].resolved_branch == "release/REP-123-V2"
 
@@ -235,22 +244,26 @@ class TestReposWithBranch:
     def test_clones_on_demand_if_not_available(self, tmp_path, git_remote):
         """Cuando se llama repos_with_branch() y el repo no está clonado aún,
         debe clonarlo de forma sincrónica (on-demand) antes de buscar la rama.
-        
+
         Esto evita el problema donde el user clickea "Obtener Repositorios"
         antes de que el background thread termine de clonar (BBIT-33 fix).
         """
+        import time
+
         c = _client(tmp_path, git_remote)
         # NO llamamos ensure_repo: el repo aún no está clonado
         assert c.available(REPO) is False
-        
+
         repos = [Repository(slug=REPO, name=REPO, workspace=WORKSPACE)]
-        # repos_with_branch debe clonar el repo de forma sincrónica
-        matched = c.repos_with_branch("release/REP-123", repos=repos)
-        
-        # Debe encontrar la rama (se clonó automáticamente)
+        # repos_with_branch debe clonar el repo (background) y resolver la rama
+        matched = c.repos_with_branch("release/REP-123-V2", repos=repos)
+
         assert len(matched) == 1
         assert matched[0].resolved_branch == "release/REP-123-V2"
-        # Y ahora el repo debe estar disponible
+        # El clone corre en background: esperamos a que esté disponible
+        deadline = time.time() + 30
+        while time.time() < deadline and not c.available(REPO):
+            time.sleep(0.1)
         assert c.available(REPO)
 
 

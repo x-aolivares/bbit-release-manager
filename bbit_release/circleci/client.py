@@ -413,6 +413,56 @@ class CircleCiClient:
         )
         return None
 
+    def deploys_for_envs(
+        self,
+        repo: str,
+        tags: list[str],
+        commit: str,
+        prefixes: list[str],
+    ) -> dict[str, dict]:
+        """Deploys por tag (default) y por env en UNA pasada de fetch por tag.
+
+        BBIT-34: reemplaza el par ``deploys_for_tags`` + loop por-env
+        ``deploy_for_tag`` para los scans. Cada tag resuelve pipelines,
+        workflows y jobs UNA sola vez; el resultado combina:
+        - ``tags``: {tag: DeployJob | None}  -> primer pipeline con workflow
+           nombrado (mismo criterio que ``deploys_for_tags``).
+        - ``envs_by_tag``: {tag: {prefix: DeployJob | None}} -> pipeline con
+           vcs.revision == commit cuyo workflow contiene el prefijo (mismo
+           criterio que ``deploy_for_tag`` por env).
+        """
+        result: dict[str, dict] = {"tags": {t: None for t in tags}, "envs_by_tag": {}}
+        if not tags:
+            return result
+
+        def _resolve(tag: str) -> tuple[str, DeployJob | None, dict[str, DeployJob | None]]:
+            pipelines = self.pipelines(repo, tag=tag)
+            default: DeployJob | None = None
+            if pipelines:
+                for workflow in self.workflows(pipelines[0].get("id", "")):
+                    if workflow.get("name", ""):
+                        default = self._deploy_from_workflow(repo, pipelines[0], workflow)
+                        break
+            envs: dict[str, DeployJob | None] = {}
+            for pipeline in pipelines:
+                rev = (pipeline.get("vcs") or {}).get("revision", "")
+                if rev != commit:
+                    continue
+                for workflow in self.workflows(pipeline.get("id", "")):
+                    name = (workflow.get("name") or "").lower()
+                    match = next((p for p in prefixes if p.lower() in name), None)
+                    if match is not None and match not in envs:
+                        envs[match] = self._deploy_from_workflow(repo, pipeline, workflow, match)
+                break
+            return tag, default, envs
+
+        with ThreadPoolExecutor(max_workers=min(len(tags), 4)) as ex:
+            resolved = list(ex.map(_resolve, tags))
+        for tag, default, envs in resolved:
+            result["tags"][tag] = default
+            result["envs_by_tag"][tag] = envs
+        return result
+
     def deploys_for_tags(self, repo: str, tags: list[str]) -> dict[str, DeployJob | None]:
         """Para cada tag, el último pipeline corrido sobre ese tag.
 

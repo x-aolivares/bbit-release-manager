@@ -50,7 +50,6 @@ interface ScanRepo {
   workspace: string;
   branch_url: string;
   commit: string;
-  no_changes?: boolean;
   error?: string | null;
   visible?: boolean;  // BBIT-33: false = no mostrar en tabla (sin rama)
   reason?: string;    // BBIT-33: "branch_not_found" u otro motivo

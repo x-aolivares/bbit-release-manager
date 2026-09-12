@@ -38,7 +38,6 @@ con CircleCI configurado y prefijos de deploy `uat/stgp/prod`.
 | PR abierto source→dest | `GET .../pullrequests?state=OPEN&q=source.branch.name=…` | **1** |
 | Commit head de la rama | `GET .../commits/{ramaEfectiva}` | **1** |
 | Tags que apuntan al commit | `GET .../refs/tags?pagelen=100&q=target.hash="{sha40}"` | **1** (el sha completo filtra server-side) |
-| Commits ahead vs master (solo si no hay PR) | `GET .../commits/{branch}?exclude=master&pagelen=100` | **1+** |
 | 🔵 Diff release vs master | `GET .../diff/master?from=release/x` | **1** |
 | 🔵 Master params (paths SSM) | tarball `GET bitbucket.org/{ws}/{slug}/get/master.tar.gz` | **1** |
 | 🔵 Raw de archivos con indicio SSM (`/config`, `/common`, `{{resolve:ssm}}`) | por ref: `GET .../src/{ref}/{path}` | **2 × M** (M archivos × origen + destino) |
@@ -48,7 +47,12 @@ con CircleCI configurado y prefijos de deploy `uat/stgp/prod`.
 | Requisito | Endpoint | Llamadas |
 |---|---|---|
 | Project id | `GET /project/bb/{ws}/{slug}` | **1** |
-| Deploys por tag | por tag: `GET /project/.../pipeline?tag=…` → `GET /pipeline/{id}/workflow` → `GET /workflow/{id}/job` | **3 × K** (K = tags del commit) |
+| Deploys por tag (+ env por prefijo) | por tag: `GET /project/.../pipeline?tag=…` → `GET /pipeline/{id}/workflow` → `GET /workflow/{id}/job` | **3 × K** (K = tags del commit) |
+
+> BBIT-34: `deploys_for_envs` resuelve **una sola vez** pipelines/workflows/jobs
+> por tag y deriva en la misma pasada tanto el deploy default como el deploy por
+> env (prefijo). No hay loop por-env `deploy_for_tag` re-paginando los mismos
+> pipelines (eliminó ~3×E llamadas duplicadas por tag).
 
 ## 5. AWS SSM
 
@@ -72,15 +76,16 @@ SSM en el diff, y PR existente.
 que es justo donde el conteo explota en repos con diffs grandes (`2 × M`).
 Las llamadas de **metadata** (rama, PR, commit, tags) y **CircleCI** se mantienen.
 
-## 6. Duplicación detectada en el flujo actual
+## 6. Duplicación eliminada (BBIT-34)
 
-`_repo_scan` (bbit 0.48.4) consulta CircleCI **dos veces por los mismos tags**:
+`_repo_scan` (bbit 0.45.x) consultaba CircleCI **dos veces por los mismos tags**:
 
 1. Batch `deploys_for_tags(repo, [tags])` → `pipeline → workflow → job` por tag.
-2. Loop por-env `ci.deploy_for_tag(...)` → vuelve a pedir `pipeline → workflow → job`.
+2. Loop por-env `ci.deploy_for_tag(...)` → volvía a pedir `pipeline → workflow → job`.
 
-Son **~3 llamadas de más por tag** por repositorio; hoy solo zafa porque el
-cache SQLite devuelve `cache hit`. Con caché fría se paga dos veces.
+Eran **~3 llamadas de más por tag** por repositorio; hoy solo zafaba porque el
+cache SQLite devolvía `cache hit`. Desde 0.50.0 ese loop se eliminó: el scan
+resuelve `deploys_for_envs` en **una pasada por tag** (ver §4).
 
 ---
 
