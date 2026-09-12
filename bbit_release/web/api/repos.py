@@ -110,9 +110,9 @@ def _branch_repos_cached(
     BBIT-33: El cloning ocurre dentro de repos_with_branch() (no aquí).
     """
     cache = get_cache()
+    from types import SimpleNamespace
     cached = cache.get_branch_repos(origin, destination, prefs, exclude)
     if cached is not None:
-        from types import SimpleNamespace
         out = [SimpleNamespace(**{**r, "slug": r["repo_name"]}) for r in cached]
         if not include_missing:
             out = [r for r in out if getattr(r, "branch_state", "") != "not_found"]
@@ -140,7 +140,9 @@ def _branch_repos_cached(
     } for r in missing]
     cache.set_branch_repos(origin, destination, prefs, exclude, items)
     if include_missing:
-        return repos + missing
+        # Devolver desde el set persistido para que TODOS los items lleven
+        # branch_state/resolved_branch (los repos de repos_with_branch crudos no).
+        return [SimpleNamespace(**{**it, "slug": it["repo_name"]}) for it in items]
     return repos
 
 
@@ -1268,15 +1270,19 @@ def flow_stream(
 
     # BBIT-33 Phase 8: Obtener repos con rama RÁPIDAMENTE (API paralela, clone background)
     # No esperamos al clone - devolvemos rápido y enviamos eventos SSE inmediatamente
+    # BBIT-35 P3/P4: la cache persiste found + not_found; separamos ambos.
     import sys
     print(f"[FLOW_STREAM] Obteniendo repos con rama {origin}...", file=sys.stderr)
-    repos_list = _apply_filters(
-        _branch_repos_cached(data.client, origin, destination, proj, blocked),
+    all_states = _apply_filters(
+        _branch_repos_cached(data.client, origin, destination, proj, blocked, include_missing=True),
         proj, blocked,
     )
-    print(f"[FLOW_STREAM] ✓ {len(repos_list)} repos con rama (sin bloquear clone)", file=sys.stderr)
+    repos_list = [r for r in all_states if getattr(r, "branch_state", "") != "not_found"]
+    missing_list = [r for r in all_states if getattr(r, "branch_state", "") == "not_found"]
+    print(f"[FLOW_STREAM] ✓ {len(repos_list)} repos con rama, {len(missing_list)} sin la rama (sin bloquear clone)", file=sys.stderr)
     
     scan_repos = repos_list if not only_repos else [r for r in repos_list if r.slug in only_repos]
+    scan_missing = missing_list if not only_repos else [r for r in missing_list if r.slug in only_repos]
 
     ci = _circleci()
     ci_configured = ci is not None
@@ -1302,6 +1308,22 @@ def flow_stream(
             master_fut = None
             if mode == "diff":
                 master_fut = ex.submit(_resolve_masters, data.client, repos_list, destination, ssm_prefixes, cache, ctx)
+
+            # BBIT-35 P4: emitir los repos sin la rama ANTES del scan, para que el
+            # frontend remueva sus filas placeholder con branch_state=not_found.
+            for m in scan_missing:
+                missing_item = {
+                    "slug": m.slug,
+                    "name": getattr(m, "name", m.slug),
+                    "workspace": getattr(m, "workspace", ""),
+                    "visible": False,
+                    "reason": "branch_not_found",
+                    "branch_state": "not_found",
+                    "resolved_branch": "",
+                }
+                items.append(missing_item)
+                print(f"[STREAM] {repo_count}. {m.slug}: sin rama {origin} (visible=false)", file=sys.stderr)
+                yield _event("repo", missing_item)
 
             for item, err in _stream_scan(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx):
                 repo_count += 1

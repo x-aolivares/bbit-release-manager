@@ -914,6 +914,7 @@ reportOpen = signal(false);
     onDone: () => void,
     onError: (msg: string) => void,
     onTimeout: () => void,
+    onRepoHidden: (slug: string) => void,
   ): boolean {
     const dest = this.projectsDest();
     const prefixes = this.prefixes().join(',');
@@ -945,11 +946,13 @@ reportOpen = signal(false);
       if (parsed?.type === 'repo') {
         repos = parsed.repos;
         const repo = parsed.repos[parsed.repos.length - 1];
-        // BBIT-33: Filtrar repos sin visible=true (repos sin rama no se muestran en tabla)
+        // BBIT-35 P4: repos sin rama (visible=false / branch_state=not_found)
+        // se REMUEVEN de la tabla en vivo (antes eran placeholders colgados).
         if (repo.visible !== false) {
           onRepo(repo);
         } else {
-          console.log(`[SSE] Repo ${repo.slug} sin rama (visible=false), excluido de tabla`);
+          console.log(`[SSE] Repo ${repo.slug} sin rama (visible=false), removiendo de tabla`);
+          onRepoHidden(repo.slug);
         }
       }
     });
@@ -1151,6 +1154,10 @@ reportOpen = signal(false);
       () => {
         // SSE failed — fallback to batch
         scheduleFallback();
+      },
+      (slug) => {
+        // BBIT-35 P4: el repo no tiene la rama → remover la fila placeholder en vivo
+        this.repos.update((current) => current.filter((r) => r.slug !== slug));
       },
     );
   }

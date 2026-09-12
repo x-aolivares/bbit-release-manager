@@ -2405,6 +2405,90 @@ def test_flow_stream_failed_repo_emits_error_item(monkeypatch):
     assert "synced" not in stats_event["data"]
 
 
+def test_flow_stream_missing_repo_emitted_before_scan(monkeypatch):
+    """BBIT-35 P4 — repos sin la rama llegan como evento repo visible:false
+    ANTES del scan, para que el frontend remueva sus filas placeholder."""
+    from bbit_release.web.api import repos as _repos
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [
+                SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="r3", name="R3", workspace="ws", default_branch="master"),
+            ]
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            # r3 no tiene la rama
+            return [r for r in repos if r.slug != "r3"]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return f"http://atlassian/{repo}/{branch}"
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def raw_file(self, repo, ref, path):
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    resp = client.get("/api/flow/stream", params={"origin": "release/x", "prefixes": "uat"})
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+
+    events = []
+    current_event = None
+    for line in resp.text.splitlines():
+        if line.startswith("event:"):
+            current_event = line.split(":", 1)[1].strip()
+        elif line.startswith("data:") and current_event:
+            import json
+            payload = json.loads(line.split(":", 1)[1].strip())
+            events.append({"type": current_event, "data": payload})
+            current_event = None
+
+    repo_events = [e for e in events if e["type"] == "repo"]
+
+    # r3 no tiene la rama: evento visible:false con branch_state explicito,
+    # emitido ANTES del scan de los found (r1/r2).
+    assert repo_events[0]["data"]["slug"] == "r3"
+    r3 = repo_events[0]["data"]
+    assert r3["visible"] is False
+    assert r3["branch_state"] == "not_found"
+    assert r3["resolved_branch"] == ""
+    assert r3["reason"] == "branch_not_found"
+    assert "commit" not in r3 or r3.get("commit") == ""
+
+    # Los found llegan después con su metadata completa.
+    found_slugs = {e["data"]["slug"] for e in repo_events}
+    assert {"r1", "r2"} <= found_slugs
+    r1 = next(e for e in repo_events if e["data"]["slug"] == "r1")
+    assert r1["data"]["branch_state"] == "found"
+    assert r1["data"]["commit"] == "abc123"
+
+    # Stats cuentan solo los repos con la rama.
+    stats_event = next(e for e in events if e["type"] == "stats")
+    assert stats_event["data"]["repos"] == 2
+
+
 def test_stream_scan_emits_as_completed_not_submission_order(monkeypatch):
     """BBIT-32 — `_stream_scan` entrega cada repo apenas termina
     (as_completed): si el primer repo de la lista es el lento, los rápidos
