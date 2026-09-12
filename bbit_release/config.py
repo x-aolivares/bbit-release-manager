@@ -534,15 +534,11 @@ class Config:
     def git_clones_dir(self) -> str:
         """Carpeta donde el motor local-git clona los repos (fase 1 BBIT-33).
 
-        Si está vacía, devuelve ~/.bbit/clones (default auto, crea la carpeta).
+        Vacío por defecto = motor local-git desactivado (flujo full API).
+        Solo se activa si el usuario configura una carpeta explícitamente.
         """
         configured = (self._settings.get("git_clones_dir") or "").strip()
-        if configured:
-            return configured
-        # Default automático: ~/.bbit/clones/
-        default = (Path.home() / ".bbit" / "clones").expanduser()
-        default.mkdir(parents=True, exist_ok=True)
-        return str(default)
+        return configured
 
     @property
     def frontend_root(self) -> Path:

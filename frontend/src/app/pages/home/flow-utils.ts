@@ -24,10 +24,17 @@ export interface FlowDiff {
   removed: unknown[];
 }
 
+export interface FlowField {
+  slug: string;
+  field: string;
+  value: unknown;
+}
+
 export interface FlowEventPayload {
   repos?: FlowRepoItem[];
   stats?: FlowStats;
   diff?: FlowDiff;
+  field?: FlowField;
   error?: string;
 }
 
@@ -115,8 +122,9 @@ export function buildFlowUrl(params: {
   scanMode: string;
   force: number;
   repos?: string[];
+  withTags?: boolean;
 }): string {
-  let url = `/api/flow?origin=${encodeURIComponent(params.origin)}&destination=${encodeURIComponent(params.dest)}&prefixes=${encodeURIComponent(params.prefixes)}&project_prefixes=${encodeURIComponent(params.projectPrefixes)}&exclude=${encodeURIComponent(params.exclude)}&mode=${params.scanMode}&force=${params.force}`;
+  let url = `/api/flow?origin=${encodeURIComponent(params.origin)}&destination=${encodeURIComponent(params.dest)}&prefixes=${encodeURIComponent(params.prefixes)}&project_prefixes=${encodeURIComponent(params.projectPrefixes)}&exclude=${encodeURIComponent(params.exclude)}&mode=${params.scanMode}&force=${params.force}&with_tags=${params.withTags ? 1 : 0}`;
   if (params.repos && params.repos.length) {
     url += `&repos=${encodeURIComponent(params.repos.join(','))}`;
   }
@@ -136,6 +144,7 @@ export function processSseEvent<T extends FlowRepoItem>(
 ): { type: 'repo'; repos: T[] }
   | { type: 'stats'; stats: FlowStats }
   | { type: 'diff'; diff: FlowDiff }
+  | { type: 'field'; field: FlowField }
   | { type: 'error'; message: string }
   | { type: 'done' }
   | null {
@@ -147,6 +156,8 @@ export function processSseEvent<T extends FlowRepoItem>(
       return { type: 'stats', stats: parsed as unknown as FlowStats };
     case 'diff':
       return { type: 'diff', diff: parsed as unknown as FlowDiff };
+    case 'field':
+      return { type: 'field', field: parsed as unknown as FlowField };
     case 'error':
       return { type: 'error', message: parsed.error ?? 'Stream error' };
     case 'done':

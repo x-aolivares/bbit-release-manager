@@ -567,10 +567,10 @@ def test_flow_failed_repo_is_marked_not_500(monkeypatch):
 
     original_repo_scan = repos_mod._repo_scan
 
-    def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
+    def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None, with_tags=True):
         if repo.slug == "r1":
             raise BitbucketError("repo r1 rompido")
-        return original_repo_scan(client, ci, repo, origin, destination, clean, ctx)
+        return original_repo_scan(client, ci, repo, origin, destination, clean, ctx, with_tags=with_tags)
 
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
@@ -625,10 +625,10 @@ def test_flow_repos_param_limits_scan_retry(monkeypatch):
 
     original_repo_scan = repos_mod._repo_scan
 
-    def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
+    def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None, with_tags=True):
         if repo.slug == "r1":
             raise BitbucketError("repo r1 rompido")
-        return original_repo_scan(client, ci, repo, origin, destination, clean, ctx)
+        return original_repo_scan(client, ci, repo, origin, destination, clean, ctx, with_tags=with_tags)
 
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
@@ -2354,10 +2354,10 @@ def test_flow_stream_failed_repo_emits_error_item(monkeypatch):
 
     original_repo_scan = repos_mod._repo_scan
 
-    def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
+    def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=None, with_tags=True):
         if repo.slug == "r1":
             raise BitbucketError("repo r1 rompido")
-        return original_repo_scan(client, ci, repo, origin, destination, clean, ctx)
+        return original_repo_scan(client, ci, repo, origin, destination, clean, ctx, on_field=on_field, with_tags=with_tags)
 
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
@@ -2405,6 +2405,239 @@ def test_flow_stream_failed_repo_emits_error_item(monkeypatch):
     assert "synced" not in stats_event["data"]
 
 
+def test_flow_stream_missing_repo_emitted_before_scan(monkeypatch):
+    """BBIT-35 P4 — repos sin la rama llegan como evento repo visible:false
+    ANTES del scan, para que el frontend remueva sus filas placeholder."""
+    from bbit_release.web.api import repos as _repos
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [
+                SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="r3", name="R3", workspace="ws", default_branch="master"),
+            ]
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            # r3 no tiene la rama
+            return [r for r in repos if r.slug != "r3"]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return f"http://atlassian/{repo}/{branch}"
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def raw_file(self, repo, ref, path):
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    resp = client.get("/api/flow/stream", params={"origin": "release/x", "prefixes": "uat"})
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+
+    events = []
+    current_event = None
+    for line in resp.text.splitlines():
+        if line.startswith("event:"):
+            current_event = line.split(":", 1)[1].strip()
+        elif line.startswith("data:") and current_event:
+            import json
+            payload = json.loads(line.split(":", 1)[1].strip())
+            events.append({"type": current_event, "data": payload})
+            current_event = None
+
+    repo_events = [e for e in events if e["type"] == "repo"]
+
+    # r3 no tiene la rama: evento visible:false con branch_state explicito,
+    # emitido ANTES del scan de los found (r1/r2).
+    assert repo_events[0]["data"]["slug"] == "r3"
+    r3 = repo_events[0]["data"]
+    assert r3["visible"] is False
+    assert r3["branch_state"] == "not_found"
+    assert r3["resolved_branch"] == ""
+    assert r3["reason"] == "branch_not_found"
+    assert "commit" not in r3 or r3.get("commit") == ""
+
+    # Los found llegan después con su metadata completa.
+    found_slugs = {e["data"]["slug"] for e in repo_events}
+    assert {"r1", "r2"} <= found_slugs
+    r1 = next(e for e in repo_events if e["data"]["slug"] == "r1")
+    assert r1["data"]["branch_state"] == "found"
+    assert r1["data"]["commit"] == "abc123"
+
+    # Stats cuentan solo los repos con la rama.
+    stats_event = next(e for e in events if e["type"] == "stats")
+    assert stats_event["data"]["repos"] == 2
+
+
+def test_flow_stream_emits_fields_before_repo_complete(monkeypatch):
+    """BBIT-35 P5 — el stream emite eventos `field` (commit/pr/tags/deploys)
+    antes del evento `repo` completo, para pintar la fila por campo async."""
+    from bbit_release.web.api import repos as _repos
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [
+                SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
+            ]
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            return [r for r in repos if r.slug != "rX"]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return [{"name": "uat-42", "date": "x"}]
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return f"http://atlassian/{repo}/{branch}"
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def raw_file(self, repo, ref, path):
+            return None
+
+    class StubCi:
+        vcs = "bitbucket"
+        def deploy_for_tag(self, repo, tag, commit, env):
+            return SimpleNamespace(status="success", url="http://ci/x", created_at="x", deploy_number=1, workflow="wf", job="job", approval=None)
+        def deploys_for_tags(self, repo, tags):
+            return {}
+        def project_id(self, repo):
+            return "proj-1"
+
+    from bbit_release.web.api import repos as repos_mod
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr(repos_mod, "_circleci", lambda: StubCi())
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    resp = client.get("/api/flow/stream", params={"origin": "release/x", "prefixes": "uat"})
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+
+    events = []
+    current_event = None
+    for line in resp.text.splitlines():
+        if line.startswith("event:"):
+            current_event = line.split(":", 1)[1].strip()
+        elif line.startswith("data:") and current_event:
+            import json
+            payload = json.loads(line.split(":", 1)[1].strip())
+            events.append({"type": current_event, "data": payload})
+            current_event = None
+
+    field_events = [e for e in events if e["type"] == "field"]
+    repo_events = [e for e in events if e["type"] == "repo"]
+
+    # Los fields de r1 llegan antes de su repo completo.
+    assert {f["data"]["slug"] for f in field_events} == {"r1"}
+    field_names = [f["data"]["field"] for f in field_events]
+    assert "commit" in field_names
+    assert "pr" in field_names
+    assert "tags" in field_names
+    assert "deploys" in field_names
+
+    # El primer field (commit) se emite antes del primer repo completo.
+    first_repo_idx = events.index(repo_events[0])
+    first_field_idx = events.index(field_events[0])
+    assert first_field_idx < first_repo_idx
+
+    # El repo completo trae todos los campos merged en el item.
+    r1_event = next(e for e in repo_events if e["data"]["slug"] == "r1")
+    assert r1_event["data"]["commit"] == "abc123"
+    assert r1_event["data"]["tags"][0]["name"] == "uat-42"
+    assert r1_event["data"]["deploys"]["uat"]["status"] == "success"
+
+    # Stats cuentan el repo visible.
+    stats_event = next(e for e in events if e["type"] == "stats")
+    assert stats_event["data"]["repos"] == 1
+
+
+def test_flow_with_tags_0_skip_tags_consulta(monkeypatch):
+    """BBIT-35 — `with_tags=0` en el request NO consulta tags ni deploys;
+    el default lo sigue haciendo (tags_on_commit llamado)."""
+    class StubClient:
+        tags_calls: list = []
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            StubClient.tags_calls.append((repo, commit))
+            return [{"name": "uat-42", "date": "x"}]
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return f"http://atlassian/{repo}/{branch}"
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def raw_file(self, repo, ref, path):
+            return None
+
+    from bbit_release.web.api import repos as repos_mod
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr(repos_mod, "_circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    # Sin with_tags: default 1 → se consultan tags.
+    StubClient.tags_calls = []
+    body = client.get("/api/flow", params={"origin": "release/with-tags", "prefixes": "uat", "force": 1}).json()
+    assert len(StubClient.tags_calls) == 1
+
+    # with_tags=0: no se consultan tags; el item llega sin ellos.
+    StubClient.tags_calls = []
+    body = client.get("/api/flow", params={
+        "origin": "release/no-tags", "prefixes": "uat", "with_tags": 0, "force": 1,
+    }).json()
+    assert StubClient.tags_calls == []
+    r1 = next(r for r in body["scan"]["repos"] if r["slug"] == "r1")
+    assert r1["tags"] == []
+    assert r1["match_tag"].get("uat") is None
+
+
 def test_stream_scan_emits_as_completed_not_submission_order(monkeypatch):
     """BBIT-32 — `_stream_scan` entrega cada repo apenas termina
     (as_completed): si el primer repo de la lista es el lento, los rápidos
@@ -2416,19 +2649,19 @@ def test_stream_scan_emits_as_completed_not_submission_order(monkeypatch):
     r2_done = threading.Event()
     released: list[str] = []
 
-    def _slow(client, ci, repo, origin, destination, clean, ctx=None):
+    def _slow(client, ci, repo, origin, destination, clean, ctx=None, on_field=None, with_tags=True):
         r2_done.wait(timeout=5)
         released.append(repo.slug)
         return ({"slug": repo.slug, "name": repo.name}, None)
 
-    def _fast(client, ci, repo, origin, destination, clean, ctx=None):
+    def _fast(client, ci, repo, origin, destination, clean, ctx=None, on_field=None, with_tags=True):
         released.append(repo.slug)
         if repo.slug == "r2":
             r2_done.set()
         return ({"slug": repo.slug, "name": repo.name}, None)
 
-    def _pick(client, ci, repo, *a, **k):
-        return _slow(client, ci, repo, *a, **k) if repo.slug == "r1" else _fast(client, ci, repo, *a, **k)
+    def _pick(client, ci, repo, origin, destination, clean, ctx=None, on_field=None, with_tags=True):
+        return _slow(client, ci, repo, origin, destination, clean, ctx, on_field, with_tags) if repo.slug == "r1" else _fast(client, ci, repo, origin, destination, clean, ctx, on_field, with_tags)
 
     monkeypatch.setattr(repos_mod, "_repo_scan", _pick)
 
@@ -2436,8 +2669,9 @@ def test_stream_scan_emits_as_completed_not_submission_order(monkeypatch):
     r2 = SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master")
     dummy = object()
 
-    items = list(repos_mod._stream_scan(dummy, None, [r1, r2], "release/x", "master", []))
-    assert [it[0]["slug"] for it in items] == ["r2", "r1"]
+    events = list(repos_mod._stream_scan(dummy, None, [r1, r2], "release/x", "master", []))
+    repo_items = [ev[1] for ev in events if ev[0] == "repo"]
+    assert [it["slug"] for it in repo_items] == ["r2", "r1"]
     assert released == ["r2", "r1"]
 
 

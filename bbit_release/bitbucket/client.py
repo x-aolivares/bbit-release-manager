@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import httpx
 import io
+import json
 import re
 import tarfile
 import time
@@ -143,7 +144,49 @@ class BitbucketClient:
     def close(self) -> None:
         self._client.close()
 
+    def _stash_parts(self, method: str, path: str, params: dict | None = None) -> tuple[str, dict | None]:
+        """Url y params canónicos de un request, tal como los persiste el recorder.
+
+        Usa build_request (sin tocar red) para que la huella coincida
+        con la que graba el hook de respuesta en el stash.
+        """
+        req = self._client.build_request(method, path, params=params)
+        url = req.url
+        return (
+            str(url.path) + (f"?{url.query}" if url.query else ""),
+            dict(url.params) if url.params else None,
+        )
+
+    def _stash_get(self, method: str, path: str, params: dict | None = None) -> dict | None:
+        if self.cache is None:
+            return None
+        url, p = self._stash_parts(method, path, params)
+        return self.cache.get_raw("bitbucket", method, url, p)
+
+    def _stash_set(
+        self,
+        method: str,
+        path: str,
+        params: dict | None,
+        status: int,
+        response: str,
+        ttl_seconds: int = 600,
+    ) -> None:
+        if self.cache is None:
+            return
+        url, p = self._stash_parts(method, path, params)
+        self.cache.set_raw(
+            source="bitbucket", method=method, url=url,
+            params=p, status=status, response=response, ttl_seconds=ttl_seconds,
+        )
+
     def _request(self, method: str, path: str, params: dict | None = None):
+        stash = self._stash_get(method, path, params)
+        if stash is not None:
+            if stash["status"] == 200:
+                return json.loads(stash["response"])
+            if stash["status"] == 404:
+                return None
         last_error: Exception | None = None
         _rate_limiter = get_global_rate_limiter()
         for attempt in range(1, MAX_RETRIES + 1):
@@ -396,10 +439,21 @@ class BitbucketClient:
 
     def diff(self, slug: str, from_ref: str, to_ref: str) -> DiffResult:
         """Diff entre refs como texto unificado (Cloud)."""
+        path = f"/repositories/{self.workspace}/{slug}/diff/{to_ref}"
+        params = {"from": from_ref}
+        stash = self._stash_get("GET", path, params)
+        if stash is not None:
+            if stash["status"] == 200:
+                return DiffResult(
+                    repo=slug, from_ref=from_ref, to_ref=to_ref,
+                    files=self._parse_unified_diff(stash["response"]),
+                )
+            if stash["status"] == 404:
+                return DiffResult(repo=slug, from_ref=from_ref, to_ref=to_ref, files=[])
         resp = self._client.request(
             "GET",
-            f"/repositories/{self.workspace}/{slug}/diff/{to_ref}",
-            params={"from": from_ref},
+            path,
+            params=params,
             headers={"Accept": "text/plain"},
         )
         if resp.status_code in (401, 403):
@@ -412,6 +466,8 @@ class BitbucketClient:
             raise BitbucketError(
                 f"Bitbucket {resp.status_code} en {slug}/diff: {resp.text[:300]}"
             )
+        if resp.status_code == 200:
+            self._stash_set("GET", path, params, 200, resp.text, ttl_seconds=1800)
         return DiffResult(
             repo=slug,
             from_ref=from_ref,
@@ -467,13 +523,21 @@ class BitbucketClient:
 
     def raw_file(self, slug: str, ref: str, path: str) -> str | None:
         """Obtiene el contenido raw de un archivo."""
+        api = f"/repositories/{self.workspace}/{slug}/src/{ref}/{path}"
+        stash = self._stash_get("GET", api, None)
+        if stash is not None:
+            if stash["status"] == 200:
+                return stash["response"]
+            return None
         resp = self._client.request(
             "GET",
-            f"/repositories/{self.workspace}/{slug}/src/{ref}/{path}",
+            api,
             headers={"Accept": "text/plain"},
         )
         if resp.status_code >= 400:
             return None
+        if resp.status_code == 200:
+            self._stash_set("GET", api, None, 200, resp.text, ttl_seconds=1800)
         return resp.text
 
     def snapshot(self, slug: str, ref: str) -> dict[str, str] | None:

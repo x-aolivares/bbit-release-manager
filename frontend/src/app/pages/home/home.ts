@@ -54,6 +54,8 @@ interface ScanRepo {
   error?: string | null;
   visible?: boolean;  // BBIT-33: false = no mostrar en tabla (sin rama)
   reason?: string;    // BBIT-33: "branch_not_found" u otro motivo
+  branch_state?: 'found' | 'not_found';  // BBIT-35 P3: estado de rama persistido
+  resolved_branch?: string;              // BBIT-35 P3: rama efectiva (o variante)
   tags: TagRow[];
   pr: PrInfo;
   deploys: Record<string, DeployInfo | null>;
@@ -912,12 +914,14 @@ reportOpen = signal(false);
     onDone: () => void,
     onError: (msg: string) => void,
     onTimeout: () => void,
+    onRepoHidden: (slug: string) => void,
+    onField: (slug: string, field: string, value: unknown) => void,
   ): boolean {
     const dest = this.projectsDest();
     const prefixes = this.prefixes().join(',');
     const exclude = this.blacklisted().join(',');
     const force = this.forceCache() ? 1 : 0;
-    const url = `/api/flow/stream?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}`;
+    const url = `/api/flow/stream?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}&with_tags=${this.prefixes().length > 0 ? 1 : 0}`;
 
     console.log(`[SSE] Opening connection to: ${url}`);
     let firstEventReceived = false;
@@ -943,16 +947,28 @@ reportOpen = signal(false);
       if (parsed?.type === 'repo') {
         repos = parsed.repos;
         const repo = parsed.repos[parsed.repos.length - 1];
-        // BBIT-33: Filtrar repos sin visible=true (repos sin rama no se muestran en tabla)
+        // BBIT-35 P4: repos sin rama (visible=false / branch_state=not_found)
+        // se REMUEVEN de la tabla en vivo (antes eran placeholders colgados).
         if (repo.visible !== false) {
           onRepo(repo);
         } else {
-          console.log(`[SSE] Repo ${repo.slug} sin rama (visible=false), excluido de tabla`);
+          console.log(`[SSE] Repo ${repo.slug} sin rama (visible=false), removiendo de tabla`);
+          onRepoHidden(repo.slug);
         }
       }
     });
 
     // Nota: evento 'skip' ya no se usa; los repos sin rama vienen con visible=false en el evento 'repo'
+
+    es.addEventListener('field', (e: MessageEvent) => {
+      console.log(`[SSE] Received field event:`, e.data.substring(0, 100));
+      firstEventReceived = true;
+      const parsed = processSseEvent('field', e.data, repos);
+      if (parsed?.type === 'field') {
+        // BBIT-35 P5: merge parcial de un campo (commit/pr/tags/deploys) sin esperar el repo completo.
+        onField(parsed.field.slug, parsed.field.field, parsed.field.value);
+      }
+    });
 
     es.addEventListener('stats', (e: MessageEvent) => {
       console.log(`[SSE] Received stats event`);
@@ -1150,6 +1166,21 @@ reportOpen = signal(false);
         // SSE failed — fallback to batch
         scheduleFallback();
       },
+      (slug) => {
+        // BBIT-35 P4: el repo no tiene la rama → remover la fila placeholder en vivo
+        this.repos.update((current) => current.filter((r) => r.slug !== slug));
+      },
+      (slug, field, value) => {
+        // BBIT-35 P5: pintado por campo async — merge parcial sin esperar el repo completo.
+        // La fila existe (placeholder de repos-quick) o se crea con el campo resuelto.
+        this.repos.update((current) => {
+          const existing = current.find((r) => r.slug === slug);
+          if (existing) {
+            return current.map((r) => (r.slug === slug ? { ...r, [field]: value } : r));
+          }
+          return [...current, { slug, name: slug, workspace: '', branch_url: '', commit: '', tags: [], pr: { exists: false }, deploys: {}, match_tag: {}, [field]: value } as ScanRepo];
+        });
+      },
     );
   }
 
@@ -1166,6 +1197,7 @@ reportOpen = signal(false);
       exclude,
       scanMode: this.scanMode,
       force,
+      withTags: this.prefixes().length > 0,
     });
     if (retryOnly) {
       const slugs = this.failedSlugs();
@@ -1237,6 +1269,7 @@ reportOpen = signal(false);
       exclude,
       scanMode: this.scanMode,
       force: 0,
+      withTags: this.prefixes().length > 0,
       repos: [slug],
     });
     this.http.get<any>(url).subscribe({
