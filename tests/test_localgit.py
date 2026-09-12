@@ -143,11 +143,11 @@ class TestCommitForBranch:
         assert len(sha) == 40
         assert all(ch in "0123456789abcdef" for ch in sha)
 
-    def test_variant_branch(self, tmp_path, git_remote):
+    def test_variant_branch_not_resolved(self, tmp_path, git_remote):
+        """Sin fallback a variantes: la literal release/REP-123 no existe → ""."""
         c = _client(tmp_path, git_remote)
         c.ensure_repo(REPO, force=True)
-        sha = c.commit_for_branch(REPO, "release/REP-123")
-        assert len(sha) == 40
+        assert c.commit_for_branch(REPO, "release/REP-123") == ""
 
     def test_nonexistent_branch(self, tmp_path, git_remote):
         c = _client(tmp_path, git_remote)
