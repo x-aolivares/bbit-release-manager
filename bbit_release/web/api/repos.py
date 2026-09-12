@@ -813,7 +813,7 @@ def _safe_call(fn, default):
         return default
 
 
-def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
+def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=None):
     """Payload de un repo (etapa paralela de /scan).
 
     BBIT-33 Phase 9: Paralelización total de requests.
@@ -826,11 +826,23 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
     - GET deploys de CircleCI (si existe PR + tags)
     
     Los resultados se procesan a medida que completan, NO bloqueando.
+
+    BBIT-35 P5: si se pasa ``on_field(field, value)``, se notifica cada campo
+    apenas se resuelve para que el frontend pinte la fila por campo async.
+    El retorno ``(item, err)`` no cambia (el item completo sigue servido por
+    el evento ``repo`` final).
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     
     resolved = getattr(repo, "resolved_branch", "") or ""
-    
+
+    def _emit(field, value):
+        if on_field is not None:
+            try:
+                on_field(field, value)
+            except Exception:
+                log.debug("scan: on_field %s falló para %s", field, repo.slug)
+
     # FASE 1: Lanzar requests en paralelo (non-blocking)
     with ThreadPoolExecutor(max_workers=4) as ex:
         # Request 1: Buscar PR
@@ -847,8 +859,12 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
             log.debug("scan: %s rama %s no existe, ignorando", repo.slug, origin)
             return None, None
         
+        # P5: la fila aparece apenas se valida la rama (commit resuelto).
+        _emit("commit", commit)
+        
         # PR y commit listos, lanzar requests dependientes
         pr = pr_fut.result()
+        _emit("pr", _serialize_pr(pr))
         
         # Request 3: Tags en commit (depende de commit)
         tags_fut = ex.submit(lambda: client.tags_on_commit(repo.slug, commit))
@@ -884,6 +900,7 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
     no_changes = False
     if not pr and has_commits_fut:
         no_changes = not has_commits_fut.result()
+    _emit("no_changes", no_changes)
     
     match_commit = commit
     if ci is not None and pr and pr.get("source_commit") and branch_head_fut:
@@ -912,6 +929,7 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
     
     for t in tags:
         tag_rows.append({"name": t["name"], "deploy": _serialize_deploy(tag_deploys.get(t["name"]))})
+    _emit("tags", tag_rows)
 
     deploys: dict[str, dict | None] = {}
     match_tag: dict[str, str | None] = {}
@@ -955,6 +973,10 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
             deploys[env] = deploy
             if err:
                 ci_error = ci_error or err
+    _emit("match_tag", match_tag)
+    _emit("deploys", deploys)
+    _emit("ci_project", ci_project)
+    _emit("ci_vcs", ci.vcs if ci else None)
 
     item = {
         "slug": repo.slug,
@@ -1040,42 +1062,58 @@ def _scan_repos(client, ci, repos, origin, destination, clean, ctx=None):
 
 
 def _stream_scan(client, ci, repos, origin, destination, clean, ctx=None):
-    """Generador que emite (item, error) por cada repo completado en el scan paralelo.
+    """Generador de eventos del scan paralelo (para el endpoint SSE streaming).
 
-    Los repos se emiten a medida que terminan (``as_completed``), no en orden
-    de envío: si un repo es lento, los que terminan primero se entregan antes
-    por el SSE y el frontend los pinta apenas llegan.
-    
-    BBIT-33: Si un repo no tiene la rama, emitir un evento repo con visible=false
-    para que el frontend lo excluya de la tabla pero lo registre en el evento.
+    Emite por cola (no por as_completed) para intercalar los campos que se
+    resuelven temprano de un repo con el item completo de otro, y así el
+    frontend pinta por campo async (BBIT-35 P5):
+
+    - ``("field", slug, field, value)``: un campo del repo resuelto.
+    - ``("repo", item, err)``: item completo del repo (con o sin rama).
+      Si el repo no tiene la rama, item es el evento visible:false.
+    - ``("repo-failed", item)``: item de error (repo cuya consulta falló).
     """
+    from queue import Queue
+    q: "Queue[tuple]" = Queue()
+
+    def _run(repo):
+        def on_field(field, value):
+            q.put(("field", repo.slug, field, value))
+        try:
+            item, err = _repo_scan(
+                client, ci, repo, origin, destination, clean, ctx,
+                on_field=on_field,
+            )
+            if item is None:
+                # BBIT-33: repo sin rama → evento visible:false
+                q.put(("repo", {
+                    "slug": repo.slug,
+                    "name": getattr(repo, "name", repo.slug),
+                    "workspace": getattr(repo, "workspace", ""),
+                    "visible": False,
+                    "reason": "branch_not_found",
+                    "branch_state": "not_found",
+                    "resolved_branch": "",
+                }, None))
+                return
+            q.put(("repo", item, err))
+        except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+            log.warning("stream scan %s falló: %s", repo.slug, exc)
+            q.put(("repo-failed", _failed_repo_item(repo, client, origin, exc)))
+        except Exception as exc:  # noqa: BLE001 — nunca colgar el stream
+            log.exception("stream scan %s error inesperado", repo.slug)
+            q.put(("repo-failed", _failed_repo_item(repo, client, origin, exc)))
+
     workers = min(MAX_WORKERS, len(repos) or 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {
-            ex.submit(_repo_scan, client, ci, repo, origin, destination, clean, ctx): repo
-            for repo in repos
-        }
-        for fut in as_completed(futures):
-            repo = futures[fut]
-            try:
-                item, err = fut.result()
-                # BBIT-33: Si un repo no tiene la rama, emitir evento repo con visible=false
-                if item is None:
-                    log.debug("stream_scan: %s ignorado (sin rama %s)", repo.slug, origin)
-                    yield ({
-                        "slug": repo.slug,
-                        "name": getattr(repo, "name", repo.slug),
-                        "workspace": getattr(repo, "workspace", ""),
-                        "visible": False,
-                        "reason": "branch_not_found",
-                        "branch_state": "not_found",
-                        "resolved_branch": "",
-                    }, None)
-                    continue
-                yield item, err
-            except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
-                log.warning("stream scan %s falló: %s", repo.slug, exc)
-                yield (_failed_repo_item(repo, client, origin, exc), None)
+        for repo in repos:
+            ex.submit(_run, repo)
+        remaining = len(repos)
+        while remaining > 0:
+            ev = q.get()
+            if ev[0] in ("repo", "repo-failed"):
+                remaining -= 1
+            yield ev
 
 
 @router.get("/repos-quick")
@@ -1325,7 +1363,17 @@ def flow_stream(
                 print(f"[STREAM] {repo_count}. {m.slug}: sin rama {origin} (visible=false)", file=sys.stderr)
                 yield _event("repo", missing_item)
 
-            for item, err in _stream_scan(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx):
+            for ev in _stream_scan(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx):
+                if ev[0] == "field":
+                    # BBIT-35 P5: un campo del repo resuelto antes del item completo.
+                    # {slug, field, value} + repo payload completo para merge parcial.
+                    yield _event("field", {"slug": ev[1], "field": ev[2], "value": ev[3]})
+                    continue
+                if ev[0] == "repo-failed":
+                    item = ev[1]
+                    err = None
+                else:
+                    _, item, err = ev
                 repo_count += 1
                 # BBIT-33: Siempre emitir evento repo (incluso si visible=false para repos sin rama)
                 # El frontend filtra basado en visible, no en eventos skip

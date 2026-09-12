@@ -915,6 +915,7 @@ reportOpen = signal(false);
     onError: (msg: string) => void,
     onTimeout: () => void,
     onRepoHidden: (slug: string) => void,
+    onField: (slug: string, field: string, value: unknown) => void,
   ): boolean {
     const dest = this.projectsDest();
     const prefixes = this.prefixes().join(',');
@@ -958,6 +959,16 @@ reportOpen = signal(false);
     });
 
     // Nota: evento 'skip' ya no se usa; los repos sin rama vienen con visible=false en el evento 'repo'
+
+    es.addEventListener('field', (e: MessageEvent) => {
+      console.log(`[SSE] Received field event:`, e.data.substring(0, 100));
+      firstEventReceived = true;
+      const parsed = processSseEvent('field', e.data, repos);
+      if (parsed?.type === 'field') {
+        // BBIT-35 P5: merge parcial de un campo (commit/pr/tags/deploys) sin esperar el repo completo.
+        onField(parsed.field.slug, parsed.field.field, parsed.field.value);
+      }
+    });
 
     es.addEventListener('stats', (e: MessageEvent) => {
       console.log(`[SSE] Received stats event`);
@@ -1158,6 +1169,17 @@ reportOpen = signal(false);
       (slug) => {
         // BBIT-35 P4: el repo no tiene la rama → remover la fila placeholder en vivo
         this.repos.update((current) => current.filter((r) => r.slug !== slug));
+      },
+      (slug, field, value) => {
+        // BBIT-35 P5: pintado por campo async — merge parcial sin esperar el repo completo.
+        // La fila existe (placeholder de repos-quick) o se crea con el campo resuelto.
+        this.repos.update((current) => {
+          const existing = current.find((r) => r.slug === slug);
+          if (existing) {
+            return current.map((r) => (r.slug === slug ? { ...r, [field]: value } : r));
+          }
+          return [...current, { slug, name: slug, workspace: '', branch_url: '', commit: '', tags: [], pr: { exists: false }, deploys: {}, match_tag: {}, [field]: value } as ScanRepo];
+        });
       },
     );
   }
