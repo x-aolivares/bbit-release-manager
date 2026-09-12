@@ -921,7 +921,7 @@ reportOpen = signal(false);
     const prefixes = this.prefixes().join(',');
     const exclude = this.blacklisted().join(',');
     const force = this.forceCache() ? 1 : 0;
-    const url = `/api/flow/stream?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}`;
+    const url = `/api/flow/stream?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}&with_tags=${this.prefixes().length > 0 ? 1 : 0}`;
 
     console.log(`[SSE] Opening connection to: ${url}`);
     let firstEventReceived = false;
@@ -1197,6 +1197,7 @@ reportOpen = signal(false);
       exclude,
       scanMode: this.scanMode,
       force,
+      withTags: this.prefixes().length > 0,
     });
     if (retryOnly) {
       const slugs = this.failedSlugs();
@@ -1268,6 +1269,7 @@ reportOpen = signal(false);
       exclude,
       scanMode: this.scanMode,
       force: 0,
+      withTags: this.prefixes().length > 0,
       repos: [slug],
     });
     this.http.get<any>(url).subscribe({

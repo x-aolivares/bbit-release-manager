@@ -813,7 +813,7 @@ def _safe_call(fn, default):
         return default
 
 
-def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=None):
+def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=None, with_tags=True):
     """Payload de un repo (etapa paralela de /scan).
 
     BBIT-33 Phase 9: Paralelización total de requests.
@@ -866,8 +866,11 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
         pr = pr_fut.result()
         _emit("pr", _serialize_pr(pr))
         
-        # Request 3: Tags en commit (depende de commit)
-        tags_fut = ex.submit(lambda: client.tags_on_commit(repo.slug, commit))
+        # Request 3: Tags en commit (depende de commit). Solo si se pidieron
+        # en el request (with_tags): a escala los tags no siempre hacen falta.
+        tags_fut = None
+        if with_tags:
+            tags_fut = ex.submit(lambda: client.tags_on_commit(repo.slug, commit))
         
         # Request 4: Validar si hay commits ahead (solo si no hay PR)
         has_commits_fut = None
@@ -875,7 +878,7 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
             has_commits_fut = ex.submit(lambda: client.has_commits_ahead(repo.slug, origin, destination))
         
         # Obtener tags
-        tags = tags_fut.result()
+        tags = tags_fut.result() if tags_fut else []
         
         # Request 5: Obtener branch head actual (solo si hay PR)
         branch_head_fut = None
@@ -1020,7 +1023,7 @@ def _failed_repo_item(repo, client, origin, exc):
     }
 
 
-def _scan_repos(client, ci, repos, origin, destination, clean, ctx=None):
+def _scan_repos(client, ci, repos, origin, destination, clean, ctx=None, with_tags=True):
     """Ejecuta el scan paralelo sobre una lista de repos (ya resueltos/filtrados).
 
     Un repo cuya consulta falla se marca como fallido en la tabla y no rompe
@@ -1031,7 +1034,7 @@ def _scan_repos(client, ci, repos, origin, destination, clean, ctx=None):
     ci_error = None
     workers = min(MAX_WORKERS, len(repos) or 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [ex.submit(_repo_scan, client, ci, repo, origin, destination, clean, ctx) for repo in repos]
+        futures = [ex.submit(_repo_scan, client, ci, repo, origin, destination, clean, ctx, with_tags=with_tags) for repo in repos]
         results = []
         for fut, repo in zip(futures, repos):
             try:
@@ -1061,7 +1064,7 @@ def _scan_repos(client, ci, repos, origin, destination, clean, ctx=None):
     return items, ci_error, stats
 
 
-def _stream_scan(client, ci, repos, origin, destination, clean, ctx=None):
+def _stream_scan(client, ci, repos, origin, destination, clean, ctx=None, with_tags=True):
     """Generador de eventos del scan paralelo (para el endpoint SSE streaming).
 
     Emite por cola (no por as_completed) para intercalar los campos que se
@@ -1083,6 +1086,7 @@ def _stream_scan(client, ci, repos, origin, destination, clean, ctx=None):
             item, err = _repo_scan(
                 client, ci, repo, origin, destination, clean, ctx,
                 on_field=on_field,
+                with_tags=with_tags,
             )
             if item is None:
                 # BBIT-33: repo sin rama → evento visible:false
@@ -1166,6 +1170,7 @@ def flow(
     mode: str = "diff",
     force: int = 0,
     repos: str = "",
+    with_tags: int = 1,
 ):
     """Endpoint unificado que resuelve repos UNA VEZ y computa scan + diff.
 
@@ -1178,6 +1183,9 @@ def flow(
     El parámetro `repos` (slugs separados por coma) limita el ESCAN a esos
     repos (reintento de los fallidos); el diff se sigue computando con el
     set completo para no alterar la clasificación.
+
+    `with_tags=0` omite la consulta de tags/deploys del scan (ahorro a escala);
+    el front lo pide solo cuando se seleccionan ambientes.
     """
     data = _require_session()
     cfg_scan = Config()
@@ -1225,14 +1233,14 @@ def flow(
         # paralelo (comparten el rate limiter global de BBIT-30) y el diff
         # reusa el resultado en vez de recomputarlo.
         with ThreadPoolExecutor(max_workers=2) as ex:
-            scan_fut = ex.submit(_scan_repos, data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx)
+            scan_fut = ex.submit(_scan_repos, data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx, with_tags=bool(with_tags))
             master_fut = ex.submit(_resolve_masters, data.client, repos, destination, ssm_prefixes, cache, ctx)
             scan_items, scan_ci_error, stats = scan_fut.result()
             dest_by_repo = master_fut.result()
     else:
         # En modo "all" no hay overlap: el diff re-resuelve los master params
         # junto con los origin params en la misma fase.
-        scan_items, scan_ci_error, stats = _scan_repos(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx)
+        scan_items, scan_ci_error, stats = _scan_repos(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx, with_tags=bool(with_tags))
     if scan_ci_error:
         ci_error = ci_error or scan_ci_error
 
@@ -1280,6 +1288,7 @@ def flow_stream(
     mode: str = "diff",
     force: int = 0,
     repos: str = "",
+    with_tags: int = 1,
 ):
     """Endpoint SSE de streaming del scan — entrega cada repo a medida que se completa.
 
@@ -1287,6 +1296,8 @@ def flow_stream(
     (por cada repo escaneado), ``stats`` (al terminar), ``diff``, y
     ``done`` (sentinel de cierre). El frontend suscribe ``EventSource`` a
     este endpoint para render incremental.
+
+    ``with_tags=0`` omite la consulta de tags/deploys del scan.
     """
     import json as _json
 
@@ -1363,7 +1374,7 @@ def flow_stream(
                 print(f"[STREAM] {repo_count}. {m.slug}: sin rama {origin} (visible=false)", file=sys.stderr)
                 yield _event("repo", missing_item)
 
-            for ev in _stream_scan(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx):
+            for ev in _stream_scan(data.client, ci, scan_repos, origin, destination, deploy_prefixes, ctx, with_tags=bool(with_tags)):
                 if ev[0] == "field":
                     # BBIT-35 P5: un campo del repo resuelto antes del item completo.
                     # {slug, field, value} + repo payload completo para merge parcial.

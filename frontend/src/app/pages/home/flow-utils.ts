@@ -122,8 +122,9 @@ export function buildFlowUrl(params: {
   scanMode: string;
   force: number;
   repos?: string[];
+  withTags?: boolean;
 }): string {
-  let url = `/api/flow?origin=${encodeURIComponent(params.origin)}&destination=${encodeURIComponent(params.dest)}&prefixes=${encodeURIComponent(params.prefixes)}&project_prefixes=${encodeURIComponent(params.projectPrefixes)}&exclude=${encodeURIComponent(params.exclude)}&mode=${params.scanMode}&force=${params.force}`;
+  let url = `/api/flow?origin=${encodeURIComponent(params.origin)}&destination=${encodeURIComponent(params.dest)}&prefixes=${encodeURIComponent(params.prefixes)}&project_prefixes=${encodeURIComponent(params.projectPrefixes)}&exclude=${encodeURIComponent(params.exclude)}&mode=${params.scanMode}&force=${params.force}&with_tags=${params.withTags ? 1 : 0}`;
   if (params.repos && params.repos.length) {
     url += `&repos=${encodeURIComponent(params.repos.join(','))}`;
   }

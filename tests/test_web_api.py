@@ -567,10 +567,10 @@ def test_flow_failed_repo_is_marked_not_500(monkeypatch):
 
     original_repo_scan = repos_mod._repo_scan
 
-    def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
+    def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None, with_tags=True):
         if repo.slug == "r1":
             raise BitbucketError("repo r1 rompido")
-        return original_repo_scan(client, ci, repo, origin, destination, clean, ctx)
+        return original_repo_scan(client, ci, repo, origin, destination, clean, ctx, with_tags=with_tags)
 
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
@@ -625,10 +625,10 @@ def test_flow_repos_param_limits_scan_retry(monkeypatch):
 
     original_repo_scan = repos_mod._repo_scan
 
-    def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
+    def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None, with_tags=True):
         if repo.slug == "r1":
             raise BitbucketError("repo r1 rompido")
-        return original_repo_scan(client, ci, repo, origin, destination, clean, ctx)
+        return original_repo_scan(client, ci, repo, origin, destination, clean, ctx, with_tags=with_tags)
 
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
@@ -2354,10 +2354,10 @@ def test_flow_stream_failed_repo_emits_error_item(monkeypatch):
 
     original_repo_scan = repos_mod._repo_scan
 
-    def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=None):
+    def _failing_repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=None, with_tags=True):
         if repo.slug == "r1":
             raise BitbucketError("repo r1 rompido")
-        return original_repo_scan(client, ci, repo, origin, destination, clean, ctx, on_field=on_field)
+        return original_repo_scan(client, ci, repo, origin, destination, clean, ctx, on_field=on_field, with_tags=with_tags)
 
     monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
     monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
@@ -2583,6 +2583,61 @@ def test_flow_stream_emits_fields_before_repo_complete(monkeypatch):
     assert stats_event["data"]["repos"] == 1
 
 
+def test_flow_with_tags_0_skip_tags_consulta(monkeypatch):
+    """BBIT-35 — `with_tags=0` en el request NO consulta tags ni deploys;
+    el default lo sigue haciendo (tags_on_commit llamado)."""
+    class StubClient:
+        tags_calls: list = []
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            StubClient.tags_calls.append((repo, commit))
+            return [{"name": "uat-42", "date": "x"}]
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return f"http://atlassian/{repo}/{branch}"
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def raw_file(self, repo, ref, path):
+            return None
+
+    from bbit_release.web.api import repos as repos_mod
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr(repos_mod, "_circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    # Sin with_tags: default 1 → se consultan tags.
+    StubClient.tags_calls = []
+    body = client.get("/api/flow", params={"origin": "release/with-tags", "prefixes": "uat", "force": 1}).json()
+    assert len(StubClient.tags_calls) == 1
+
+    # with_tags=0: no se consultan tags; el item llega sin ellos.
+    StubClient.tags_calls = []
+    body = client.get("/api/flow", params={
+        "origin": "release/no-tags", "prefixes": "uat", "with_tags": 0, "force": 1,
+    }).json()
+    assert StubClient.tags_calls == []
+    r1 = next(r for r in body["scan"]["repos"] if r["slug"] == "r1")
+    assert r1["tags"] == []
+    assert r1["match_tag"].get("uat") is None
+
+
 def test_stream_scan_emits_as_completed_not_submission_order(monkeypatch):
     """BBIT-32 — `_stream_scan` entrega cada repo apenas termina
     (as_completed): si el primer repo de la lista es el lento, los rápidos
@@ -2594,19 +2649,19 @@ def test_stream_scan_emits_as_completed_not_submission_order(monkeypatch):
     r2_done = threading.Event()
     released: list[str] = []
 
-    def _slow(client, ci, repo, origin, destination, clean, ctx=None, on_field=None):
+    def _slow(client, ci, repo, origin, destination, clean, ctx=None, on_field=None, with_tags=True):
         r2_done.wait(timeout=5)
         released.append(repo.slug)
         return ({"slug": repo.slug, "name": repo.name}, None)
 
-    def _fast(client, ci, repo, origin, destination, clean, ctx=None, on_field=None):
+    def _fast(client, ci, repo, origin, destination, clean, ctx=None, on_field=None, with_tags=True):
         released.append(repo.slug)
         if repo.slug == "r2":
             r2_done.set()
         return ({"slug": repo.slug, "name": repo.name}, None)
 
-    def _pick(client, ci, repo, origin, destination, clean, ctx=None, on_field=None):
-        return _slow(client, ci, repo, origin, destination, clean, ctx) if repo.slug == "r1" else _fast(client, ci, repo, origin, destination, clean, ctx)
+    def _pick(client, ci, repo, origin, destination, clean, ctx=None, on_field=None, with_tags=True):
+        return _slow(client, ci, repo, origin, destination, clean, ctx, on_field, with_tags) if repo.slug == "r1" else _fast(client, ci, repo, origin, destination, clean, ctx, on_field, with_tags)
 
     monkeypatch.setattr(repos_mod, "_repo_scan", _pick)
 
