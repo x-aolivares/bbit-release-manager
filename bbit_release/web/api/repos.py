@@ -87,31 +87,60 @@ def _all_repos_cached(client, prefs: list[str] | None, exclude: set[str]) -> lis
     return repos
 
 
-def _branch_repos_cached(client, origin: str, destination: str, prefs: list[str] | None, exclude: set[str]) -> list:
+def _branch_repos_cached(
+    client,
+    origin: str,
+    destination: str,
+    prefs: list[str] | None,
+    exclude: set[str],
+    include_missing: bool = False,
+) -> list:
     """Repos con la rama, con caché SQLite (tabla branch_repos).
 
     En el primer llamado usa la lista completa cacheada como base para evitar
     re-barrer el workspace (el `list_repos` paginado). Si la lista completa
     tampoco está disponible/cacheada, cae en `repos_with_branch` que la obtiene.
-    
+
+    P3 (BBIT-35): la cache persiste TODOS los repos del scope con su estado de
+    rama (``branch_state`` = ``found`` | ``not_found`` y ``resolved_branch``).
+    Con ``include_missing=True`` devuelve también los repos sin la rama; por
+    defecto devuelve solo los ``found`` (retrocompatible con el resto del flujo,
+    diff/PRs esperan únicamente repos con la rama).
+
     BBIT-33: El cloning ocurre dentro de repos_with_branch() (no aquí).
     """
     cache = get_cache()
     cached = cache.get_branch_repos(origin, destination, prefs, exclude)
     if cached is not None:
         from types import SimpleNamespace
-        return [SimpleNamespace(**{**r, "slug": r["repo_name"]}) for r in cached]
+        out = [SimpleNamespace(**{**r, "slug": r["repo_name"]}) for r in cached]
+        if not include_missing:
+            out = [r for r in out if getattr(r, "branch_state", "") != "not_found"]
+        return out
     base = _all_repos_cached(client, prefs, exclude)
+    missing: list = []
     if base is not None:
         repos = client.repos_with_branch(origin, prefixes=prefs, repos=base)
+        founded_slugs = {r.slug for r in repos}
+        missing = [
+            r for r in base if r.slug not in founded_slugs
+        ]
     else:
         repos = client.repos_with_branch(origin, prefixes=prefs)
     
     items = [{
         "repo_name": r.slug, "name": r.name, "workspace": r.workspace,
         "default_branch": r.default_branch, "resolved_branch": getattr(r, "resolved_branch", ""),
+        "branch_state": "found",
     } for r in repos]
+    items += [{
+        "repo_name": r.slug, "name": r.name, "workspace": r.workspace,
+        "default_branch": r.default_branch, "resolved_branch": "",
+        "branch_state": "not_found",
+    } for r in missing]
     cache.set_branch_repos(origin, destination, prefs, exclude, items)
+    if include_missing:
+        return repos + missing
     return repos
 
 
@@ -929,6 +958,8 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None):
         "slug": repo.slug,
         "name": repo.name,
         "workspace": repo.workspace,
+        "branch_state": "found",
+        "resolved_branch": resolved,
         "branch_url": client.branch_url(repo.slug, origin),
         "commit": commit,
         "no_changes": no_changes,
@@ -1029,7 +1060,15 @@ def _stream_scan(client, ci, repos, origin, destination, clean, ctx=None):
                 # BBIT-33: Si un repo no tiene la rama, emitir evento repo con visible=false
                 if item is None:
                     log.debug("stream_scan: %s ignorado (sin rama %s)", repo.slug, origin)
-                    yield ({"slug": repo.slug, "visible": False, "reason": "branch_not_found"}, None)
+                    yield ({
+                        "slug": repo.slug,
+                        "name": getattr(repo, "name", repo.slug),
+                        "workspace": getattr(repo, "workspace", ""),
+                        "visible": False,
+                        "reason": "branch_not_found",
+                        "branch_state": "not_found",
+                        "resolved_branch": "",
+                    }, None)
                     continue
                 yield item, err
             except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
@@ -1283,14 +1322,15 @@ def flow_stream(
                 yield _event("error", {"message": ci_error_local})
 
             items.sort(key=lambda x: x["slug"])
-            with_pr = sum(1 for it in items if it["pr"].get("exists"))
-            prod = sum(1 for it in items if (it["deploys"].get("prod") or {}).get("status") == "success")
+            visible_items = [it for it in items if it.get("visible", True)]
+            with_pr = sum(1 for it in visible_items if (it.get("pr") or {}).get("exists"))
+            prod = sum(1 for it in visible_items if ((it.get("deploys") or {}).get("prod") or {}).get("status") == "success")
             stats = {
-                "repos": len(items),
+                "repos": len(visible_items),
                 "with_pr": with_pr,
                 "prod": prod,
             }
-            print(f"[STREAM] DONE: {len(items)} repos, {with_pr} con PR", file=sys.stderr)
+            print(f"[STREAM] DONE: {len(visible_items)} repos, {with_pr} con PR", file=sys.stderr)
             yield _event("stats", stats)
 
             dest_by_repo = master_fut.result() if master_fut is not None else None

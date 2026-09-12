@@ -54,6 +54,8 @@ interface ScanRepo {
   error?: string | null;
   visible?: boolean;  // BBIT-33: false = no mostrar en tabla (sin rama)
   reason?: string;    // BBIT-33: "branch_not_found" u otro motivo
+  branch_state?: 'found' | 'not_found';  // BBIT-35 P3: estado de rama persistido
+  resolved_branch?: string;              // BBIT-35 P3: rama efectiva (o variante)
   tags: TagRow[];
   pr: PrInfo;
   deploys: Record<string, DeployInfo | null>;
