@@ -103,47 +103,51 @@ def _branch_repos_cached(
 
     P3 (BBIT-35): la cache persiste TODOS los repos del scope con su estado de
     rama (``branch_state`` = ``found`` | ``not_found`` y ``resolved_branch``).
-    Con ``include_missing=True`` devuelve también los repos sin la rama; por
-    defecto devuelve solo los ``found`` (retrocompatible con el resto del flujo,
-    diff/PRs esperan únicamente repos con la rama).
+
+    BBIT-36 P1: el índice es filter-free — se cachea TODO el workspace con su
+    estado de rama keyed por (origin, destination) sin prefijos/blacklist, y
+    los filtros se aplican como VISTA al leer (``_apply_filters``). Cambiar
+    `prefs`/`exclude` no invalida el índice ni vuelve a consultar Bitbucket
+    (cambiar de prefijo = ocultar/mostrar filas, no re-escaneo).
+
+    Con ``include_missing=True`` devuelve también los repos sin la rama (ya
+    filtrados); por defecto devuelve solo los ``found`` (retrocompatible con el
+    resto del flujo, diff/PRs esperan únicamente repos con la rama).
 
     BBIT-33: El cloning ocurre dentro de repos_with_branch() (no aquí).
     """
     cache = get_cache()
     from types import SimpleNamespace
-    cached = cache.get_branch_repos(origin, destination, prefs, exclude)
+    cached = cache.get_branch_repos(origin, destination, None, None)
     if cached is not None:
         out = [SimpleNamespace(**{**r, "slug": r["repo_name"]}) for r in cached]
-        if not include_missing:
-            out = [r for r in out if getattr(r, "branch_state", "") != "not_found"]
-        return out
-    base = _all_repos_cached(client, prefs, exclude)
-    missing: list = []
-    if base is not None:
-        repos = client.repos_with_branch(origin, prefixes=prefs, repos=base)
-        founded_slugs = {r.slug for r in repos}
-        missing = [
-            r for r in base if r.slug not in founded_slugs
-        ]
     else:
-        repos = client.repos_with_branch(origin, prefixes=prefs)
-    
-    items = [{
-        "repo_name": r.slug, "name": r.name, "workspace": r.workspace,
-        "default_branch": r.default_branch, "resolved_branch": getattr(r, "resolved_branch", ""),
-        "branch_state": "found",
-    } for r in repos]
-    items += [{
-        "repo_name": r.slug, "name": r.name, "workspace": r.workspace,
-        "default_branch": r.default_branch, "resolved_branch": "",
-        "branch_state": "not_found",
-    } for r in missing]
-    cache.set_branch_repos(origin, destination, prefs, exclude, items)
-    if include_missing:
-        # Devolver desde el set persistido para que TODOS los items lleven
-        # branch_state/resolved_branch (los repos de repos_with_branch crudos no).
-        return [SimpleNamespace(**{**it, "slug": it["repo_name"]}) for it in items]
-    return repos
+        base = _all_repos_cached(client, None, None)
+        missing: list = []
+        if base is not None:
+            repos = client.repos_with_branch(origin, prefixes=None, repos=base)
+            founded_slugs = {r.slug for r in repos}
+            missing = [
+                r for r in base if r.slug not in founded_slugs
+            ]
+        else:
+            repos = client.repos_with_branch(origin, prefixes=None)
+        items = [{
+            "repo_name": r.slug, "name": r.name, "workspace": r.workspace,
+            "default_branch": r.default_branch, "resolved_branch": getattr(r, "resolved_branch", ""),
+            "branch_state": "found",
+        } for r in repos]
+        items += [{
+            "repo_name": r.slug, "name": r.name, "workspace": r.workspace,
+            "default_branch": r.default_branch, "resolved_branch": "",
+            "branch_state": "not_found",
+        } for r in missing]
+        cache.set_branch_repos(origin, destination, None, None, items)
+        out = [SimpleNamespace(**{**it, "slug": it["repo_name"]}) for it in items]
+    out = _apply_filters(out, prefs, exclude)
+    if not include_missing:
+        out = [r for r in out if getattr(r, "branch_state", "") != "not_found"]
+    return out
 
 
 def _suggests_ssm(file, prefixes) -> bool:
@@ -836,6 +840,32 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
     
     resolved = getattr(repo, "resolved_branch", "") or ""
 
+    # BBIT-36 P2: scan por repo en SQLite keyed por (origin, destination,
+    # slug). Cache hit → se sirve SIN re-consultar Bitbucket/CircleCI: cambiar
+    # project_prefixes/blacklist = vista (mostrar/ocultar filas), no re-escaneo.
+    # Solo se re-consulta si el request pide tags (with_tags=1) y el payload
+    # cacheado no los trae (se almacenó con with_tags=0).
+    request_with = bool(with_tags)
+    cache = get_cache()
+    cached = cache.get_scan_repo(origin, destination, repo.slug)
+    if cached is not None and (not request_with or cached.get("with_tags")):
+        item = dict(cached["item"])
+        if not request_with:
+            # Contrato with_tags=0: el item llega sin tags/deploys/match_tag.
+            item["tags"] = []
+            item["deploys"] = {e.lower(): None for e in clean}
+            item["match_tag"] = {e.lower(): None for e in clean}
+            item["ci_project"] = None
+        if ctx is not None:
+            # Reusa el PR/origin_ref ya resueltos para que el diff no repita
+            # find_pr/commit_for_branch sobre repos cacheados (BBIT-36 P4).
+            _c = ctx.setdefault(repo.slug, {})
+            if "pr" not in _c:
+                _c["pr"] = cached.get("pr_raw")
+            if "origin_ref" not in _c:
+                _c["origin_ref"] = item.get("commit", "")
+        return item, cached.get("ci_error")
+
     def _emit(field, value):
         if on_field is not None:
             try:
@@ -997,6 +1027,12 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
         "ci_project": ci_project,
         "ci_vcs": ci.vcs if ci else None,
     }
+    cache.set_scan_repo(origin, destination, repo.slug, {
+        "item": item,
+        "with_tags": request_with,
+        "ci_error": ci_error,
+        "pr_raw": pr,
+    })
     return item, ci_error
 
 
@@ -1225,7 +1261,7 @@ def flow(
     # completo ya está cacheado, se reusa el diff y no se lanza master params.
     cached_flow = None
     if only_repos:
-        cached_flow = cache.get_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode)
+        cached_flow = cache.get_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode, with_tags=with_tags)
 
     dest_by_repo = None
     if cached_flow is None and mode == "diff":
@@ -1273,7 +1309,7 @@ def flow(
         "diff": diff_raw,
     }
     if not only_repos:
-        cache.set_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode, result)
+        cache.set_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode, result, with_tags=with_tags)
     result["diff"] = _enrich_diff_ssm(result["diff"], cfg_diff)
     return result
 

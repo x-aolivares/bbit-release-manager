@@ -1842,7 +1842,9 @@ def test_scan_respects_exclude(monkeypatch):
     }).json()
     slugs = [r["slug"] for r in body["scan"]["repos"]]
     assert slugs == ["trans-a"]
-    assert seen_prefixes == [["trans"]]
+    # BBIT-36 P1: los filtros son una VISTA, no se pasan al backend. El índice
+    # de ramas se obtiene completo (prefixes=None) y se filtra al leer.
+    assert seen_prefixes == [None]
 
 
 def test_create_missing_prs_filters_prefixes(monkeypatch):
@@ -2020,6 +2022,177 @@ def test_scan_force_refreshes(monkeypatch):
 
     client.get("/api/flow", params={**params, "force": 1})
     assert calls["branch"] == 2  # force consulta de nuevo
+
+
+def test_flow_cambiar_filtro_no_reescanea_nada(monkeypatch):
+    """BBIT-36 P1/P2 — cambiar project_prefixes es una VISTA: no se vuelven a
+    consultar los repos ya escaneados para el mismo par de ramas.
+
+    El índice branch_repos y el scan por repo se sirven de SQLite; el segundo
+    request (otro filtro) no llama find_pr/commit/tags/commits_ahead."""
+    calls = {"find_pr": 0, "tags": 0, "ahead": 0, "origin_commits": 0, "branch": 0}
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            calls["branch"] += 1
+            return [
+                SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master"),
+            ]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            if branch == "release/x":
+                calls["origin_commits"] += 1
+            return "abc123"
+        def has_commits_ahead(self, repo, branch, base):
+            calls["ahead"] += 1
+            return False
+        def tags_on_commit(self, repo, commit):
+            calls["tags"] += 1
+            return []
+        def find_pr(self, repo, origin, destination):
+            calls["find_pr"] += 1
+            return None
+        def branch_url(self, repo, branch):
+            return "u"
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def raw_file(self, repo, ref, path):
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    # 1º: sin filtros → se escanean los 2 repos.
+    first = client.get("/api/flow", params={"origin": "release/x"}).json()
+    assert [r["slug"] for r in first["scan"]["repos"]] == ["r1", "r2"]
+    assert calls == {"find_pr": 2, "tags": 2, "ahead": 2, "origin_commits": 2, "branch": 1}
+
+    # 2º: con project_prefixes=r1 → solo cambia la vista; CERO consultas nuevas
+    # al scan (index branch_repos + scan_repo son cache hits).
+    second = client.get("/api/flow", params={"origin": "release/x", "project_prefixes": "r1"}).json()
+    assert [r["slug"] for r in second["scan"]["repos"]] == ["r1"]
+    assert calls == {"find_pr": 2, "tags": 2, "ahead": 2, "origin_commits": 2, "branch": 1}
+
+
+def test_flow_ampliar_filtro_consulta_solo_repos_nuevos(monkeypatch):
+    """BBIT-36 P2 — al ampliar el filtro se consulta SOLO el repo que aparece
+    por primera vez; los ya cacheados no se tocan."""
+    calls = {"find_pr": 0}
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return [
+                SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master"),
+            ]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            calls["find_pr"] += 1
+            return None
+        def branch_url(self, repo, branch):
+            return "u"
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def raw_file(self, repo, ref, path):
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    client.get("/api/flow", params={"origin": "release/x", "project_prefixes": "r1"}).json()
+    assert calls["find_pr"] == 1  # solo r1
+
+    second = client.get("/api/flow", params={"origin": "release/x", "project_prefixes": "r1,r2"}).json()
+    assert [r["slug"] for r in second["scan"]["repos"]] == ["r1", "r2"]
+    assert calls["find_pr"] == 2  # r2 es nuevo; r1 vino del cache
+
+
+def test_flow_tags_on_demand_desde_cache_sin_tags(monkeypatch):
+    """BBIT-36 P3 — con with_tags=0 el scan se cachea SIN tags; el pedido
+    posterior con with_tags=1 re-resuelve tags/deploys (los datos nuevos que
+    el usuario pidió) re-consultando el servicio."""
+    calls = {"tags": 0}
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            calls["tags"] += 1
+            return [{"name": "uat-42", "date": "x"}]
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return "u"
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def raw_file(self, repo, ref, path):
+            return None
+
+    class StubCi:
+        vcs = "bb"
+        def deploys_for_tags(self, repo, tags):
+            return {}
+        def project_id(self, repo):
+            return "p1"
+        def deploy_for_tag(self, repo, tag, commit, prefix):
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: StubCi())
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/flow", params={"origin": "release/x", "with_tags": 0}).json()
+    assert body["scan"]["repos"][0]["tags"] == []
+    assert calls["tags"] == 0
+
+    body = client.get("/api/flow", params={"origin": "release/x", "with_tags": 1}).json()
+    tags = body["scan"]["repos"][0]["tags"]
+    assert [t["name"] for t in tags] == ["uat-42"]
+    assert calls["tags"] == 1  # ya cacheados sin tags → se resuelven recien aca
 
 
 def test_spa_serves_build_when_present():

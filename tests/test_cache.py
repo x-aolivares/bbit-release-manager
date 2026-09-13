@@ -514,6 +514,50 @@ def test_branch_repos_overwrite(tmp_path):
     assert cache.get_branch_repos("release/x", "master", None, None) == [{"repo_name": "new"}]
 
 
+def test_branch_repos_key_filter_free(tmp_path):
+    """BBIT-36 P1 — el índice de ramas ignora los filtros en el key.
+
+    El índice persiste TODOS los repos del par de ramas: guardar con
+    prefijos/blacklist y leer con otros filtros debe ser hit (los filtros son
+    una vista, no parte de la identidad de la consulta).
+    """
+    cache = _make_cache(tmp_path)
+    repos = [
+        {"repo_name": "trans-a", "name": "TA", "workspace": "ws", "default_branch": "master", "branch_state": "found"},
+        {"repo_name": "trans-b", "name": "TB", "workspace": "ws", "default_branch": "master", "branch_state": "found"},
+        {"repo_name": "core-app", "name": "CA", "workspace": "ws", "default_branch": "master", "branch_state": "not_found"},
+    ]
+    cache.set_branch_repos("release/x", "master", ["trans"], {"trans-b"}, repos)
+    assert cache.get_branch_repos("release/x", "master", ["other-prefix"], {"x", "y"}) == repos
+    assert cache.get_branch_repos("release/x", "master", None, None) == repos
+
+
+def test_scan_repo_roundtrip_and_distinct_by_slug(tmp_path):
+    """BBIT-36 P2 — el scan se cachea por repositorio, key (origin, dest, slug)."""
+    cache = _make_cache(tmp_path)
+    cache.set_scan_repo("release/x", "master", "r1", {"item": {"slug": "r1"}, "with_tags": True})
+    cache.set_scan_repo("release/x", "master", "r2", {"item": {"slug": "r2"}, "with_tags": False})
+    assert cache.get_scan_repo("release/x", "master", "r1")["item"]["slug"] == "r1"
+    assert cache.get_scan_repo("release/x", "master", "r2")["item"]["slug"] == "r2"
+    assert cache.get_scan_repo("release/x", "master", "r2")["with_tags"] is False
+    assert cache.get_scan_repo("release/x", "master", "r3") is None
+
+
+def test_scan_repo_distinct_by_branch_pair(tmp_path):
+    """El mismo repo en otro par de ramas NO comparte item de scan."""
+    cache = _make_cache(tmp_path)
+    cache.set_scan_repo("release/x", "master", "r1", {"item": {"slug": "r1"}, "with_tags": True})
+    assert cache.get_scan_repo("release/x", "staging", "r1") is None
+
+
+def test_invalidate_borra_scan_repo_por_par(tmp_path):
+    """force/TTL invalidan los items scan_repo del par (origin, destination)."""
+    cache = _make_cache(tmp_path)
+    cache.set_scan_repo("release/x", "master", "r1", {"item": {"slug": "r1"}, "with_tags": True})
+    cache.invalidate("release/x", "master", {})
+    assert cache.get_scan_repo("release/x", "master", "r1") is None
+
+
 # -- invalidación -----------------------------------------------------------
 
 def test_invalidate_matching_repositories(tmp_path):
