@@ -82,6 +82,7 @@ def _fake_config(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _clean_sessions():
+    repos_mod._FLOW_MEMORY.clear()
     for sid in list(session_mod._sessions):
         destroy_session(sid)
     yield
@@ -3551,3 +3552,190 @@ def test_flow_stream_emits_query_diff_event(monkeypatch):
     assert "added" in payload
     assert "removed" in payload
     assert "changed" in payload
+
+
+# ---------------------------------------------------------------------------
+# BBIT-56: memoria en proceso del último scan (plan paso 2)
+# ---------------------------------------------------------------------------
+
+def test_flow_stream_replays_identical_consult_from_memory(monkeypatch):
+    """Segunda consulta idéntica en flow_stream replay desde RAM sin llamar APIs."""
+    import json
+    from bbit_release.web.api import repos as _repos
+    call_count = {"repos_with_branch": 0}
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True), "Jane (@jane)")
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            call_count["repos_with_branch"] += 1
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr(_repos, "_circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    params = {"origin": "release/x", "prefixes": "uat", "with_diff": 0}
+
+    with client.stream("GET", "/api/flow/stream", params=params) as resp:
+        data1 = "".join(resp.iter_text())
+    assert call_count["repos_with_branch"] >= 1
+    assert "event: repo" in data1
+    assert "event: done" in data1
+    count_before = call_count["repos_with_branch"]
+
+    with client.stream("GET", "/api/flow/stream", params=params) as resp:
+        data2 = "".join(resp.iter_text())
+    assert call_count["repos_with_branch"] == count_before
+    assert "event: repo" in data2
+    assert "event: done" in data2
+    lines2 = data2.splitlines()
+    idx_qd2 = lines2.index("event: query_diff")
+    qd2 = json.loads(lines2[idx_qd2 + 1].replace("data: ", ""))
+    assert qd2["identical"] is True
+
+
+def test_flow_returns_memory_on_identical_second_call(monkeypatch):
+    """Segunda /api/flow idéntica devuelve resultado desde memoria sin re-escanear."""
+    from bbit_release.web.api import repos as _repos
+    call_count = {"repos_with_branch": 0}
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True), "Jane (@jane)")
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            call_count["repos_with_branch"] += 1
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr(_repos, "_circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    params = {"origin": "release/x", "prefixes": "uat", "with_diff": 0}
+    r1 = client.get("/api/flow", params=params).json()
+    assert call_count["repos_with_branch"] >= 1
+    assert r1["query_diff"]["identical"] is False
+    repos_first = r1["scan"]["repos"]
+
+    count_after_first = call_count["repos_with_branch"]
+    r2 = client.get("/api/flow", params=params).json()
+    assert call_count["repos_with_branch"] == count_after_first
+    assert r2["query_diff"]["identical"] is True
+    assert r2["scan"]["repos"] == repos_first
+
+
+def test_flow_stream_force_ignores_memory(monkeypatch):
+    """force=1 fuerza re-escaneo completo ignorando memoria en proceso."""
+    from bbit_release.web.api import repos as _repos
+    call_count = {"repos_with_branch": 0}
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True), "Jane (@jane)")
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            call_count["repos_with_branch"] += 1
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr(_repos, "_circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    params = {"origin": "release/x", "prefixes": "uat", "with_diff": 0}
+    with client.stream("GET", "/api/flow/stream", params=params) as resp:
+        "".join(resp.iter_text())
+    first_count = call_count["repos_with_branch"]
+
+    with client.stream("GET", "/api/flow/stream", params={**params, "force": 1}) as resp:
+        "".join(resp.iter_text())
+    assert call_count["repos_with_branch"] == first_count + 1
+
+
+def test_flow_stream_replay_emits_diff_when_stored(monkeypatch):
+    """Cuando with_diff=1 el stream almacena diff y lo emite en replay."""
+    from bbit_release.web.api import repos as _repos
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True), "Jane (@jane)")
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def raw_file(self, repo, ref, path):
+            return None
+
+    def _fake_diff(*a, **k):
+        return {"params": [], "removed": []}
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr(_repos, "_circleci", lambda: None)
+    monkeypatch.setattr(repos_mod, "_compute_diff", _fake_diff)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    params = {"origin": "release/x", "prefixes": "uat", "with_diff": 1}
+    with client.stream("GET", "/api/flow/stream", params=params) as resp:
+        data1 = "".join(resp.iter_text())
+    assert "event: diff" in data1
+
+    with client.stream("GET", "/api/flow/stream", params=params) as resp:
+        data2 = "".join(resp.iter_text())
+    assert "event: diff" in data2
