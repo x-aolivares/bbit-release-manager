@@ -1010,12 +1010,7 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
         
         # Obtener tags
         tags = tags_fut.result() if tags_fut else []
-        
-        # Request 5: Obtener branch head actual (solo si hay PR)
-        branch_head_fut = None
-        if ci is not None and pr and pr.get("source_commit"):
-            branch_head_fut = ex.submit(lambda: client.commit_for_branch(repo.slug, origin, resolved=resolved))
-    
+
     # FASE 2: Recopilar resultados (ya están esperados)
     if ctx is not None:
         ctx.setdefault(repo.slug, {})["pr"] = pr
@@ -1026,17 +1021,25 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
         no_changes = not has_commits_fut.result()
     _emit("no_changes", no_changes)
     
+    # BBIT-49: match_commit estricto = el commit en análisis. Se elimina el
+    # fallback a la cabeza actual de la rama (branch_head): puede avanzar tras
+    # el deploy y asociaría el deploy del tag a un HEAD que nada tiene que ver.
+    # Los tags se resolvieron sobre `commit` (tags_on_commit), así que la
+    # provenance real del deploy sale del vcs.revision del pipeline del tag
+    # (deploy_for_tag/deploys_for_tags, BBIT-48) comparado contra ESTE commit.
+    # Tanto el scan como el diff verifican el mismo commit → el estado deploy
+    # coincide entre ambos paths.
     match_commit = commit
-    if ci is not None and pr and pr.get("source_commit") and branch_head_fut:
-        branch_head = branch_head_fut.result()
+    if ci is not None and pr and pr.get("source_commit") and pr["source_commit"] != commit:
         log.info(
-            "scan: %s pr.source_commit=%s branch_head=%s match_commit=%s",
-            repo.slug,
-            commit[:12],
-            (branch_head or "?")[:12],
-            (branch_head or commit)[:12],
+            "scan: %s commit=%s pr.source_commit=%s (no se usa como match_commit)",
+            repo.slug, commit[:12], pr["source_commit"][:12],
         )
-        match_commit = branch_head or commit
+    elif ci is not None and pr:
+        log.info(
+            "scan: %s match_commit=%s (commit en análisis, PR presente)",
+            repo.slug, commit[:12],
+        )
     
     # BBIT-42: el slice vivo (tags/deploys) se resuelve aparte del item
     # estático y se cachea por (slug, commit) con el TTL corto de CircleCI.

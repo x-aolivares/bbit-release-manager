@@ -878,6 +878,60 @@ def test_scan_resolves_full_hash_with_pr(monkeypatch):
     assert calls.count("release/x") == 1  # hash completo resuelto una sola vez
 
 
+def test_scan_match_commit_no_usa_branch_head(monkeypatch):
+    """BBIT-49: match_commit es el commit en análisis, nunca la cabeza actual."""
+    calls = {"branches": [], "deploy_commit": None}
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def diff(self, repo, destination, origin):
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            calls["branches"].append(branch)
+            return "dddddddddddddddddddddddddddddddddddddddd"
+        def tags_on_commit(self, repo, commit):
+            return [{"name": "uat-7", "date": "x"}]
+        def find_pr(self, repo, origin, destination):
+            # PR abierto pero con SU propia fuente distinta del head actual:
+            # el source_commit NO debe desplazar al commit del diff.
+            return {"id": 1, "title": "T", "url": "u", "state": "OPEN",
+                    "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+
+    class StubCi:
+        vcs = "bb"
+        def deploys_for_tags(self, repo, tags, commit=""):
+            return {}
+        def deploy_for_tag(self, repo, tag, commit, prefix):
+            calls["deploy_commit"] = commit
+            return SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7", job="deploy-uat", approval="success")
+        def project_id(self, repo):
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: StubCi())
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/flow", params={"origin": "release/x", "prefixes": "uat"}).json()
+    assert body["scan"]["repos"][0]["deploys"]["uat"]["status"] == "success"
+    assert calls["deploy_commit"] == "dddddddddddddddddddddddddddddddddddddddd"
+    assert calls["branches"].count("release/x") == 1  # sin duplicado por branch_head
+
+
 def test_generate_tags(monkeypatch):
     class StubClient:
         def __init__(self, ws, tok, **kw):
