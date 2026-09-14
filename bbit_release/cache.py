@@ -1275,19 +1275,19 @@ class ReleaseCache:
 
     # -- caché agresiva: repos por prefijo + branches ---------------------------
 
-    def get_repos_by_prefix(self, workspace: str, prefixes: list[str] | None) -> list[dict] | None:
-        """Repos del workspace filtrados por prefijos (caché 30min)."""
-        prefixes_key = ",".join(sorted(prefixes or [])) or "all"
-        return self._get_cached(
-            "get_user_repositories", workspace, prefixes_key, {}
-        )
+    def get_repos_by_prefix(self, workspace: str, prefixes: list[str] | None = None) -> list[dict] | None:
+        """Índice completo de repos del workspace, key filter-free (BBIT-46).
 
-    def set_repos_by_prefix(self, workspace: str, prefixes: list[str] | None, repos: list[dict]) -> None:
-        """Cachea lista de repos del workspace (30min TTL)."""
-        prefixes_key = ",".join(sorted(prefixes or [])) or "all"
-        self._set_cached(
-            "get_user_repositories", workspace, prefixes_key, {}, repos
-        )
+        Los prefijos se ignoran en la clave: el índice persiste TODO el
+        workspace y el filtrado por prefijo/blacklist es una vista del
+        llamador (``list_repos``/``_all_repos_cached``). Cambiar prefijos no
+        invalida el índice ni vuelve a barrer Bitbucket.
+        """
+        return self._get_cached("get_user_repositories", workspace, "all", {})
+
+    def set_repos_by_prefix(self, workspace: str, prefixes: list[str] | None = None, repos: list[dict] | None = None) -> None:
+        """Cachea el índice completo de repos del workspace (30min TTL)."""
+        self._set_cached("get_user_repositories", workspace, "all", {}, repos or [])
 
     def get_repo_branches(self, workspace: str, repo: str) -> list[dict] | None:
         """Branches de un repo (caché 10min)."""

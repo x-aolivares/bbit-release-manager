@@ -251,21 +251,6 @@ class BitbucketClient:
         filter_names: list[str] | None = None,
         prefixes: list[str] | None = None,
     ) -> list[Repository]:
-        # CACHE L1: Si hay prefijos, intentar obtener desde caché primero
-        if self.cache and prefixes:
-            cached_repos = self.cache.get_repos_by_prefix(self.workspace, prefixes)
-            if cached_repos is not None:
-                repos = [
-                    Repository(
-                        slug=r["slug"],
-                        name=r["name"],
-                        workspace=r.get("workspace", self.workspace),
-                        default_branch=r.get("default_branch", "master"),
-                    )
-                    for r in cached_repos
-                ]
-                return repos
-        
         allowed = {n.lower() for n in (filter_names or [])}
         prefs = [p.lower() for p in (prefixes or [])]
 
@@ -277,6 +262,36 @@ class BitbucketClient:
                 return False
             return True
 
+        def _dump(repos) -> list[dict]:
+            return [
+                {
+                    "slug": r.slug,
+                    "name": r.name,
+                    "workspace": r.workspace,
+                    "default_branch": r.default_branch,
+                }
+                for r in repos
+            ]
+
+        def _build(items: list[dict]) -> list[Repository]:
+            return [
+                Repository(
+                    slug=r["slug"],
+                    name=r["name"],
+                    workspace=r.get("workspace", self.workspace),
+                    default_branch=r.get("default_branch", "master"),
+                )
+                for r in items if _keep(r["slug"])
+            ]
+
+        # CACHE L1 (BBIT-46): índice completo filter-free keyed por workspace.
+        # Prefijos/filter_names se aplican como VISTA al materializar; cambiar
+        # de prefijo no invalida el índice ni vuelve a barrer el workspace.
+        if self.cache is not None:
+            cached_index = self.cache.get_repos_by_prefix(self.workspace, None)
+            if cached_index is not None:
+                return _build(cached_index)
+
         repos: list[Repository] = []
         url: str | None = f"/repositories/{self.workspace}"
         params: dict | None = {"pagelen": 100, "role": "member"}
@@ -287,8 +302,6 @@ class BitbucketClient:
             params = None
             for item in payload.get("values", []):
                 slug = item.get("slug", "")
-                if not _keep(slug):
-                    continue
                 ws = (item.get("workspace") or {}).get("slug") or self.workspace
                 repos.append(
                     Repository(
@@ -301,21 +314,10 @@ class BitbucketClient:
             url = (payload.get("next") or "").replace(API_BASE, "")
             if not url:
                 break
-        
-        # CACHE L1: Guardar repos por prefijo si hay caché
-        if self.cache and prefixes:
-            repos_data = [
-                {
-                    "slug": r.slug,
-                    "name": r.name,
-                    "workspace": r.workspace,
-                    "default_branch": r.default_branch,
-                }
-                for r in repos
-            ]
-            self.cache.set_repos_by_prefix(self.workspace, prefixes, repos_data)
-        
-        return repos
+
+        if self.cache is not None:
+            self.cache.set_repos_by_prefix(self.workspace, None, _dump(repos))
+        return [r for r in repos if _keep(r.slug)]
 
     def has_branch(self, slug: str, branch: str) -> bool:
         resp = self._request("GET", f"/repositories/{self.workspace}/{slug}/refs/branches/{branch}")

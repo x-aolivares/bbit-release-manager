@@ -67,9 +67,11 @@ def _apply_filters(repos, prefs: list[str] | None, blocked: set[str]) -> list:
 def _all_repos_cached(client, prefs: list[str] | None, exclude: set[str]) -> list | None:
     """Todos los repos del workspace (lista completa), con caché SQLite.
 
-    Key por prefijos/exclusión (sin origin → todo el workspace). Comparte la
-    misma cache que /api/repos sin origin, así el barrido paginado de
-    `list_repos` no se repite entre endpoints.
+    BBIT-46: el índice es filter-free keyed por workspace (``set_repos_by_prefix``),
+    sin prefijos/blacklist en la clave; los filtros se aplican como VISTA por el
+    llamador (``_apply_filters``). Cambiar prefijos no invalida el índice ni
+    vuelve a barrer el workspace. Comparte el índice con `list_repos`, de modo
+    que el barrido paginado no se repite entre endpoints.
 
     Si el cliente no expone `list_repos` (stubs de test), devuelve None y el
     llamador cae en `repos_with_branch` sin base.
@@ -77,13 +79,13 @@ def _all_repos_cached(client, prefs: list[str] | None, exclude: set[str]) -> lis
     if not hasattr(client, "list_repos"):
         return None
     cache = get_cache()
-    cached = cache.get_repos("", "all", prefs, exclude)
+    cached = cache.get_repos_by_prefix(client.workspace, None)
     if cached is not None:
         from types import SimpleNamespace
         return [SimpleNamespace(**r) for r in cached]
-    repos = client.list_repos(prefixes=prefs)
+    repos = client.list_repos(prefixes=None)
     items = [{"slug": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch} for r in repos]
-    cache.set_repos("", "all", prefs, exclude, items)
+    cache.set_repos_by_prefix(client.workspace, None, items)
     return repos
 
 

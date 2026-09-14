@@ -203,6 +203,35 @@ def test_repos_with_branch():
     assert found[0].resolved_branch == "release"
 
 
+def test_list_repos_two_prefixes_one_workspace_scan(tmp_path):
+    """BBIT-46: prefijos distintos comparten el índice filter-free sin re-barrer."""
+    from bbit_release.cache import ReleaseCache
+
+    hits = {"repos": 0}
+
+    def repos_list(request):
+        hits["repos"] += 1
+        return httpx.Response(200, json={"values": [
+            {"slug": "svc-accounting-api", "name": "Accounting API", "workspace": {"slug": "ws"}},
+            {"slug": "svc-billing", "name": "Billing", "workspace": {"slug": "ws"}},
+        ]})
+
+    routes = {("GET", "/2.0/repositories/ws"): repos_list}
+    cache = ReleaseCache(db_path=tmp_path / "index.db")
+    client = BitbucketClient("ws", "tok", cache=cache, transport=_transport(routes))
+    try:
+        first = client.list_repos(prefixes=["svc-accounting-"])
+        assert [r.slug for r in first] == ["svc-accounting-api"]
+        assert hits["repos"] == 1
+
+        second = client.list_repos(prefixes=["svc-"])
+        assert [r.slug for r in second] == ["svc-accounting-api", "svc-billing"]
+        assert hits["repos"] == 1  # una sola búsqueda del workspace
+    finally:
+        client.close()
+        cache.close()
+
+
 def test_repos_with_branch_delta_cache(tmp_path):
     """Con cache, solo los repos nuevos se resuelven contra la API en re-consultas."""
     from bbit_release.cache import ReleaseCache
@@ -247,11 +276,20 @@ def test_repos_with_branch_delta_cache(tmp_path):
         assert [r.slug for r in first] == ["a"]
         assert hits["branch"] == 2
 
-        routes[("GET", "/2.0/repositories/ws")] = repos_list_with_c
-        routes[("GET", "/2.0/repositories/ws/c/refs/branches/release")] = branch_c
-
         second = client.repos_with_branch("release")
-        assert [r.slug for r in second] == ["a", "c"]
+        # BBIT-46: el universo (list_repos) queda cacheado filter-free; el repo
+        # nuevo "c" no aparece hasta invalidar el índice o que expire su TTL, y
+        # a/b NO se re-resuelven (delta de branch_refs intacto).
+        assert [r.slug for r in second] == ["a"]
+        assert hits["branch"] == 2
+
+        routes[("GET", "/2.0/repositories/ws/c/refs/branches/release")] = branch_c
+        # Nuevo repo: invalidar SOLO el índice de repos (no el delta de ramas).
+        cache.invalidate("ws", "all", {})
+        routes[("GET", "/2.0/repositories/ws")] = repos_list_with_c
+
+        third = client.repos_with_branch("release")
+        assert [r.slug for r in third] == ["a", "c"]
         assert hits["branch"] == 3
     finally:
         client.close()
