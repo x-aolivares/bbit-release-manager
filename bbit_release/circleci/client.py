@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Callable
 
 import httpx
 
-from ..http import get_global_rate_limiter, MAX_RETRIES, RETRY_BASE_DELAY
+from ..http import get_rate_limiter, MAX_RETRIES, RETRY_BASE_DELAY
 
 if TYPE_CHECKING:
     from ..cache import ReleaseCache
@@ -169,7 +169,7 @@ class CircleCiClient:
         if stash is not None and stash["status"] == 200:
             return json.loads(stash["response"])
         last_error: CircleCiError | None = None
-        _rate_limiter = get_global_rate_limiter()
+        _rate_limiter = get_rate_limiter("circleci")
         for attempt in range(1, MAX_RETRIES + 1):
             _rate_limiter.acquire()
             try:

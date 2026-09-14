@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable
 
-from ..http import get_global_rate_limiter, MAX_RETRIES, RETRY_BASE_DELAY
+from ..http import get_rate_limiter, MAX_RETRIES, RETRY_BASE_DELAY
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +188,7 @@ class BitbucketClient:
             if stash["status"] == 404:
                 return None
         last_error: Exception | None = None
-        _rate_limiter = get_global_rate_limiter()
+        _rate_limiter = get_rate_limiter("bitbucket")
         for attempt in range(1, MAX_RETRIES + 1):
             _rate_limiter.acquire()
             try:
@@ -583,7 +583,7 @@ class BitbucketClient:
                 logger.info("snapshot %s %s: hit en cache (TTL 3600s)", slug, ref)
                 return cached
         url = f"https://bitbucket.org/{self.workspace}/{slug}/get/{ref}.tar.gz"
-        _rate_limiter = get_global_rate_limiter()
+        _rate_limiter = get_rate_limiter("bitbucket")
         _rate_limiter.acquire()
         try:
             resp = self._client.request(
