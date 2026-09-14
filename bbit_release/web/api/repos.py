@@ -1625,20 +1625,28 @@ def generate_tags(origin: str, prefixes: str = "", repo: str = "", destination: 
         )
 
     items = []
-    for r in candidates:
+
+    def _process(r):
         slug = r.slug
-        commit = data.client.commit_for_branch(slug, origin)
+        resolved = getattr(r, "resolved_branch", "") or ""
+        try:
+            commit = data.client.commit_for_branch(slug, origin, resolved)
+        except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+            return {"repo": slug, "commit": "", "pipeline_id": None,
+                    "created": [], "skipped": [], "errors": [str(exc)]}
+        if not commit:
+            return {"repo": slug, "commit": commit, "pipeline_id": None,
+                    "created": [], "skipped": [],
+                    "errors": [f"El repo '{slug}' no contiene la rama '{origin}'."]}
         try:
             pipeline_id = ci.pipeline_id_for_commit(slug, origin, commit)
         except CircleCiError as exc:
-            items.append({"repo": slug, "commit": commit, "pipeline_id": None,
-                          "created": [], "skipped": [], "errors": [str(exc)]})
-            continue
+            return {"repo": slug, "commit": commit, "pipeline_id": None,
+                    "created": [], "skipped": [], "errors": [str(exc)]}
         if not pipeline_id:
-            items.append({"repo": slug, "commit": commit, "pipeline_id": None,
-                          "created": [], "skipped": [],
-                          "errors": [f"El commit {commit[:8]} no tiene pipeline en CircleCI"]})
-            continue
+            return {"repo": slug, "commit": commit, "pipeline_id": None,
+                    "created": [], "skipped": [],
+                    "errors": [f"El commit {commit[:8]} no tiene pipeline en CircleCI"]}
         created, skipped, errors = [], [], []
         for env in envs:
             tag = f"{env}-{pipeline_id}"
@@ -1650,8 +1658,15 @@ def generate_tags(origin: str, prefixes: str = "", repo: str = "", destination: 
                 created.append(tag)
             except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
                 errors.append(f"{tag}: {exc}")
-        items.append({"repo": slug, "commit": commit, "pipeline_id": pipeline_id,
-                      "created": created, "skipped": skipped, "errors": errors})
+        return {"repo": slug, "commit": commit, "pipeline_id": pipeline_id,
+                "created": created, "skipped": skipped, "errors": errors}
+
+    if candidates:
+        workers = min(MAX_WORKERS, len(candidates) or 1)
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = [ex.submit(_process, r) for r in candidates]
+            for fut in futures:
+                items.append(fut.result())
     return {"ok": True, "origin": origin, "envs": envs, "items": items}
 
 

@@ -835,6 +835,48 @@ def test_generate_tags(monkeypatch):
     assert created == [("r1", "uat-7", "abc123")]
 
 
+def test_generate_tags_alimenta_resolved_branch(monkeypatch):
+    calls = []
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return [
+                SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master",
+                                resolved_branch="release/x-V2"),
+                SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master",
+                                resolved_branch="release/x"),
+            ]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            calls.append((repo, branch, resolved))
+            return {"r1": "abc111", "r2": "abc222"}[repo]
+        def tag_exists(self, slug, name):
+            return False
+        def create_tag(self, slug, name, commit):
+            pass
+
+    class StubCi:
+        def pipeline_id_for_commit(self, repo, branch, commit):
+            return {"r1": 1, "r2": 2}[repo]
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: StubCi())
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.post("/api/tags", params={"origin": "release/x", "prefixes": "uat"}).json()
+    assert body["ok"] is True
+    assert [i["repo"] for i in body["items"]] == ["r1", "r2"]
+    assert set(calls) == {("r1", "release/x", "release/x-V2"), ("r2", "release/x", "release/x")}
+
+
 def test_circleci_config_creates(monkeypatch):
     calls = []
 
