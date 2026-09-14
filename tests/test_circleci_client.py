@@ -417,6 +417,60 @@ def test_pipelines_cache_distinguishes_branch_and_tag(tmp_path):
         cache.close()
 
 
+def test_pipeline_404_devuelve_lista_vacia_y_se_cachea(tmp_path):
+    calls = {"c": 0}
+
+    def not_found(request):
+        calls["c"] += 1
+        return httpx.Response(404, json={"message": "No pipelines found"})
+
+    cache = _make_cache(tmp_path)
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): not_found,
+    }), cache=cache)
+    try:
+        assert client.pipelines("r1", branch="release") == []
+        assert calls["c"] == 1
+        assert client.pipelines("r1", branch="release") == []
+        assert calls["c"] == 1  # el 404 quedó cacheado como lista vacía
+    finally:
+        client.close()
+        cache.close()
+
+
+def test_pipeline_500_no_se_degrada_a_lista_vacia():
+    def internal_error(request):
+        return httpx.Response(500, json={"message": "boom"})
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): internal_error,
+    }))
+    try:
+        with pytest.raises(CircleCiError, match="CircleCI 500"):
+            client.pipelines("r1", branch="release")
+    finally:
+        client.close()
+
+
+def test_pipeline_404_no_se_cachea_sin_cache():
+    calls = {"c": 0}
+
+    def not_found(request):
+        calls["c"] += 1
+        return httpx.Response(404, json={"message": "No pipelines found"})
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): not_found,
+    }), cache=None)
+    try:
+        assert client.pipelines("r1", branch="release") == []
+        assert calls["c"] == 1
+        assert client.pipelines("r1", branch="release") == []
+        assert calls["c"] == 2  # sin cache se vuelve a consultar
+    finally:
+        client.close()
+
+
 def test_workflows_and_jobs_cache_hit(tmp_path):
     calls = {"wf": 0, "jobs": 0}
 

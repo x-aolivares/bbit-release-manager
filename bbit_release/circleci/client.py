@@ -232,6 +232,22 @@ class CircleCiClient:
                 break
         return items
 
+    def _pipeline_page(self, path: str, params: dict) -> list[dict]:
+        """Una página de pipelines; un 404 (proyecto sin pipelines aún) devuelve [].
+
+        CircleCI responde 404 para proyectos válidos que todavía no corrieron
+        ninguna pipeline. Ese caso NO es un fallo: se devuelve lista vacía para
+        que quede cacheable y no se re-consulte en cada corrida (BBIT-41).
+        Los demás errores (500, auth, rate limit) siguen lanzando.
+        """
+        try:
+            return self._paginate_capped(path, params, max_pages=1)
+        except CircleCiError as exc:
+            if not str(exc).startswith("CircleCI 404 en "):
+                raise
+            log.info("CircleCI 404 en %s: proyecto sin pipelines -> lista vacía cacheable", path)
+            return []
+
     def pipelines(self, repo: str, branch: str | None = None, tag: str | None = None) -> list[dict]:
         """Pipelines del proyecto, opcionalmente filtrados por rama o tag.
 
@@ -240,6 +256,9 @@ class CircleCiClient:
         El corte real de "no traer el histórico completo" es ``max_pages``
         vía ``_paginate_capped``: una sola página (``limit`` pipelines) y
         listo, sin seguir ``next_page_token``.
+
+        BBIT-41: un proyecto sin pipelines devuelve 404; se trata como lista
+        vacía y se cachea (no vuelve a golpear la API hasta expirar el TTL).
         """
         params: dict = {"limit": 20}
         key = ""
@@ -261,16 +280,16 @@ class CircleCiClient:
             # client-side. Si el tag buscado no está en esa página reciente
             # no se encuentra — trade-off aceptado a cambio de no paginar
             # el histórico completo del proyecto por cada tag.
-            project_pipelines = self._paginate_capped(
-                f"/project/{self.project_slug(repo)}/pipeline", {"limit": 20}, max_pages=1,
+            project_pipelines = self._pipeline_page(
+                f"/project/{self.project_slug(repo)}/pipeline", {"limit": 20},
             )
             items = [p for p in project_pipelines
                      if (p.get("vcs") or {}).get("tag") == tag]
         else:
             # Para branches: CircleCI filtra server-side por branch, así que
             # una sola página alcanza (la última pipeline de esa rama).
-            items = self._paginate_capped(
-                f"/project/{self.project_slug(repo)}/pipeline", params, max_pages=1,
+            items = self._pipeline_page(
+                f"/project/{self.project_slug(repo)}/pipeline", params,
             )
         
         if self._cache is not None and key:
