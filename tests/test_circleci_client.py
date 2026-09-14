@@ -137,6 +137,27 @@ def test_pipeline_id_for_commit_cap_max_pages(tmp_path):
     assert calls["c"] == 1
 
 
+def test_pipeline_id_for_commit_404_sin_pipelines_se_cachea(tmp_path):
+    """BBIT-50: la 404 de proyecto sin pipelines no lanza y se cachea vacía (BBIT-41)."""
+    calls = {"c": 0}
+
+    def not_found(request):
+        calls["c"] += 1
+        return httpx.Response(404, json={"message": "No pipelines found"})
+
+    cache = _make_cache(tmp_path)
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): not_found,
+    }), cache=cache)
+    try:
+        assert client.pipeline_id_for_commit("r1", "release", "abc") is None
+        assert client.pipeline_id_for_commit("r1", "release", "abc") is None
+    finally:
+        client.close()
+        cache.close()
+    assert calls["c"] == 1  # la 404 quedó cacheada como lista vacía
+
+
 def test_deploy_job_for_pipeline():
     def workflows(request):
         assert request.url.path == "/api/v2/pipeline/p1/workflow"

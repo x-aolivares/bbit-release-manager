@@ -427,9 +427,15 @@ class CircleCiClient:
         if self._cache is not None:
             cached = self._cache.get_circleci_pipelines(slug, branch, "branch")
             if cached is not None:
+                if not cached:
+                    # Lista vacía cacheada = proyecto sin pipelines (BBIT-41):
+                    # la 404 ya se resolvió, no hay nada más atrás que buscar.
+                    return None
                 found = _scan(cached)
-                if found is not None or max_pages <= 1:
+                if found is not None:
                     return found
+                if max_pages <= 1:
+                    return None
 
         path = f"/project/{slug}/pipeline"
         token: str | None = None
@@ -438,15 +444,22 @@ class CircleCiClient:
             params: dict = {"limit": 20, "branch": branch}
             if token:
                 params["page-token"] = token
-            payload = self._request("GET", path, params=params)
-            items = payload.get("items", [])
+            try:
+                payload = self._request("GET", path, params=params)
+            except CircleCiError as exc:
+                if not str(exc).startswith("CircleCI 404 en "):
+                    raise
+                # BBIT-41: proyecto sin pipelines -> lista vacía cacheable, no un error.
+                log.info("CircleCI 404 en %s: proyecto sin pipelines -> lista vacía cacheable", path)
+                payload = None
+            items = payload.get("items", []) if payload else []
             pages += 1
             if pages == 1 and self._cache is not None:
                 self._cache.set_circleci_pipelines(slug, branch, "branch", items)
             found = _scan(items)
             if found is not None:
                 return found
-            token = payload.get("next_page_token")
+            token = payload.get("next_page_token") if payload else None
             if not token:
                 break
         return None
