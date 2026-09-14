@@ -231,6 +231,7 @@ def test_session_reuse_by_alias(monkeypatch, tmp_path):
 
     monkeypatch.setenv("BBIT_CLIENT_MARKER", str(tmp_path / "client_id_alt"))
     monkeypatch.setattr(repos_mod, "Config", RealConfig)
+    monkeypatch.setattr(repos_mod, "_validate_bitbucket_token", lambda tok: (200, ""))
 
     class StubClient:
         last_ws = None
@@ -766,10 +767,12 @@ def test_scan_reuses_pr_hash(monkeypatch):
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.get("/api/flow", params={"origin": "release/x", "prefixes": "uat"}).json()
-    assert body["scan"]["repos"][0]["commit"] == "abc123"
-    # el hash de la rama origen vino del PR, no de GET /commits/{origin}; el
-    # único commit_for_branch es la resolución de master del lado del diff.
-    assert commit_calls == ["master"]
+    # BBIT-49: match_commit estricto — el commit del scan sale de
+    # commit_for_branch (no se reusa source_commit del PR como hash).
+    assert body["scan"]["repos"][0]["commit"] == "fromCommit"
+    # commit_for_branch se llama para el origin del scan y para master del diff.
+    assert "release/x" in commit_calls
+    assert "master" in commit_calls
     assert body["scan"]["stats"]["with_pr"] == 1
     assert body["scan"]["repos"][0]["deploys"] == {"uat": None}
     assert body["scan"]["repos"][0]["match_tag"] == {"uat": None}
@@ -1492,9 +1495,10 @@ def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
 
     body = client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
-    # La 1era consulta hace UN list_repos de discovery (cacheable), no vuelve a
-    # barrer el workspace en consultas posteriores con la misma rama.
-    assert list_calls == [True]
+    # BBIT-46: el índice de repos es filter-free keyed por workspace; con el
+    # stub sin SQLite el list_repos de discovery corre 2 veces (una en el
+    # scan, otra en el diff). En producción el 2do es cache hit del índice.
+    assert list_calls == [True, True]
     # r1 master no tiene params → el param se considera 'nuevo' (r2 quedó fuera)
     assert body["diff"]["params"] == [
         {"param": "/config/shared/secret", "arn": "", "tipo": "nuevo", "repos": ["r1"], "count": 1},
@@ -1502,7 +1506,7 @@ def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
 
     # 2da consulta con la misma rama: cache hits, no vuelve a list_repos
     client.get("/api/flow", params={"origin": "release/x", "destination": "master"}).json()
-    assert list_calls == [True]
+    assert list_calls == [True, True]
 
 
 def test_diff_cache_key_incluye_ssm_prefixes(monkeypatch):

@@ -25,8 +25,11 @@ def test_me_auth_error():
         client.close()
 
 
-def test_rate_limit_429_no_retry():
-    """Con MAX_RETRIES=1 un 429 de CircleCI falla al primer intento (sin backoff)."""
+def test_rate_limit_429_no_retry(monkeypatch):
+    """Con MAX_RETRIES=3 un 429 con Retry-After se reintenta MAX_RETRIES veces
+    (backoff respetando el header) y luego falla con CircleCiError."""
+    monkeypatch.setattr("bbit_release.circleci.client.MAX_RETRIES", 3)
+    monkeypatch.setattr("bbit_release.circleci.client.time.sleep", lambda _s: None)
     calls = 0
 
     def notif(request):
@@ -42,7 +45,7 @@ def test_rate_limit_429_no_retry():
             client.me()
     finally:
         client.close()
-    assert calls == 1
+    assert calls == 3
 
 
 def test_project_slug():

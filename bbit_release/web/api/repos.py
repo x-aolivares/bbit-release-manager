@@ -245,6 +245,27 @@ def _bb_probe(workspace: str, token: str, url: str) -> tuple[bool, str]:
     return True, identity
 
 
+def _validate_bitbucket_token(tok: str) -> tuple[int, str]:
+    """Valida un token contra Bitbucket sin crear sesión completa.
+
+    Devuelve ``(status, error)``: ``(200, "")`` si las credenciales son
+    válidas; ``(401, msg)`` si vencieron o no valen; ``(500, msg)`` si no
+    se pudo validar (red/error). Evita loops de ``/session/reuse`` con
+    credenciales expiradas."""
+    try:
+        import httpx
+        headers = {"Authorization": f"Bearer {tok}", "Accept": "application/json"}
+        with httpx.Client(headers=headers, timeout=5.0) as client:
+            resp = client.get("https://api.bitbucket.org/2.0/user")
+            if resp.status_code == 401:
+                return 401, "Las credenciales guardadas vencieron o ya no son válidas. Generá de nuevo."
+            if resp.status_code >= 400:
+                return 401, f"Error al validar credenciales: {resp.status_code}"
+    except Exception as exc:
+        return 500, f"No se pudo validar las credenciales: {str(exc)}"
+    return 200, ""
+
+
 def _ci_probe(token: str, vcs: str, org: str) -> tuple[bool, str]:
     ci = CircleCiClient(token, vcs=vcs, org=org, recorder=_recorder)
     try:
@@ -506,26 +527,9 @@ def session_reuse(body: dict | None = None):
     
     # Probar credenciales rápidamente SIN crear sesión completa
     # para evitar loops si son inválidas
-    try:
-        import httpx
-        headers = {"Authorization": f"Bearer {tok}", "Accept": "application/json"}
-        with httpx.Client(headers=headers, timeout=5.0) as client:
-            resp = client.get("https://api.bitbucket.org/2.0/user")
-            if resp.status_code == 401:
-                return JSONResponse(
-                    {"ok": False, "error": "Las credenciales guardadas vencieron o ya no son válidas. Generá de nuevo."},
-                    status_code=401,
-                )
-            if resp.status_code >= 400:
-                return JSONResponse(
-                    {"ok": False, "error": f"Error al validar credenciales: {resp.status_code}"},
-                    status_code=401,
-                )
-    except Exception as exc:
-        return JSONResponse(
-            {"ok": False, "error": f"No se pudo validar las credenciales: {str(exc)}"},
-            status_code=500,
-        )
+    status, verror = _validate_bitbucket_token(tok)
+    if status != 200:
+        return JSONResponse({"ok": False, "error": verror}, status_code=status)
     
     # Credenciales OK, crear sesión completa
     try:

@@ -388,7 +388,10 @@ def test_auth_error():
 
 
 def test_rate_limit_429_no_retry(monkeypatch):
-    """Con MAX_RETRIES=1 un 429 falla al primer intento (sin backoff)."""
+    """Con MAX_RETRIES=3 un 429 con Retry-After se reintenta MAX_RETRIES veces
+    (backoff respetando el header) y luego falla con BitbucketError."""
+    monkeypatch.setattr("bbit_release.bitbucket.client.MAX_RETRIES", 3)
+    monkeypatch.setattr("bbit_release.bitbucket.client.time.sleep", lambda _s: None)
     calls = 0
 
     def notif(request):
@@ -404,7 +407,7 @@ def test_rate_limit_429_no_retry(monkeypatch):
             client.tags_on_commit("r1", "abc")
         finally:
             client.close()
-    assert calls == 1
+    assert calls == 3
 
 
 @pytest.mark.parametrize("ws,tok", [("", "tok"), ("ws", "")])
