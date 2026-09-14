@@ -410,7 +410,11 @@ class BitbucketClient:
         `release/REP-325073-V2` para `release/REP-325073`).
 
         El chequeo de existencia es un request por repo; se corre en paralelo
-        (ThreadPoolExecutor) para no serializar llamadas a la API.
+        (ThreadPoolExecutor) para no serializar llamadas a la API.  El estado
+        chequeado se cachea por ``(workspace, branch)`` (request_type
+        ``branch_refs``) como ``{slug: rama_resuelta}`` con ``""`` para los
+        repos que NO tienen la rama: en la re-consulta solo se resuelven los
+        repos nuevos, nunca el universo completo.
 
         `repos` es opcional: si ya tenés la lista completa del workspace
         cacheada, pasala para evitar el `list_repos` paginado interno.
@@ -418,24 +422,39 @@ class BitbucketClient:
         repos = repos if repos is not None else self.list_repos(prefixes=prefixes)
         if not repos:
             return []
-        workers = min(MAX_WORKERS, len(repos) or 1)
-        matched: list[Repository] = []
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = [(repo, ex.submit(self.resolve_branch, repo.slug, branch)) for repo in repos]
-            for repo, fut in futures:
-                try:
-                    resolved = fut.result()
-                except BitbucketError:
-                    continue
-                if resolved:
-                    matched.append(Repository(
-                        slug=repo.slug,
-                        name=repo.name,
-                        workspace=repo.workspace,
-                        default_branch=getattr(repo, "default_branch", "master"),
-                        resolved_branch=resolved,
-                    ))
-        return matched
+        raw = {}
+        if self.cache:
+            hit = self.cache.get_branch_refs(self.workspace, branch)
+            if hit:
+                raw = dict(hit)
+        known = set(raw)
+        pending = [repo for repo in repos if repo.slug not in known]
+        if pending:
+            workers = min(MAX_WORKERS, len(pending) or 1)
+            resolved = {repo.slug: "" for repo in pending}
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = {repo.slug: ex.submit(self.resolve_branch, repo.slug, branch) for repo in pending}
+                for slug, fut in futures.items():
+                    try:
+                        name = fut.result()
+                    except BitbucketError:
+                        continue
+                    if name:
+                        resolved[slug] = name
+            raw.update(resolved)
+            if self.cache:
+                self.cache.set_branch_refs(self.workspace, branch, raw)
+        return [
+            Repository(
+                slug=repo.slug,
+                name=repo.name,
+                workspace=repo.workspace,
+                default_branch=getattr(repo, "default_branch", "master"),
+                resolved_branch=raw[repo.slug],
+            )
+            for repo in repos
+            if raw.get(repo.slug)
+        ]
 
     def diff(self, slug: str, from_ref: str, to_ref: str) -> DiffResult:
         """Diff entre refs como texto unificado (Cloud)."""

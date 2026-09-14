@@ -82,6 +82,11 @@ _SEED_REQUEST_TYPES = {
         f"{_BITBUCKET_BASE}/repositories/{{workspace}}/{{repo}}/refs/branches/{{branch}}",
         {"method": "GET"},
     ),
+    "branch_refs": (
+        "Bitbucket", 3600,
+        f"{_BITBUCKET_BASE}/repositories/{{workspace}}/refs/branches/{{branch}}",
+        {"method": "GET"},
+    ),
     "scan_release": (
         "Bitbucket", 1800,
         f"{_BITBUCKET_BASE}/repositories/{{workspace}}/{{repo}}/commits/{{branch}}",
@@ -1120,6 +1125,18 @@ class ReleaseCache:
             "get_branch_repositories", origin, destination,
             _repo_details(None, None), repos,
         )
+
+    def get_branch_refs(self, workspace: str, branch: str) -> dict | None:
+        """Set ``{slug: rama_resuelta}`` de repos con la rama, keyed (workspace, branch).
+
+        Los chequeos per-repo de ``repos_with_branch`` se reutilizan mientras
+        dure el TTL: al re-consultar solo se resuelven los repos nuevos (delta),
+        no el universo completo.
+        """
+        return self._get_cached("branch_refs", workspace, branch, {})
+
+    def set_branch_refs(self, workspace: str, branch: str, data: dict) -> None:
+        self._set_cached("branch_refs", workspace, branch, {}, data)
 
     def get_scan(self, origin: str, destination: str, project_prefixes: list[str] | None, exclude: set[str] | None, deploy_prefixes: list[str] | None = None):
         return self._get_cached(

@@ -126,6 +126,60 @@ def test_repos_with_branch():
     assert found[0].resolved_branch == "release"
 
 
+def test_repos_with_branch_delta_cache(tmp_path):
+    """Con cache, solo los repos nuevos se resuelven contra la API en re-consultas."""
+    from bbit_release.cache import ReleaseCache
+
+    hits = {"branch": 0}
+
+    def repos_list(request):
+        return httpx.Response(200, json={"values": [
+            {"slug": "a", "name": "A", "workspace": {"slug": "ws"}},
+            {"slug": "b", "name": "B", "workspace": {"slug": "ws"}},
+        ]})
+
+    def repos_list_with_c(request):
+        return httpx.Response(200, json={"values": [
+            {"slug": "a", "name": "A", "workspace": {"slug": "ws"}},
+            {"slug": "b", "name": "B", "workspace": {"slug": "ws"}},
+            {"slug": "c", "name": "C", "workspace": {"slug": "ws"}},
+        ]})
+
+    def branch_a(request):
+        hits["branch"] += 1
+        return httpx.Response(200, json={"name": "release"})
+
+    def branch_b(request):
+        hits["branch"] += 1
+        return httpx.Response(404, json={"message": "not found"})
+
+    def branch_c(request):
+        hits["branch"] += 1
+        return httpx.Response(200, json={"name": "release"})
+
+    routes = {
+        ("GET", "/2.0/repositories/ws"): repos_list,
+        ("GET", "/2.0/repositories/ws/a/refs/branches/release"): branch_a,
+        ("GET", "/2.0/repositories/ws/b/refs/branches/release"): branch_b,
+    }
+
+    cache = ReleaseCache(db_path=tmp_path / "delta.db")
+    client = BitbucketClient("ws", "tok", cache=cache, transport=_transport(routes))
+    try:
+        first = client.repos_with_branch("release")
+        assert [r.slug for r in first] == ["a"]
+        assert hits["branch"] == 2
+
+        routes[("GET", "/2.0/repositories/ws")] = repos_list_with_c
+        routes[("GET", "/2.0/repositories/ws/c/refs/branches/release")] = branch_c
+
+        second = client.repos_with_branch("release")
+        assert [r.slug for r in second] == ["a", "c"]
+        assert hits["branch"] == 3
+    finally:
+        client.close()
+
+
 def test_resolve_branch_prefix_matches_latest():
     def branches_list(request):
         return httpx.Response(200, json={"values": [
