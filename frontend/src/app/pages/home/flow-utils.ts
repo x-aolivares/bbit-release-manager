@@ -167,3 +167,83 @@ export function processSseEvent<T extends FlowRepoItem>(
       return null;
   }
 }
+
+// ─── Estrategia de carga (BBIT-56) ─────────────────────────────────────
+
+export type LoadStrategy =
+  | { kind: 'identical' }                    // consulta idéntica + memoria caliente → cero trabajo
+  | { kind: 'removal'; added: string[] }     // filtros cliente-side cambiaron → refiltrar local
+  | { kind: 'selective'; added: string[] }   // solo se agregaron ambientes → consultar columnas nuevas
+  | { kind: 'full' };                        // cualquier otro cambio → recarga completa
+
+export interface LoadStrategyInput {
+  withDiff: boolean;
+  forceCache: boolean;
+  hasRepos: boolean;
+  lastQueryKey: string | null;
+  lastBaseKey: string | null;
+  lastBackendKey: string | null;
+  queryKey: string;
+  baseKey: string;
+  backendKey: string;
+  prefixes: string[];
+  loadedPrefixes: string[];
+}
+
+/**
+ * Decision table para "¿qué hago con esta petición de repositorios?"
+ *
+ * Orden de evaluación:
+ * 1. withDiff=true ("Cargar parámetros") o force → SIEMPRE recarga completa
+ *    (el diff SSM solo se computa si se pide; force rompe todo short-circuit).
+ * 2. Consulta idéntica + tabla pintada → identical (cero trabajo de red).
+ * 3. Todos los ambientes de la consulta ya están cargados y la base (sin
+ *    prefixes) no cambió → identical: solo se quitaron columnas, nada que
+ *    re-consultar del backend (cada columna visible ya tiene sus datos).
+ * 4. Firma backend (origin/dest/prefixes/mode) sin cambios → removal: los
+ *    repos que dejan de matchear blacklist/project_prefixes se filtran en el
+ *    cliente; los prefixes aún pendientes se cargan por recarga selectiva.
+ * 5. Base (sin prefixes) sin cambios → selective: solo se agregaron ambientes.
+ * 6. Cualquier otra cosa → full.
+ */
+export function decideLoadStrategy(input: LoadStrategyInput): LoadStrategy {
+  if (input.withDiff || input.forceCache || !input.hasRepos) {
+    return { kind: 'full' };
+  }
+
+  if (
+    input.lastQueryKey !== null &&
+    input.queryKey === input.lastQueryKey
+  ) {
+    return { kind: 'identical' };
+  }
+
+  const pendingPrefixes = input.prefixes.filter((p) => !input.loadedPrefixes.includes(p));
+
+  if (
+    input.lastBaseKey !== null &&
+    input.baseKey === input.lastBaseKey &&
+    pendingPrefixes.length === 0
+  ) {
+    // Solo se quitaron ambientes (o nada cambió de la base): cada columna
+    // visible ya tiene sus deploys en memoria → cero trabajo adicional.
+    return { kind: 'identical' };
+  }
+
+  if (
+    input.lastBackendKey !== null &&
+    input.backendKey === input.lastBackendKey
+  ) {
+    return { kind: 'removal', added: pendingPrefixes };
+  }
+
+  if (
+    input.lastBaseKey !== null &&
+    input.baseKey === input.lastBaseKey &&
+    pendingPrefixes.length > 0
+  ) {
+    return { kind: 'selective', added: pendingPrefixes };
+  }
+
+  return { kind: 'full' };
+}
