@@ -169,6 +169,25 @@ export class Home implements OnInit {
   prTitle = '';
   prefixInput = '';
   prefixes = signal<string[]>(['uat', 'stgp', 'prod']);
+  // BBIT-56: prefijos que ya tienen datos cargados en la tabla (columnas
+  // visibles). Un prefijo agregado a `prefixes` NO pinta columna hasta que
+  // una consulta exitosa lo acredite (sin placeholder "generate tag/—").
+  loadedPrefixes = signal<string[]>([]);
+  // BBIT-56: firma de la última consulta exitosa. Una petición idéntica
+  // + memoria caliente (repos() ya pintado) = cero trabajo de red.
+  lastQueryKey: string | null = null;
+
+  // BBIT-56: firma canónica de la consulta actual (lo que el cliente pide).
+  private queryKey(): string {
+    return JSON.stringify({
+      origin: this.origin,
+      destination: this.projectsDest(),
+      prefixes: [...this.prefixes()].sort(),
+      projectPrefixes: [...this.projectPrefixes()].sort(),
+      exclude: [...this.blacklisted()].sort(),
+      mode: this.scanMode,
+    });
+  }
 
   projectPrefixInput = '';
   projectPrefixes = signal<string[]>([]);
@@ -603,19 +622,34 @@ reportOpen = signal(false);
   sessions = signal<SessionConfig[]>([]);
 
   prefixCols(): string {
-    return this.prefixes().map(() => ' 9.5rem').join('');
+    return this.loadedPrefixes().map(() => ' 9.5rem').join('');
+  }
+
+  // BBIT-56: tras una consulta exitosa, los prefijos con datos son todos los
+  // que se pidieron y la firma de la última consulta queda registrada (para
+  // que la siguiente petición idéntica haga cero trabajo). Solo se llama en
+  // cargas completas (SSE/batch), nunca en retry de repos fallidos.
+  private syncLoadedPrefixes(): void {
+    this.loadedPrefixes.set(this.prefixes().slice());
+    this.lastQueryKey = this.queryKey();
   }
 
   addPrefix() {
     const p = this.prefixInput.trim().toLowerCase();
     if (p && !this.prefixes().includes(p)) {
+      // BBIT-56: el prefijo queda "pendiente" (en prefixes pero no en
+      // loadedPrefixes) → la columna NO se pinta hasta "obtener repositorios".
       this.prefixes.update((list) => [...list, p]);
     }
     this.prefixInput = '';
   }
 
   removePrefix(index: number) {
+    const p = this.prefixes()[index];
     this.prefixes.update((list) => list.filter((_, i) => i !== index));
+    if (p) {
+      this.loadedPrefixes.update((list) => list.filter((x) => x !== p));
+    }
   }
 
   addProjectPrefix() {
@@ -1072,6 +1106,21 @@ reportOpen = signal(false);
       return;
     }
 
+    // BBIT-56: petición idéntica + memoria caliente → CERO trabajo. La tabla
+    // ya está pintada con esta consulta exacta (repos() = resultado de la
+    // última carga exitosa) y los filtros no cambiaron: no se toca red.
+    // Force siempre rompe el short-circuit (scan desde cero, sin caché).
+    if (
+      !this.forceCache() &&
+      this.repos().length > 0 &&
+      this.lastQueryKey !== null &&
+      this.queryKey() === this.lastQueryKey
+    ) {
+      this.finalizing.set(false);
+      done();
+      return;
+    }
+
     // QUICK LOAD: Si ya tenemos repos en caché LOCAL, usarlos sin HTTP.
     // Si no, hacer llamada a /repos-quick primero.
     if (this.reposCache().length > 0) {
@@ -1183,9 +1232,10 @@ reportOpen = signal(false);
         this.removed.set((diff.removed ?? []) as unknown as RemovedParam[]);
         this.paramsLoaded.set(true);
       },
-      () => {
+() => {
         done();
         this.saveCurrentSession();
+        this.syncLoadedPrefixes();
       },
       (msg) => {
         this.error.set(msg);
@@ -1274,6 +1324,9 @@ reportOpen = signal(false);
       complete: () => {
         done();
         this.saveCurrentSession();
+        if (!retryOnly) {
+          this.syncLoadedPrefixes();
+        }
       },
     });
   }
