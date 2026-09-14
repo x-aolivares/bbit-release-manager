@@ -126,22 +126,13 @@ def test_repos_with_branch():
     assert found[0].resolved_branch == "release"
 
 
-def test_resolve_branch_prefix_matches_latest():
-    def branches_list(request):
-        return httpx.Response(200, json={"values": [
-            {"name": "release/REP-325073-V1"},
-            {"name": "release/REP-325073-V2"},
-            {"name": "release/REP-999999-X"},
-        ]})
-
-    client = BitbucketClient("ws", "tok", transport=_transport({
-        ("GET", "/2.0/repositories/ws/r1/refs/branches"): branches_list,
-    }))
+def test_resolve_branch_variant_is_not_fallback():
+    """Sin fallback a variantes -Vn: solo coincide la literal exacta."""
+    client = BitbucketClient("ws", "tok", transport=_transport({}))
     try:
-        resolved = client.resolve_branch("r1", "release/REP-325073")
+        assert client.resolve_branch("r1", "release/REP-325073") == ""
     finally:
         client.close()
-    assert resolved == "release/REP-325073-V2"
 
 
 def test_resolve_branch_exact_wins():
@@ -169,12 +160,6 @@ def test_resolve_branch_none():
     finally:
         client.close()
     assert resolved == ""
-
-
-def test_latest_branch_version_suffix():
-    from bbit_release.bitbucket.client import BitbucketClient as B
-    names = ["release/REP/a-V1", "release/REP/a-V2", "release/REP/a-V10", "release/REP/a"]
-    assert B._latest_branch(names) == "release/REP/a-V10"
 
 
 def test_diff():

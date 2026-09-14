@@ -362,30 +362,10 @@ class BitbucketClient:
         
         return names
 
-    @staticmethod
-    def _latest_branch(names: list[str]) -> str:
-        """Elige la rama 'más reciente' entre los nombres: la de mayor sufijo
-        `-V{n}` y, si no, la mayor alfabéticamente."""
-        def _ver(n: str):
-            m = re.search(r"-V(\d+)(?:\.(\d+))?$", n, re.IGNORECASE)
-            if m:
-                major = int(m.group(1))
-                minor = int(m.group(2) or 0)
-                return major * 1000 + minor
-            return -1
-
-        return max(names, key=lambda n: (_ver(n), n))
-
     def resolve_branch(self, slug: str, branch: str) -> str:
-        """Rama efectiva: la exacta si existe, o la más reciente que empiece con
-        el prefijo (p.ej. `release/REP-325073-V2` para `release/REP-325073`).
-        Devuelve "" si no hay ninguna."""
-        if self.has_branch(slug, branch):
-            return branch
-        names = self.list_branches(slug, prefix=branch)
-        if not names:
-            return ""
-        return self._latest_branch(names)
+        """Rama efectiva: la literal si existe exacta, o "" si no. Sin fallback
+        a variantes `-Vn`: si no coincide, no coincide, punto."""
+        return branch if self.has_branch(slug, branch) else ""
 
     def default_branch(self, slug: str) -> str:
         data = self._request(
@@ -405,9 +385,8 @@ class BitbucketClient:
     ) -> list[Repository]:
         """Repos (filtrados por prefijo si se pasa) que contienen la rama.
 
-        La rama se resuelve por prefijo: si no existe literal, cuenta como
-        presente si existe `branch` seguido de variante (p.ej.
-        `release/REP-325073-V2` para `release/REP-325073`).
+        La rama se resuelve por coincidencia EXACTA: si no existe literal,
+        el repo se descarta (no hay fallback a variantes `-Vn`).
 
         El chequeo de existencia es un request por repo; se corre en paralelo
         (ThreadPoolExecutor) para no serializar llamadas a la API.
@@ -620,9 +599,8 @@ class BitbucketClient:
         """Último commit de una rama (hash completo).
 
         `resolved` es la rama efectiva ya resuelta (p.ej. del barrido de
-        `repos_with_branch`): si viene, se consulta directo y se evita
-        re-resolver (ahorra 2-3 requests cuando la rama literal no existe y
-        hay variante `-V2`). Sin `resolved`, cae en `resolve_branch`."""
+        `repos_with_branch`): si se pasa, se consulta directo. La rama debe
+        existir literal, sin fallback a variantes: sin coincidencia exacta, ""."""
         target = resolved or branch
         data = self._request(
             "GET",
@@ -631,19 +609,7 @@ class BitbucketClient:
         )
         if data and data.get("values"):
             return data["values"][0].get("hash", "")
-        if resolved:
-            return ""
-        resolved = self.resolve_branch(slug, branch)
-        if not resolved or resolved == branch:
-            return ""
-        data = self._request(
-            "GET",
-            f"/repositories/{self.workspace}/{slug}/commits/{resolved}",
-            params={"pagelen": 1},
-        )
-        if not data or not data.get("values"):
-            return ""
-        return data["values"][0].get("hash", "")
+        return ""
 
     def has_commits_ahead(self, slug: str, branch: str, base: str) -> bool:
         """¿La rama tiene al menos un commit que base aún no tiene?

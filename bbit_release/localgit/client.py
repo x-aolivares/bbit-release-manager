@@ -246,31 +246,8 @@ class LocalRepoClient:
         return [f"origin/{branch_or_sha}"]
 
     def _resolve_local(self, slug: str, branch: str) -> str:
-        """Rama efectiva local: literal o variante `-V{n}` más reciente.
-
-        Lee solo refs locales (refs/remotes/origin), sin red."""
-        proc = self._run(slug, ["for-each-ref", "--format=%(refname:short)", f"refs/remotes/origin/{branch}*"])
-        lines = (proc.stdout or b"").decode("utf-8", "replace").splitlines()
-        names = [ln[len("origin/"):] for ln in lines if ln.startswith("origin/")]
-        if not names:
-            return ""
-        exact = [n for n in names if n == branch]
-        if exact:
-            return branch
-        candidates = [n for n in names if n.startswith(branch)]
-        if not candidates:
-            return ""
-        return self._latest_branch(candidates)
-
-    @staticmethod
-    def _latest_branch(names: list[str]) -> str:
-        def _ver(n: str):
-            m = re.search(r"-V(\d+)(?:\.(\d+))?$", n, re.IGNORECASE)
-            if m:
-                return int(m.group(1)) * 1000 + int(m.group(2) or 0)
-            return -1
-
-        return max(names, key=lambda n: (_ver(n), n))
+        """Rama efectiva local: solo la literal exacta (sin red ni variantes)."""
+        return branch if self._revparse(slug, f"origin/{branch}") else ""
 
     def _revparse(self, slug: str, ref: str) -> str:
         try:
@@ -302,7 +279,7 @@ class LocalRepoClient:
         from concurrent.futures import ThreadPoolExecutor
         import sys
 
-        repos = repos if repos is not None else self._bb.list_repos(prefixes=prefixes)
+        repos = repos if repos is not None else self.list_repos(prefixes=prefixes)
         if not repos:
             return []
         
@@ -314,7 +291,7 @@ class LocalRepoClient:
         workers = min(8, len(repos) or 1)
         matched: list[Repository] = []
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = [(repo, ex.submit(self._bb.resolve_branch, repo.slug, branch)) for repo in repos]
+            futures = [(repo, ex.submit(self.resolve_branch, repo.slug, branch)) for repo in repos]
             for repo, fut in futures:
                 try:
                     resolved = fut.result()

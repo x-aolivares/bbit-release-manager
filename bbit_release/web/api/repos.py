@@ -1480,9 +1480,16 @@ def flow_stream(
                     dest_by_repo=dest_by_repo,
                 )
                 diff_enriched = _enrich_diff_ssm(diff_raw, cfg_diff)
-                yield _event("diff", diff_enriched)
+                try:
+                    yield _event("diff", diff_enriched)
+                except Exception as exc:
+                    log.warning("flow_stream: cliente desconectado durante diff: %s", exc)
+                    return
 
-            yield _event("done", {})
+            try:
+                yield _event("done", {})
+            except Exception as exc:
+                log.debug("flow_stream: done no entregado (cliente desconectado): %s", exc)
 
     return StreamingResponse(_generate(), media_type="text/event-stream")
 

@@ -326,7 +326,7 @@
                           — {{ repo.pr.title }}
                         }
                       </a>
-                    } @else if (!repo.no_changes) {
+                    } @else {
                       <button class="bb-link bb-pr-link" [disabled]="creatingPr() !== null"
                               (click)="createPr(repo)"
                               [title]="'Crea el PR hacia la rama destino'">
@@ -336,11 +336,6 @@
                           Sin PR a {{ destination || 'master' }}
                         }
                       </button>
-                    } @else {
-                      <span class="bb-muted"
-                            [title]="'La rama ' + origin + ' no tiene cambios contra ' + (destination || 'master')">
-                        Sin cambios contra {{ destination || 'master' }}
-                      </span>
                     }
                   </span>
             <span>
@@ -700,7 +695,7 @@
     <div class="bb-modal-mask">
       <div class="bb-modal bb-modal--loading" (click)="$event.stopPropagation()">
         <ion-spinner name="dots" class="bb-spinner bb-spinner--lg"></ion-spinner>
-        <div class="bb-loading-text">Procesando…</div>
+        <div class="bb-loading-text">{{ finalizing() ? 'Finalizando consultas…' : 'Procesando…' }}</div>
       </div>
     </div>
     }
