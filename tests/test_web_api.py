@@ -3102,3 +3102,119 @@ def test_generate_tags_batch_unchanged(monkeypatch):
     body = client.post("/api/tags", params={"origin": "release/x"}).json()
     assert body["ok"] is True
     assert body["envs"] == ["uat", "stgp", "prod"]  # from FakeConfig.deploy_prefixes
+
+
+def test_flow_with_diff_0_skips_ssm_diff(monkeypatch):
+    """BBIT-53 — `with_diff=0` solo computa el scan de repos, no el diff SSM:
+    no se invoca raw_file ni list_files para parámetros y el diff vuelve vacío."""
+    diff_calls = []
+    master_calls = []
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "headOrigin" if branch == "release/x" else "headDest"
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+        def diff(self, repo, destination, origin):
+            diff_calls.append((repo, destination, origin))
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            master_calls.append((repo, ref))
+            return ["config/x.yaml"]
+        def raw_file(self, repo, ref, path):
+            master_calls.append((repo, ref))
+            return "k: {{resolve:ssm:/config/x}}"
+
+    original_compute = repos_mod._compute_diff
+    original_resolve = repos_mod._resolve_masters
+
+    def _boom_compute(*a, **k):
+        raise AssertionError("_compute_diff NO debe ejecutarse con with_diff=0")
+
+    def _boom_resolve(*a, **k):
+        raise AssertionError("_resolve_masters NO debe ejecutarse con with_diff=0")
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    monkeypatch.setattr(repos_mod, "_compute_diff", _boom_compute)
+    monkeypatch.setattr(repos_mod, "_resolve_masters", _boom_resolve)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/flow", params={
+        "origin": "release/x", "destination": "master", "with_diff": 0,
+    }).json()
+    assert body["scan"]["repos"][0]["slug"] == "r1"
+    assert body["diff"]["params"] == []
+    assert body["diff"]["removed"] == []
+    assert diff_calls == []
+    assert master_calls == []
+
+
+def test_flow_stream_with_diff_0_skips_diff_event(monkeypatch):
+    """BBIT-53 — `flow/stream` con `with_diff=0` no emite el evento `diff`."""
+    diff_calls = []
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "headOrigin"
+        def has_commits_ahead(self, repo, branch, base):
+            return False
+        def tags_on_commit(self, repo, commit):
+            return []
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+        def diff(self, repo, destination, origin):
+            diff_calls.append((repo, destination, origin))
+            from types import SimpleNamespace
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def raw_file(self, repo, ref, path):
+            return None
+
+    def _boom_compute(*a, **k):
+        raise AssertionError("_compute_diff NO debe ejecutarse con with_diff=0")
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    monkeypatch.setattr(repos_mod, "_compute_diff", _boom_compute)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    with client.stream("GET", "/api/flow/stream", params={
+        "origin": "release/x", "prefixes": "uat", "with_diff": 0,
+    }) as resp:
+        data = "".join(resp.iter_text())
+    assert "event: diff" not in data
+    assert "event: done" in data
+    assert diff_calls == []

@@ -72,7 +72,7 @@ describe('buildFlowUrl', () => {
       force: 0,
     });
     expect(url).toBe(
-      '/api/flow?origin=feat-x&destination=master&prefixes=uat%2Cstgp%2Cprod&project_prefixes=orders%2Cpay&exclude=legacy-api&mode=diff&force=0&with_tags=0',
+      '/api/flow?origin=feat-x&destination=master&prefixes=uat%2Cstgp%2Cprod&project_prefixes=orders%2Cpay&exclude=legacy-api&mode=diff&force=0&with_tags=0&with_diff=1',
     );
   });
 
@@ -143,6 +143,33 @@ describe('buildFlowUrl', () => {
       withTags: false,
     });
     expect(url).toContain('with_tags=0');
+  });
+
+  it('sets with_diff=0 when diff no pedido (carga de tabla)', () => {
+    const url = buildFlowUrl({
+      origin: 'feat-x',
+      dest: 'master',
+      prefixes: '',
+      projectPrefixes: '',
+      exclude: '',
+      scanMode: 'diff',
+      force: 0,
+      withDiff: false,
+    });
+    expect(url).toContain('with_diff=0');
+  });
+
+  it('sets with_diff=1 by default (carga de parametros)', () => {
+    const url = buildFlowUrl({
+      origin: 'feat-x',
+      dest: 'master',
+      prefixes: '',
+      projectPrefixes: '',
+      exclude: '',
+      scanMode: 'diff',
+      force: 0,
+    });
+    expect(url).toContain('with_diff=1');
   });
 
   it('encodes special characters in origin', () => {
