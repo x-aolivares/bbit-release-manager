@@ -231,6 +231,9 @@ export class Home implements OnInit {
   bbTokenUrl = 'https://id.atlassian.com/manage-profile/security/api-tokens';
   cciTokenUrl = 'https://app.circleci.com/settings/user/tokens';
 
+  // BBIT-56: último query_diff recibido del backend (para UI / logging).
+  lastQueryDiff = signal<{ identical: boolean; added: Record<string, unknown>; removed: Record<string, unknown>; changed: Record<string, unknown> } | null>(null);
+
   repos = signal<ScanRepo[]>([]);
   projects = signal<ScanProject[]>([]);
   reposCache = signal<{slug: string, name: string, workspace: string, default_branch: string}[]>([]);
@@ -1015,6 +1018,19 @@ reportOpen = signal(false);
 
     es.addEventListener('open', () => {
       console.log(`[SSE] Connection opened successfully`);
+    });
+
+    // BBIT-56: capturar el diff de la consulta vs la anterior. El backend
+    // lo emite como primer evento; en un reload frío (repos vacíos) el front
+    // aún necesita los datos, por lo que se almacena para referencia sin
+    // cortar el flujo.
+    es.addEventListener('query_diff', (e: MessageEvent) => {
+      console.log(`[SSE] Received query_diff event:`, e.data.substring(0, 100));
+      firstEventReceived = true;
+      const parsed = processSseEvent('query_diff', e.data, repos);
+      if (parsed?.type === 'query_diff') {
+        this.lastQueryDiff.set(parsed.query_diff);
+      }
     });
 
     es.addEventListener('repo', (e: MessageEvent) => {

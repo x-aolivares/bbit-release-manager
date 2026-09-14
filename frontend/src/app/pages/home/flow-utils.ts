@@ -38,6 +38,13 @@ export interface FlowEventPayload {
   error?: string;
 }
 
+export interface FlowQueryDiff {
+  identical: boolean;
+  added: Record<string, unknown>;
+  removed: Record<string, unknown>;
+  changed: Record<string, unknown>;
+}
+
 export type RepoSortKey = 'name' | 'status';
 export type RepoSortDir = 'asc' | 'desc';
 
@@ -146,10 +153,11 @@ export function processSseEvent<T extends FlowRepoItem>(
   | { type: 'stats'; stats: FlowStats }
   | { type: 'diff'; diff: FlowDiff }
   | { type: 'field'; field: FlowField }
+  | { type: 'query_diff'; query_diff: FlowQueryDiff }
   | { type: 'error'; message: string }
   | { type: 'done' }
   | null {
-  const parsed = JSON.parse(data) as FlowEventPayload;
+  const parsed = JSON.parse(data) as FlowEventPayload & Partial<{ identical: boolean; added: Record<string, unknown>; removed: Record<string, unknown>; changed: Record<string, unknown> }>;
   switch (eventType) {
     case 'repo':
       return { type: 'repo', repos: [...currentRepos, parsed as unknown as T] };
@@ -159,6 +167,8 @@ export function processSseEvent<T extends FlowRepoItem>(
       return { type: 'diff', diff: parsed as unknown as FlowDiff };
     case 'field':
       return { type: 'field', field: parsed as unknown as FlowField };
+    case 'query_diff':
+      return { type: 'query_diff', query_diff: parsed as unknown as FlowQueryDiff };
     case 'error':
       return { type: 'error', message: parsed.error ?? 'Stream error' };
     case 'done':

@@ -287,6 +287,38 @@ describe('processSseEvent', () => {
     expect(result!.type).toBe('done');
   });
 
+  it('query_diff event returns the diff payload', () => {
+    const payload = {
+      identical: true,
+      added: {},
+      removed: {},
+      changed: {},
+    };
+    const result = processSseEvent('query_diff', JSON.stringify(payload), []);
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('query_diff');
+    if (result!.type === 'query_diff') {
+      expect(result!.query_diff.identical).toBe(true);
+      expect(result!.query_diff.added).toEqual({});
+    }
+  });
+
+  it('query_diff event reports added prefixes', () => {
+    const payload = {
+      identical: false,
+      added: { prefixes: ['stgp'] },
+      removed: { prefixes: ['prod'] },
+      changed: {},
+    };
+    const result = processSseEvent('query_diff', JSON.stringify(payload), []);
+    expect(result).not.toBeNull();
+    if (result!.type === 'query_diff') {
+      expect(result!.query_diff.identical).toBe(false);
+      expect(result!.query_diff['added']['prefixes']).toEqual(['stgp']);
+      expect(result!.query_diff['removed']['prefixes']).toEqual(['prod']);
+    }
+  });
+
   it('unknown event type returns null', () => {
     const result = processSseEvent('unknown-type', '{}', []);
     expect(result).toBeNull();
