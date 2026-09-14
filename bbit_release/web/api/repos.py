@@ -1854,8 +1854,10 @@ def _resolve_master(client, repo, destination: str, prefixes, cache, ctx: dict |
     except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
         log.warning("master params %s falló: %s", repo.slug, exc)
         return set()
-    if params:
-        cache.set_master(repo.slug, destination, params)
+    # BBIT-45: se cachea TAMBIÉN el empty para distinguir 'master sin params'
+    # de 'no resuelto aún': un master sin archivos SSM no re-baja el tarball
+    # en cada diff. force=1 lo saltea.
+    cache.set_master(repo.slug, destination, params)
     return params
 
 
@@ -1912,8 +1914,7 @@ def _compute_diff(
             except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
                 log.warning("scan all %s falló: %s", slug, exc)
                 return slug, set(), set()
-            if dest_params:
-                cache.set_master(slug, destination, dest_params)
+            cache.set_master(slug, destination, dest_params)
             return slug, origin_params, dest_params
 
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(master_repos) or 1)) as ex:

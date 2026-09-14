@@ -1344,6 +1344,45 @@ def test_diff_lee_params_del_snapshot_si_el_cliente_lo_soporta(monkeypatch):
     ]
 
 
+def test_diff_master_sin_params_se_cachea_vacio():
+    """BBIT-45: ``_resolve_master`` cachea un master sin params SSM como
+    conjunto vacío; el siguiente diff no re-baja el tarball de master.
+    ``force=1`` sí re-resuelve."""
+    from bbit_release.web.api import repos as repo_api
+
+    snapshot_calls: list[str] = []
+
+    class StubClient:
+        def commit_for_branch(self, slug, branch):
+            return "headDest"
+        def snapshot(self, slug, ref, force=False):
+            snapshot_calls.append(ref)
+            return {
+                "config/x.yaml": "no ssm",
+                "other/app.json": '{"k": "v"}',
+            }
+        def list_files(self, slug, ref):
+            return []
+        def raw_file(self, slug, ref, path):
+            return None
+
+    cache = get_cache()
+    repo = SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")
+    client = StubClient()
+
+    res1 = repo_api._resolve_master(client, repo, "master", ["/config"], cache, {})
+    assert res1 == set()
+    assert snapshot_calls.count("headDest") == 1
+
+    res2 = repo_api._resolve_master(client, repo, "master", ["/config"], cache, {})
+    assert res2 == set()
+    assert snapshot_calls.count("headDest") == 1  # reusa el vacío cacheado
+
+    res3 = repo_api._resolve_master(client, repo, "master", ["/config"], cache, {}, force=True)
+    assert res3 == set()
+    assert snapshot_calls.count("headDest") == 2  # force re-resuelve
+
+
 def test_diff_solo_resuelve_contra_repos_con_rama(monkeypatch):
     """El diff NO barre todos los repos del workspace: solo resuelve master
     params contra los repos que traen la rama origen (branch_repos).
