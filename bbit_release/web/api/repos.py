@@ -1295,24 +1295,57 @@ def _stream_scan(client, ci, repos, origin, destination, clean, ctx=None, with_t
 
 @router.get("/repos-quick")
 def repos_quick(
+    origin: str = "",
+    destination: str = "",
     project_prefixes: str = "",
     exclude: str = "",
 ):
     """Endpoint rápido: devuelve repos del workspace con filtros aplicados.
-    
-    SIN hacer scan/diff/SSM - SIN verificar branches.
-    Solo metadata básica de repos. Permite al usuario escribir origen/destino
-    y filtrar localmente mientras se cargan datos pesados (verificación de
-    branches, scan, diff, SSM) en background.
-    
-    Típicamente: < 1 segundo de respuesta. CERO requests de verificación
-    de rama por repo.
+
+    SIN hacer scan/diff/SSM. Solo metadata básica de repos. Permite al
+    usuario escribir origen/destino y filtrar localmente mientras se cargan
+    datos pesados (scan, diff, SSM) en background.
+
+    BBIT-58: si se pasa `origin` + `destination`, verifica la presencia de la
+    rama usando la cache de `branch_refs` (`_branch_repos_cached`) y devuelve
+    `branch_state` ("found" | "not_found") por repo. El front filtra la tabla
+    ANTES de renderizar (repos sin la rama no aparecen). Sin `origin` el
+    comportamiento es retrocompatible: devuelve todos los repos sin
+    branch_state.
+
+    La cache de branch_refs se reutiliza: si el SSE flow ya corrió para este
+    (origin, destination), el chequeo es casi grátis (SQLite). En el primer
+    llamado resuelve las ramas (1 request/repo en paralelo), lo mismo que
+    haría el flow a continuación.
     """
     data = _require_session()
     cfg = Config()
     proj = _project_prefixes(cfg, project_prefixes)
     blocked = _exclude_repos(cfg, exclude)
-    
+    include_branch = bool(origin.strip()) and bool(destination.strip())
+
+    if include_branch:
+        # BBIT-58: pasar por _branch_repos_cached para resolver branch_state
+        # (found/not_found) con cache por (origin, destination).
+        repos = _apply_filters(
+            _branch_repos_cached(data.client, origin, destination, proj, blocked, include_missing=True),
+            proj, blocked,
+        )
+        return {
+            "repos": [
+                {
+                    "slug": r.slug,
+                    "name": r.name,
+                    "workspace": r.workspace,
+                    "default_branch": r.default_branch,
+                    "resolved_branch": getattr(r, "resolved_branch", ""),
+                    "branch_state": getattr(r, "branch_state", "found"),
+                }
+                for r in repos
+            ],
+            "count": len(repos),
+        }
+
     # Obtener lista completa de repos (cacheada después de login)
     # IMPORTANTE: NO llamar a repos_with_branch() aquí.
     # Solo list_repos() que devuelve todos los repos del workspace.
