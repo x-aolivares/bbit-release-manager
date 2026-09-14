@@ -778,6 +778,158 @@ class ReleaseCache:
             "updated_at": row[5],
         }
 
+    # -- snapshots de consulta (BBIT-56) ----------------------------------------
+
+    _SNAP_TYPE = "query_history"
+    _SNAP_KEY = "snapshots"
+
+    @staticmethod
+    def _parse_snapshots(is_details: str) -> list | None:
+        """Intenta leer is_details como fila de snapshots.
+
+        Devuelve la lista ``snapshots`` si es de tipo ``query_history`` o
+        ``None`` si es un fingerprint de sesión / conexión.
+        """
+        try:
+            parsed = json.loads(is_details)
+        except (ValueError, TypeError):
+            return None
+        if isinstance(parsed, dict) and parsed.get("type") == "query_history":
+            return parsed.get("snapshots", [])
+        return None
+
+    def _find_snapshot_row(self, source: str, target: str) -> tuple[int, list] | None:
+        """Busca la fila de snapshots del par de ramas y devuelve (is_id, snaps).
+
+        Solo reconoce filas cuyo ``is_details`` tenga ``type=query_history``;
+        las filas de sesión (fingerprint) o conexión se ignoran.
+        """
+        rows = self._fetchall(
+            "SELECT is_id, is_details FROM init_sesion "
+            "WHERE is_source = ? AND is_target = ? "
+            "ORDER BY is_updated_at DESC",
+            (source, target),
+        )
+        for is_id, raw in rows:
+            snaps = self._parse_snapshots(raw)
+            if snaps is not None:
+                return is_id, snaps
+        return None
+
+    def get_last_snapshot(self, source: str, target: str) -> dict | None:
+        """Último snapshot (query) registrado para un par de ramas, o ``None``."""
+        found = self._find_snapshot_row(source, target)
+        if found is None:
+            return None
+        _is_id, snaps = found
+        if not snaps:
+            return None
+        top = snaps[0]
+        return top.get("query", top)
+
+    def append_snapshot(self, source: str, target: str, query: dict) -> dict:
+        """Registra un nuevo snapshot de consulta (BBIT-56).
+
+        Prepende al inicio de la lista (descendente por inserción) en la fila
+        de snapshots del par de ramas. Crea la fila si no existe.
+
+        ``query`` es el diccionario canónico de la consulta: origin,
+        destination, prefixes, project_prefixes, exclude, mode, etc.
+
+        Devuelve ``{"is_id", "identical", "previous"}``.
+        """
+        now = time.time()
+        snap = {"ts": now, "query": dict(query)}
+
+        found = self._find_snapshot_row(source, target)
+        is_identical = False
+        previous: dict | None = None
+
+        if found is not None:
+            is_id, snaps = found
+            if snaps:
+                top = snaps[0]
+                previous = top.get("query", top)
+                is_identical = previous == query
+            snaps.insert(0, snap)
+            # Mantener un máximo razonable de historial
+            del snaps[50:]
+            payload = json.dumps(
+                {"type": self._SNAP_TYPE, self._SNAP_KEY: snaps},
+                sort_keys=True, default=str,
+            )
+            self._execute(
+                "UPDATE init_sesion SET is_details = ?, is_updated_at = ? "
+                "WHERE is_id = ?",
+                (payload, now, is_id),
+            )
+        else:
+            payload = json.dumps(
+                {"type": self._SNAP_TYPE, self._SNAP_KEY: [snap]},
+                sort_keys=True, default=str,
+            )
+            is_id = self._insert(
+                "INSERT INTO init_sesion "
+                "(is_source, is_target, is_details, is_created_at, is_updated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (source, target, payload, now, now),
+            )
+
+        return {"is_id": is_id, "identical": is_identical, "previous": previous}
+
+    @staticmethod
+    def diff_snapshots(
+        prev: dict | None, curr: dict, *, _COMPARE_KEYS: tuple = (
+            "prefixes", "project_prefixes", "exclude",
+        ),
+    ) -> dict:
+        """Comparación campo a campo entre dos snapshots de consulta (BBIT-56).
+
+        ``prev`` es el snapshot más reciente (``None`` si es la primera
+        consulta). ``curr`` es la consulta actual. Los campos comparados
+        son listas (ordenadas para comparación estable).
+
+        Devuelve:
+
+        - ``identical`` (bool): los snapshots son iguales en campos clave.
+        - ``added`` (dict[str, list]): valores nuevos en ``curr`` vs ``prev``.
+        - ``removed`` (dict[str, list]): valores que había en ``prev`` y ya
+          no están en ``curr``.
+        - ``changed`` (dict[str, list]): campos cuyo valor diferente no es
+          un sub/super-conjunto simple.
+        """
+        if prev is None:
+            return {
+                "identical": False,
+                "added": {k: sorted(curr.get(k, []) or []) for k in _COMPARE_KEYS},
+                "removed": {},
+                "changed": {},
+            }
+
+        def _norm(val):
+            if val is None:
+                return []
+            return sorted(str(v) for v in val) if isinstance(val, (list, set, tuple)) else [val]
+
+        added, removed, changed = {}, {}, {}
+        for key in _COMPARE_KEYS:
+            p = _norm(prev.get(key))
+            c = _norm(curr.get(key))
+            if p == c:
+                continue
+            p_set, c_set = set(p), set(c)
+            new_vals = sorted(c_set - p_set)
+            gone_vals = sorted(p_set - c_set)
+            if not gone_vals and new_vals:
+                added[key] = new_vals
+            elif not new_vals and gone_vals:
+                removed[key] = gone_vals
+            else:
+                changed[key] = {"desde": p, "hasta": c}
+
+        identical = not (added or removed or changed)
+        return {"identical": identical, "added": added, "removed": removed, "changed": changed}
+
     # -- requests ---------------------------------------------------------------
 
     def add_request(

@@ -10,6 +10,8 @@ import {
   buildFlowUrl,
   processSseEvent,
   sortRepos,
+  decideLoadStrategy,
+  LoadStrategyInput,
   FlowRepoItem,
   SortableRepo,
 } from './flow-utils';
@@ -285,6 +287,38 @@ describe('processSseEvent', () => {
     expect(result!.type).toBe('done');
   });
 
+  it('query_diff event returns the diff payload', () => {
+    const payload = {
+      identical: true,
+      added: {},
+      removed: {},
+      changed: {},
+    };
+    const result = processSseEvent('query_diff', JSON.stringify(payload), []);
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('query_diff');
+    if (result!.type === 'query_diff') {
+      expect(result!.query_diff.identical).toBe(true);
+      expect(result!.query_diff.added).toEqual({});
+    }
+  });
+
+  it('query_diff event reports added prefixes', () => {
+    const payload = {
+      identical: false,
+      added: { prefixes: ['stgp'] },
+      removed: { prefixes: ['prod'] },
+      changed: {},
+    };
+    const result = processSseEvent('query_diff', JSON.stringify(payload), []);
+    expect(result).not.toBeNull();
+    if (result!.type === 'query_diff') {
+      expect(result!.query_diff.identical).toBe(false);
+      expect(result!.query_diff['added']['prefixes']).toEqual(['stgp']);
+      expect(result!.query_diff['removed']['prefixes']).toEqual(['prod']);
+    }
+  });
+
   it('unknown event type returns null', () => {
     const result = processSseEvent('unknown-type', '{}', []);
     expect(result).toBeNull();
@@ -396,5 +430,119 @@ describe('sortRepos', () => {
     const rows = [repo('b'), repo('a2'), repo('a1')];
     const out = sortRepos(rows, 'name', 'asc');
     expect(out.map((r) => r.slug)).toEqual(['a1', 'a2', 'b']);
+  });
+});
+
+// ─── decideLoadStrategy (BBIT-56) ──────────────────────────────────────
+
+describe('decideLoadStrategy', () => {
+  const base: LoadStrategyInput = {
+    withDiff: false,
+    forceCache: false,
+    hasRepos: true,
+    lastQueryKey: 'query-1',
+    lastBaseKey: 'base-1',
+    lastBackendKey: 'backend-1',
+    queryKey: 'query-1',
+    baseKey: 'base-1',
+    backendKey: 'backend-1',
+    prefixes: ['uat'],
+    loadedPrefixes: ['uat'],
+  };
+
+  it('identical consult with warm table → zero work', () => {
+    expect(decideLoadStrategy(base)).toEqual({ kind: 'identical' });
+  });
+
+  it('full when table is empty (no repos)', () => {
+    expect(
+      decideLoadStrategy({ ...base, hasRepos: false }),
+    ).toEqual({ kind: 'full' });
+  });
+
+  it('full when withDiff=true (Cargar parámetros)', () => {
+    expect(
+      decideLoadStrategy({ ...base, withDiff: true }),
+    ).toEqual({ kind: 'full' });
+  });
+
+  it('full when forceCache is on', () => {
+    expect(
+      decideLoadStrategy({ ...base, forceCache: true }),
+    ).toEqual({ kind: 'full' });
+  });
+
+  it('full when no previous query key recorded', () => {
+    expect(
+      decideLoadStrategy({
+        ...base,
+        lastQueryKey: null,
+        lastBaseKey: null,
+        lastBackendKey: null,
+      }),
+    ).toEqual({ kind: 'full' });
+  });
+
+  it('non-identical full key but same backend → removal with pending prefixes', () => {
+    const input: LoadStrategyInput = {
+      ...base,
+      queryKey: 'query-2', // cambió blacklist/project_prefixes
+      baseKey: 'base-2',
+      prefixes: ['uat', 'prod'],
+      loadedPrefixes: ['uat'],
+    };
+    expect(decideLoadStrategy(input)).toEqual({
+      kind: 'removal',
+      added: ['prod'],
+    });
+  });
+
+  it('same backend and no pending prefixes → removal with empty added', () => {
+    const input: LoadStrategyInput = {
+      ...base,
+      queryKey: 'query-2',
+      baseKey: 'base-2',
+    };
+    expect(decideLoadStrategy(input)).toEqual({
+      kind: 'removal',
+      added: [],
+    });
+  });
+
+  it('same base but added env → selective', () => {
+    const input: LoadStrategyInput = {
+      ...base,
+      queryKey: 'query-2',
+      backendKey: 'backend-2', // cambió prefixes
+      prefixes: ['uat', 'prod'],
+      loadedPrefixes: ['uat'],
+    };
+    expect(decideLoadStrategy(input)).toEqual({
+      kind: 'selective',
+      added: ['prod'],
+    });
+  });
+
+  it('full when base changed too (composite change)', () => {
+    const input: LoadStrategyInput = {
+      ...base,
+      queryKey: 'query-3',
+      baseKey: 'base-3',
+      backendKey: 'backend-2',
+      prefixes: ['uat', 'prod'],
+      loadedPrefixes: ['uat'],
+    };
+    expect(decideLoadStrategy(input)).toEqual({ kind: 'full' });
+  });
+
+  it('removed env with base unchanged → identical (columns already loaded)', () => {
+    const input: LoadStrategyInput = {
+      ...base,
+      queryKey: 'query-removed', // se quitó 'prod'
+      backendKey: 'backend-removed',
+      prefixes: ['uat'],
+      loadedPrefixes: ['uat'],
+    };
+    expect(decideLoadStrategy(input)).toEqual({ kind: 'identical' });
   });
 });

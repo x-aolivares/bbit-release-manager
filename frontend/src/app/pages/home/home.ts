@@ -11,7 +11,7 @@ import { IonCardContent } from '@ionic/angular/ion-card-content';
 import { IonIcon } from '@ionic/angular';
 import { SessionHistoryService, SessionConfig } from '../../services/session-history.service';
 import { SessionSidebarComponent } from '../../components/session-sidebar/session-sidebar';
-import { buildFlowUrl, processSseEvent, repoUrl as flowRepoUrl, sortRepos } from './flow-utils';
+import { buildFlowUrl, decideLoadStrategy, processSseEvent, repoUrl as flowRepoUrl, sortRepos } from './flow-utils';
 import type { RepoSortKey, RepoSortDir } from './flow-utils';
 
 interface Health {
@@ -169,6 +169,55 @@ export class Home implements OnInit {
   prTitle = '';
   prefixInput = '';
   prefixes = signal<string[]>(['uat', 'stgp', 'prod']);
+  // BBIT-56: prefijos que ya tienen datos cargados en la tabla (columnas
+  // visibles). Un prefijo agregado a `prefixes` NO pinta columna hasta que
+  // una consulta exitosa lo acredite (sin placeholder "generate tag/—").
+  loadedPrefixes = signal<string[]>([]);
+  // BBIT-56: firma de la última consulta exitosa. Una petición idéntica
+  // + memoria caliente (repos() ya pintado) = cero trabajo de red.
+  lastQueryKey: string | null = null;
+  // BBIT-56: base (sin prefixes) de la última consulta exitosa — para
+  // detectar recargas selectivas (solo se agregaron ambientes).
+  lastQueryBaseKey: string | null = null;
+  // BBIT-56: firma SOLO de campos que el backend necesita re-consultar
+  // (origin, dest, prefixes, mode). Si no cambió, no hay nada nuevo de red.
+  lastBackendKey: string | null = null;
+
+  // BBIT-56: firma canónica de la consulta actual (lo que el cliente pide).
+  private queryKey(): string {
+    return JSON.stringify({
+      origin: this.origin,
+      destination: this.projectsDest(),
+      prefixes: [...this.prefixes()].sort(),
+      projectPrefixes: [...this.projectPrefixes()].sort(),
+      exclude: [...this.blacklisted()].sort(),
+      mode: this.scanMode,
+    });
+  }
+
+  // BBIT-56: base de la consulta SIN prefixes — sirve para detectar que el
+  // único cambio son ambientes nuevos (recarga selectiva) y no filtros.
+  private queryBaseKey(): string {
+    return JSON.stringify({
+      origin: this.origin,
+      destination: this.projectsDest(),
+      projectPrefixes: [...this.projectPrefixes()].sort(),
+      exclude: [...this.blacklisted()].sort(),
+      mode: this.scanMode,
+    });
+  }
+
+  // BBIT-56: firma SOLO de los campos que el backend necesita re-consultar
+  // (origin, dest, prefixes, mode). Si esto no cambió, no hay nada nuevo que
+  // traer del backend: blacklist y projectPrefixes son filtrado cliente-side.
+  private queryBackendKey(): string {
+    return JSON.stringify({
+      origin: this.origin,
+      destination: this.projectsDest(),
+      prefixes: [...this.prefixes()].sort(),
+      mode: this.scanMode,
+    });
+  }
 
   projectPrefixInput = '';
   projectPrefixes = signal<string[]>([]);
@@ -181,6 +230,9 @@ export class Home implements OnInit {
 
   bbTokenUrl = 'https://id.atlassian.com/manage-profile/security/api-tokens';
   cciTokenUrl = 'https://app.circleci.com/settings/user/tokens';
+
+  // BBIT-56: último query_diff recibido del backend (para UI / logging).
+  lastQueryDiff = signal<{ identical: boolean; added: Record<string, unknown>; removed: Record<string, unknown>; changed: Record<string, unknown> } | null>(null);
 
   repos = signal<ScanRepo[]>([]);
   projects = signal<ScanProject[]>([]);
@@ -603,19 +655,36 @@ reportOpen = signal(false);
   sessions = signal<SessionConfig[]>([]);
 
   prefixCols(): string {
-    return this.prefixes().map(() => ' 9.5rem').join('');
+    return this.loadedPrefixes().map(() => ' 9.5rem').join('');
+  }
+
+  // BBIT-56: tras una consulta exitosa, los prefijos con datos son todos los
+  // que se pidieron y la firma de la última consulta queda registrada (para
+  // que la siguiente petición idéntica haga cero trabajo). Solo se llama en
+  // cargas completas (SSE/batch), nunca en retry de repos fallidos.
+  private syncLoadedPrefixes(): void {
+    this.loadedPrefixes.set(this.prefixes().slice());
+    this.lastQueryKey = this.queryKey();
+    this.lastQueryBaseKey = this.queryBaseKey();
+    this.lastBackendKey = this.queryBackendKey();
   }
 
   addPrefix() {
     const p = this.prefixInput.trim().toLowerCase();
     if (p && !this.prefixes().includes(p)) {
+      // BBIT-56: el prefijo queda "pendiente" (en prefixes pero no en
+      // loadedPrefixes) → la columna NO se pinta hasta "obtener repositorios".
       this.prefixes.update((list) => [...list, p]);
     }
     this.prefixInput = '';
   }
 
   removePrefix(index: number) {
+    const p = this.prefixes()[index];
     this.prefixes.update((list) => list.filter((_, i) => i !== index));
+    if (p) {
+      this.loadedPrefixes.update((list) => list.filter((x) => x !== p));
+    }
   }
 
   addProjectPrefix() {
@@ -925,12 +994,14 @@ reportOpen = signal(false);
     onTimeout: () => void,
     onRepoHidden: (slug: string) => void,
     onField: (slug: string, field: string, value: unknown) => void,
+    prefixesOverride: string[] | null = null,
   ): boolean {
     const dest = this.projectsDest();
-    const prefixes = this.prefixes().join(',');
+    const scanPrefixes = prefixesOverride ?? this.prefixes();
+    const prefixes = scanPrefixes.join(',');
     const exclude = this.blacklisted().join(',');
     const force = this.forceCache() ? 1 : 0;
-    const url = `/api/flow/stream?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}&with_tags=${this.prefixes().length > 0 ? 1 : 0}&with_diff=${withDiff ? 1 : 0}`;
+    const url = `/api/flow/stream?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}&with_tags=${scanPrefixes.length > 0 ? 1 : 0}&with_diff=${withDiff ? 1 : 0}`;
 
     console.log(`[SSE] Opening connection to: ${url}`);
     let firstEventReceived = false;
@@ -947,6 +1018,19 @@ reportOpen = signal(false);
 
     es.addEventListener('open', () => {
       console.log(`[SSE] Connection opened successfully`);
+    });
+
+    // BBIT-56: capturar el diff de la consulta vs la anterior. El backend
+    // lo emite como primer evento; en un reload frío (repos vacíos) el front
+    // aún necesita los datos, por lo que se almacena para referencia sin
+    // cortar el flujo.
+    es.addEventListener('query_diff', (e: MessageEvent) => {
+      console.log(`[SSE] Received query_diff event:`, e.data.substring(0, 100));
+      firstEventReceived = true;
+      const parsed = processSseEvent('query_diff', e.data, repos);
+      if (parsed?.type === 'query_diff') {
+        this.lastQueryDiff.set(parsed.query_diff);
+      }
     });
 
     es.addEventListener('repo', (e: MessageEvent) => {
@@ -1072,6 +1156,54 @@ reportOpen = signal(false);
       return;
     }
 
+    // BBIT-56: decidir la estrategia de carga en una función pura testeable:
+    // - identical → la petición es idéntica a la última exitosa y la tabla ya
+    //   está pintada → cero trabajo de red (ni SSE ni /repos-quick).
+    // - selective → solo se agregaron ambientes → consultar columnas nuevas.
+    // - removal → cambiaron filtros cliente-side (blacklist/project_prefixes)
+    //   → refiltrar en el cliente sin re-consultar lo que ya está cargado.
+    // - full → cualquier otro cambio, fuerza o withDiff ("Cargar parámetros").
+    const strategy = decideLoadStrategy({
+      withDiff,
+      forceCache: this.forceCache(),
+      hasRepos: this.repos().length > 0,
+      lastQueryKey: this.lastQueryKey,
+      lastBaseKey: this.lastQueryBaseKey,
+      lastBackendKey: this.lastBackendKey,
+      queryKey: this.queryKey(),
+      baseKey: this.queryBaseKey(),
+      backendKey: this.queryBackendKey(),
+      prefixes: this.prefixes(),
+      loadedPrefixes: this.loadedPrefixes(),
+    });
+
+    if (strategy.kind === 'identical') {
+      // Refresh de keys: si llegamos acá por "se quitaron ambientes" (ya
+      // cargados), las keys de estrategia quedaron desactualizadas y la
+      // próxima consulta idéntica las necesita frescas.
+      this.syncLoadedPrefixes();
+      this.finalizing.set(false);
+      done();
+      return;
+    }
+
+    if (strategy.kind === 'removal') {
+      this.applyRemovals();
+      if (strategy.added.length > 0) {
+        this.loadReposSelective(strategy.added, done, withDiff);
+      } else {
+        this.finalizing.set(false);
+        this.syncLoadedPrefixes();
+        done();
+      }
+      return;
+    }
+
+    if (strategy.kind === 'selective') {
+      this.loadReposSelective(strategy.added, done, withDiff);
+      return;
+    }
+
     // QUICK LOAD: Si ya tenemos repos en caché LOCAL, usarlos sin HTTP.
     // Si no, hacer llamada a /repos-quick primero.
     if (this.reposCache().length > 0) {
@@ -1183,9 +1315,10 @@ reportOpen = signal(false);
         this.removed.set((diff.removed ?? []) as unknown as RemovedParam[]);
         this.paramsLoaded.set(true);
       },
-      () => {
+() => {
         done();
         this.saveCurrentSession();
+        this.syncLoadedPrefixes();
       },
       (msg) => {
         this.error.set(msg);
@@ -1210,6 +1343,103 @@ reportOpen = signal(false);
           return [...current, { slug, name: slug, workspace: '', branch_url: '', commit: '', tags: [], pr: { exists: false }, deploys: {}, match_tag: {}, [field]: value } as ScanRepo];
         });
       },
+    );
+  }
+
+  // BBIT-56: recarga SELECTIVA — solo los prefixes NUEVOS se consultan al
+  // backend (prefixesOverride). El SSE devolverá items con deploys solo para
+  // esos prefixes. El handler de merge por columna preserva los deploys
+  // existentes de los otros prefixes y solo actualiza los nuevos.
+  // BBIT-56: remoción sin re-consulta — cuando cambian blacklist o
+  // project_prefixes (filtros cliente-side) con el mismo origin/dest/prefixes/
+  // mode, la tabla ya pintada se refiltra en el cliente sin tocar red. Los
+  // repos que dejan de matchear desaparecen; los que quedan preservan sus
+  // datos (no se re-consultaron).
+  private applyRemovals(): void {
+    const projectPrefixesParam = this.projectPrefixParam();
+    const prefixes = projectPrefixesParam.split(',').filter(p => p.trim());
+    const blacklist = this.blacklisted();
+
+    this.repos.update((current) => current.filter((r) => {
+      if (projectPrefixesParam && prefixes.length > 0) {
+        const slug = r.slug.toLowerCase();
+        if (!prefixes.some(p => slug.startsWith(p.toLowerCase()))) {
+          return false;
+        }
+      }
+      if (blacklist.includes(r.slug.toLowerCase())) {
+        return false;
+      }
+      return true;
+    }));
+  }
+
+  private loadReposSelective(added: string[], done: () => void, withDiff = false): void {
+    let batchFallbackScheduled = false;
+    const scheduleFallback = () => {
+      if (batchFallbackScheduled) return;
+      batchFallbackScheduled = true;
+      console.warn('SSE selective unavailable, falling back to full batch.');
+      this.loadReposBatch(false, done, withDiff);
+    };
+
+    this.scanSse(
+      withDiff,
+      (item) => {
+        // Merge por columna: los deploys que trae el item son SOLO los del
+        // prefijo nuevo; los existentes se preservan intactos.
+        this.repos.update((current) => {
+          const idx = current.findIndex((r) => r.slug === item.slug);
+          if (idx === -1) {
+            // Repo nuevo: agregar fila completa
+            return [...current, item];
+          }
+          const existing = current[idx];
+          const mergedDeploys = { ...(existing.deploys ?? {}), ...(item.deploys ?? {}) };
+          const mergedMatchTag = { ...(existing.match_tag ?? {}), ...(item.match_tag ?? {}) };
+          return current.map((r, i) =>
+            i === idx
+              ? { ...r, deploys: mergedDeploys, match_tag: mergedMatchTag }
+              : r,
+          );
+        });
+      },
+      (stats) => {
+        this.stats.set(stats as ScanStats);
+      },
+      (diff) => {
+        if (!withDiff) return;
+        this.params.set((diff.params ?? []) as unknown as SsmParam[]);
+        this.removed.set((diff.removed ?? []) as unknown as RemovedParam[]);
+        this.paramsLoaded.set(true);
+      },
+      () => {
+        done();
+        this.saveCurrentSession();
+        this.syncLoadedPrefixes();
+      },
+      (msg) => {
+        this.error.set(msg);
+        done();
+      },
+      () => {
+        scheduleFallback();
+      },
+      (slug) => {
+        // En recarga selectiva, si el repo desaparece (branch not found),
+        // se remueve la fila como en carga normal.
+        this.repos.update((current) => current.filter((r) => r.slug !== slug));
+      },
+      (slug, field, value) => {
+        this.repos.update((current) => {
+          const existing = current.find((r) => r.slug === slug);
+          if (existing) {
+            return current.map((r) => (r.slug === slug ? { ...r, [field]: value } : r));
+          }
+          return [...current, { slug, name: slug, workspace: '', branch_url: '', commit: '', tags: [], pr: { exists: false }, deploys: {}, match_tag: {}, [field]: value } as ScanRepo];
+        });
+      },
+      added,
     );
   }
 
@@ -1274,6 +1504,9 @@ reportOpen = signal(false);
       complete: () => {
         done();
         this.saveCurrentSession();
+        if (!retryOnly) {
+          this.syncLoadedPrefixes();
+        }
       },
     });
   }

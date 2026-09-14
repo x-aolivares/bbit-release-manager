@@ -26,6 +26,97 @@ router = APIRouter(prefix="/api", tags=["repos"])
 
 MAX_WORKERS = 8
 
+# BBIT-56: memoria en proceso del último scan por consulta — la capa entre la
+# memoria caliente del front end (repos() pintada) y SQLite. Un cliente nuevo
+# (otra pestaña, sesión distinta en el mismo backend) que repite una consulta
+# idéntica a la recién resuelta recibe el resultado desde RAM sin re-ejecutar
+# el ciclo de scan (ni SQLite, ni APIs externas). `force` y los retries de
+# repos fallidos (`repos=...`) la ignoran siempre.
+_FLOW_MEMORY: dict[tuple, dict] = {}
+_FLOW_MEMORY_MAX = 8
+# Vigencia de un entry de memoria: el mismo lapso que el slice más efímero del
+# resultado (deploys/tags de CircleCI, TTL 120s). Pasado el TTL el replay se
+# descarta y el ciclo normal re-resuelve los slices vencidos — replica la
+# semántica del cache de SQLite, solo que la capa caliente salta las lecturas.
+_FLOW_MEMORY_TTL = 120.0
+
+
+def _flow_memory_key(
+    kind: str,
+    data,
+    origin: str,
+    destination: str,
+    deploy_prefixes: list[str],
+    proj: list[str] | None,
+    blocked: set[str],
+    mode: str,
+    with_tags: int,
+    with_diff: int,
+    ssm_prefixes: list[str] | None = None,
+) -> tuple:
+    """Clave canónica de la memoria de scan (BBIT-56).
+
+    Incluye TODA la firma que afecta el resultado del scan (sesión, ramas,
+    prefixes, filtros de proyecto/exclusión y flags), no solo los prefixes:
+    dos consultas con los mismos prefixes pero distinta blacklist producen
+    sets de repos distintos y NO son la misma consulta.
+
+    ``ssm_prefixes`` también forma parte de la firma: el diff SSM se extrae
+    según los prefijos de la sesión; cambiarlos produce otro resultado y no
+    debe servirse el replay viejo (BBIT-52).
+    """
+    return (
+        kind,
+        data.session_id,
+        origin,
+        destination,
+        tuple(sorted(deploy_prefixes or [])),
+        tuple(sorted(proj or [])),
+        tuple(sorted(blocked or [])),
+        mode,
+        bool(with_tags),
+        bool(with_diff),
+        tuple(sorted(ssm_prefixes or [])),
+    )
+
+
+def _flow_memory_get(
+    key: tuple, *, force: int = 0, only_repos: set[str] | None = None
+) -> dict | None:
+    """Entry de memoria si la consulta es idéntica a la última resuelta.
+
+    ``None`` si ``force`` (scan desde cero, BBIT-56 regla de force) o si se
+    piden retries de repos específicos (quiebre el set de la consulta). Con
+    ``force`` además se descarta el entry antiguo: el dato que quedó en RAM es
+    el pre-force y ya no vale para una consulta posterior idéntica.
+    """
+    if force:
+        _FLOW_MEMORY.pop(key, None)
+        return None
+    if only_repos:
+        return None
+    entry = _FLOW_MEMORY.get(key)
+    if entry is None:
+        return None
+    if time.time() - entry.get("ts", 0.0) > _FLOW_MEMORY_TTL:
+        _FLOW_MEMORY.pop(key, None)
+        return None
+    return entry
+
+
+def _flow_memory_set(key: tuple, entry: dict) -> None:
+    """Memoriza el resultado de un scan terminado, acotando el historial."""
+    _FLOW_MEMORY[key] = entry
+    if len(_FLOW_MEMORY) > _FLOW_MEMORY_MAX:
+        stale = sorted(_FLOW_MEMORY, key=lambda k: _FLOW_MEMORY[k].get("ts", 0))
+        for dead in stale[: len(_FLOW_MEMORY) - _FLOW_MEMORY_MAX]:
+            _FLOW_MEMORY.pop(dead, None)
+
+
+def _flow_memory_clear() -> None:
+    """Vacía la memoria en proceso (tests / reinicio controlado)."""
+    _FLOW_MEMORY.clear()
+
 
 def _project_prefixes(cfg, raw: str = "") -> list[str] | None:
     """Prefijos de proyecto desde query param; si no, del config.
@@ -655,6 +746,9 @@ def clear_cache(body: dict | None = None):
     elimina solo las sesiones indicadas (y sus requests). Devuelve el desglose.
     """
     sessions = (body or {}).get("sessions") or []
+    # BBIT-56: limpiar el cache (total o por sesión) también descarta la
+    # memoria en proceso: re-consultar debe volver a las APIs, no a RAM.
+    _flow_memory_clear()
     if not sessions:
         try:
             counts = get_cache().clear_all()
@@ -1288,6 +1382,21 @@ def flow(
             "repositories": {"excluded": sorted(blocked), "prefixes": sorted(proj or [])}
         })
 
+    # BBIT-56: registrar la consulta y su diff vs la anterior. Con force el
+    # snapshot previo quedó borrado por invalidate → se comporta como primera.
+    query_snapshot = _flow_query(origin, destination, deploy_prefixes, proj, blocked, mode, force, with_tags, with_diff)
+    query_diff = _record_flow_snapshot(cache, origin, destination, query_snapshot)
+
+    # BBIT-56: memoria en proceso — si la consulta es idéntica a la última
+    # recién resuelta (misma sesión y misma firma de scan), se sirve desde
+    # RAM sin re-ejecutar el ciclo (ni SQLite, ni APIs externas).
+    memory_key = _flow_memory_key("flow", data, origin, destination, deploy_prefixes, proj, blocked, mode, with_tags, with_diff, ssm_prefixes)
+    mem_hit = _flow_memory_get(memory_key, force=force, only_repos=only_repos)
+    if mem_hit is not None:
+        result = dict(mem_hit)
+        result["query_diff"] = {"identical": True, "added": {}, "removed": {}, "changed": {}}
+        return result
+
     repos = _apply_filters(
         _branch_repos_cached(data.client, origin, destination, proj, blocked),
         proj, blocked,
@@ -1360,6 +1469,7 @@ def flow(
         "origin": origin,
         "destination": destination,
         "projects": projects,
+        "query_diff": query_diff,
         "scan": {
             "prefixes": deploy_prefixes,
             "ci_configured": ci_configured,
@@ -1370,9 +1480,62 @@ def flow(
         "diff": diff_raw,
     }
     if not only_repos:
+        _flow_memory_set(memory_key, {
+            **result,
+            "diff": _enrich_diff_ssm(result["diff"], cfg_diff),
+            "ts": time.time(),
+        })
         cache.set_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode, result, with_tags=with_tags, with_diff=with_diff)
     result["diff"] = _enrich_diff_ssm(result["diff"], cfg_diff)
     return result
+
+
+def _flow_query(
+    origin: str,
+    destination: str,
+    deploy_prefixes: list[str],
+    proj: list[str] | None,
+    blocked: set[str],
+    mode: str,
+    force: int = 0,
+    with_tags: int = 1,
+    with_diff: int = 1,
+) -> dict:
+    """Snapshot canónico de una consulta del front (BBIT-56).
+
+    Es la firma completa de lo que el cliente pide: se guarda en la lista
+    de snapshots del par de ramas y sirve para detectar consultas idénticas
+    y calcular el diff (qué columnas/ambientes se agregaron o quitaron).
+    """
+    return {
+        "origin": origin,
+        "destination": destination,
+        "prefixes": sorted(deploy_prefixes or []),
+        "project_prefixes": sorted(proj or []),
+        "exclude": sorted(blocked or []),
+        "mode": mode,
+        "force": bool(force),
+        "with_tags": bool(with_tags),
+        "with_diff": bool(with_diff),
+    }
+
+
+def _record_flow_snapshot(cache, origin: str, destination: str, query: dict) -> dict:
+    """Registra la consulta en el historial de snapshots y devuelve su diff.
+
+    Retorna ``{"identical", "added", "removed", "changed"}``. ``identical``
+    refleja una consulta exactamente igual a la anterior (la info ya está en
+    memoria del front); ``added/removed/changed`` desglosan qué cambió campo
+    a campo para el render bajo demanda de columnas (BBIT-56).
+    """
+    rec = cache.append_snapshot(origin, destination, query)
+    diff = cache.diff_snapshots(rec["previous"], query)
+    return {
+        "identical": rec["identical"],
+        "added": diff["added"],
+        "removed": diff["removed"],
+        "changed": diff["changed"],
+    }
 
 
 @router.get("/flow/stream")
@@ -1419,6 +1582,49 @@ def flow_stream(
             "repositories": {"excluded": sorted(blocked), "prefixes": sorted(proj or [])}
         })
 
+    # BBIT-56: registrar la consulta y su diff vs la anterior; el diff se emite
+    # como primer evento SSE para que el front sepa si respondió una consulta
+    # idéntica (no re-renderiza) o qué columnas agregar/quitar bajo demanda.
+    query_snapshot = _flow_query(origin, destination, deploy_prefixes, proj, blocked, mode, force, with_tags, with_diff)
+    query_diff = _record_flow_snapshot(cache, origin, destination, query_snapshot)
+
+    # BBIT-56: memoria en proceso — consulta idéntica a la última recién
+    # resuelta → replay SSE desde RAM sin re-ejecutar el ciclo (ni SQLite, ni
+    # APIs externas). `force` y retries la ignoran.
+    memory_key = _flow_memory_key("stream", data, origin, destination, deploy_prefixes, proj, blocked, mode, with_tags, with_diff, ssm_prefixes)
+
+    def _event(event_type: str, payload) -> str:
+        return f"retry: 5000\nevent: {event_type}\ndata: {_json.dumps(payload)}\n\n"
+
+    # BBIT-56: memoria en proceso — consulta idéntica a la última recién
+    # resuelta → replay SSE desde RAM antes de tocar repos/SQLite/APIs
+    # (cero trabajo). `force` y retries la ignoran.
+    mem_hit = _flow_memory_get(memory_key, force=force, only_repos=only_repos)
+    if mem_hit is not None:
+        def _replay():
+            try:
+                yield _event("query_diff", {"identical": True, "added": {}, "removed": {}, "changed": {}})
+            except Exception as exc:
+                log.debug("flow_stream: query_diff de replay no entregado: %s", exc)
+            for it in mem_hit["items"]:
+                try:
+                    yield _event("repo", it)
+                except Exception as exc:
+                    log.debug("flow_stream: replay interrumpido (cliente desconectado): %s", exc)
+                    return
+            yield _event("stats", mem_hit["stats"])
+            if mode == "diff" and with_diff and mem_hit.get("diff") is not None:
+                try:
+                    yield _event("diff", mem_hit["diff"])
+                except Exception as exc:
+                    log.debug("flow_stream: diff de replay no entregado: %s", exc)
+                    return
+            try:
+                yield _event("done", {})
+            except Exception as exc:
+                log.debug("flow_stream: done de replay no entregado: %s", exc)
+        return StreamingResponse(_replay(), media_type="text/event-stream")
+
     # BBIT-33 Phase 8: Obtener repos con rama RÁPIDAMENTE (API paralela, clone background)
     # No esperamos al clone - devolvemos rápido y enviamos eventos SSE inmediatamente
     # BBIT-35 P3/P4: la cache persiste found + not_found; separamos ambos.
@@ -1443,13 +1649,19 @@ def flow_stream(
 
     ctx: dict = {}
 
-    def _event(event_type: str, payload) -> str:
-        return f"retry: 5000\nevent: {event_type}\ndata: {_json.dumps(payload)}\n\n"
-
     def _generate():
         items = []
         scan_ci_error = None
         repo_count = 0
+        diff_enriched = None
+
+        # BBIT-56: primer evento = diff de la consulta vs la anterior. Con
+        # esto el front sabe desde el inicio si es idéntica (no toca la tabla)
+        # o qué prefixes/agrupaciones cambian (render bajo demanda).
+        try:
+            yield _event("query_diff", query_diff)
+        except Exception as exc:
+            log.debug("flow_stream: query_diff no entregado: %s", exc)
 
         # Overlap de fases: master params corren en un hilo paralelo al scan
         # (mismo rate limiter global). El executor se cierra al terminar o al
@@ -1528,6 +1740,16 @@ def flow_stream(
                 except Exception as exc:
                     log.warning("flow_stream: cliente desconectado durante diff: %s", exc)
                     return
+
+            # BBIT-56: memorizar el resultado para replay de consultas
+            # idénticas (solo consultas completas, nunca force ni retries).
+            if not only_repos and not force:
+                _flow_memory_set(memory_key, {
+                    "items": items,
+                    "stats": stats,
+                    "diff": diff_enriched,
+                    "ts": time.time(),
+                })
 
             try:
                 yield _event("done", {})
