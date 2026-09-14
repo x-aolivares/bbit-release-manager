@@ -389,6 +389,113 @@ def test_find_session_new_when_config_differs(tmp_path):
     assert a != b
 
 
+# -- snapshots de consulta (BBIT-56) -----------------------------------------
+
+def _query(prefixes=None, project_prefixes=None, exclude=None, origin="release/x", destination="master"):
+    return {
+        "origin": origin,
+        "destination": destination,
+        "prefixes": prefixes or ["uat"],
+        "project_prefixes": project_prefixes or [],
+        "exclude": exclude or [],
+        "mode": "diff",
+    }
+
+
+def test_snapshot_first_consult_reports_identical_false(tmp_path):
+    cache = _make_cache(tmp_path)
+    res = cache.append_snapshot("release/x", "master", _query())
+    assert res["identical"] is False
+    assert res["previous"] is None
+    assert res["is_id"] > 0
+
+
+def test_snapshot_identical_repeated_consult(tmp_path):
+    cache = _make_cache(tmp_path)
+    q = _query()
+    first = cache.append_snapshot("release/x", "master", q)
+    second = cache.append_snapshot("release/x", "master", q)
+    assert second["identical"] is True
+    assert second["previous"] == q
+    assert second["is_id"] == first["is_id"]
+
+
+def test_snapshot_changed_consult_prepends_desc(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.append_snapshot("release/x", "master", _query(prefixes=["uat"]))
+    cache.append_snapshot("release/x", "master", _query(prefixes=["uat", "stgp"]))
+
+    last = cache.get_last_snapshot("release/x", "master")
+    assert last is not None
+    assert "stgp" in last["prefixes"]
+
+
+def test_snapshot_ignores_session_rows(tmp_path):
+    cache = _make_cache(tmp_path)
+    # Una sesión con fingerprint (fila normal de init_sesion) NO debe confundirse
+    cache.find_session("release/x", "master", {"repositories": {}})
+    assert cache.get_last_snapshot("release/x", "master") is None
+
+    res = cache.append_snapshot("release/x", "master", _query())
+    # La fila de snapshots es distinta de la de sesión
+    snap_row = cache.get_session(res["is_id"])
+    parsed = json.loads(snap_row["details"])
+    assert parsed["type"] == "query_history"
+
+
+def test_diff_snapshots_first_consult_marks_all_added(tmp_path):
+    cache = _make_cache(tmp_path)
+    d = cache.diff_snapshots(None, _query(prefixes=["uat"], exclude=["billing"]))
+    assert d["identical"] is False
+    assert d["added"]["prefixes"] == ["uat"]
+    assert d["added"]["exclude"] == ["billing"]
+
+
+def test_diff_snapshots_added_new_environment(tmp_path):
+    cache = _make_cache(tmp_path)
+    prev = _query(prefixes=["uat"])
+    curr = _query(prefixes=["uat", "stgp"])
+    d = cache.diff_snapshots(prev, curr)
+    assert d["identical"] is False
+    assert d["added"]["prefixes"] == ["stgp"]
+    assert d["removed"] == {}
+
+
+def test_diff_snapshots_removed_environment_by_blacklist(tmp_path):
+    cache = _make_cache(tmp_path)
+    prev = _query(prefixes=["uat", "stgp"], exclude=[])
+    curr = _query(prefixes=["uat", "stgp"], exclude=["billing-api"])
+    d = cache.diff_snapshots(prev, curr)
+    # Agregar el repo a la blacklist → ese repo se QUITA del set consultado.
+    # En el diff de queries el campo exclude gana el valor nuevo (added).
+    assert d["added"]["exclude"] == ["billing-api"]
+    assert "prefixes" not in d["added"]
+
+
+def test_diff_snapshots_identical_queries(tmp_path):
+    cache = _make_cache(tmp_path)
+    d = cache.diff_snapshots(_query(), _query())
+    assert d["identical"] is True
+
+
+def test_diff_snapshots_changed_mixed_set(tmp_path):
+    # uat se quita, qa se agrega: superposición parcial → changed
+    cache = _make_cache(tmp_path)
+    prev = _query(prefixes=["uat", "stgp"])
+    curr = _query(prefixes=["stgp", "qa"])
+    d = cache.diff_snapshots(prev, curr)
+    assert d["identical"] is False
+    assert d["changed"]["prefixes"]["desde"] == ["stgp", "uat"]
+    assert d["changed"]["prefixes"]["hasta"] == ["qa", "stgp"]
+
+
+def test_invalidate_borra_snapshots(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.append_snapshot("release/x", "master", _query(prefixes=["uat"]))
+    cache.invalidate("release/x", "master", {})
+    assert cache.get_last_snapshot("release/x", "master") is None
+
+
 # -- requests / TTL ---------------------------------------------------------
 
 def test_add_request_and_latest_success(tmp_path):
