@@ -48,6 +48,17 @@ class DeployJob:
     approval: str = ""
 
 
+def _matches_deploy_commit(pipeline: dict, commit: str) -> bool:
+    """La revision del pipeline == el commit esperado del deploy (BBIT-48).
+
+    Criterio estricto unificado: un pipeline es un deploy del tag/branch solo
+    si su ``vcs.revision`` es exactamente el commit que se quiere deployar.
+    Sin esto, un pipeline disparado sobre otra revisión cuenta como deploy
+    fantasma en ``deploys_for_tags``.
+    """
+    return (pipeline.get("vcs") or {}).get("revision", "") == commit
+
+
 class CircleCiClient:
     def __init__(
         self,
@@ -425,7 +436,7 @@ class CircleCiClient:
                 "deploy_for_tag: %s pipeline#%s vcs.revision=%s vs commit=%s match=%s",
                 repo, pipeline.get("number"), rev[:12], commit[:12], rev == commit,
             )
-            if rev != commit:
+            if not _matches_deploy_commit(pipeline, commit):
                 log.info(
                     "deploy_for_tag: %s tag=%s descarta pipeline vcs.revision=%s (commit=%s)",
                     repo, tag, rev[:12], commit[:12],
@@ -459,14 +470,18 @@ class CircleCiClient:
         )
         return None
 
-    def deploys_for_tags(self, repo: str, tags: list[str]) -> dict[str, DeployJob | None]:
-        """Para cada tag, el último pipeline corrido sobre ese tag.
+    def deploys_for_tags(self, repo: str, tags: list[str], commit: str) -> dict[str, DeployJob | None]:
+        """Para cada tag, el último pipeline sobre ese tag que deployó el commit.
 
         Los pipelines de tags distintos se resuelven en paralelo (acotado a
         pocos workers); ``ex.map`` preserva el orden de ``tags`` en el
         resultado. Todos los tags leen la MISMA página 'latest' cacheada por
         proyecto (BBIT-43): en frío solo hay 1 request a CircleCI, y el lock
         de ``_pipelines_latest_page`` evita paginar dos veces el proyecto.
+
+        BBIT-48: usa el criterio estricto unificado (``vcs.revision == commit``,
+        igual que ``deploy_for_tag``) para que un pipeline corrido sobre otra
+        revisión no cuente como deploy del tag (provenance garantizado).
         """
         result: dict[str, DeployJob | None] = {t: None for t in tags}
         if not tags:
@@ -476,10 +491,20 @@ class CircleCiClient:
             pipelines = self.pipelines(repo, tag=tag)
             if not pipelines:
                 return None
-            pipeline = pipelines[0]
-            for workflow in self.workflows(pipeline.get("id", "")):
-                if workflow.get("name", ""):
-                    return self._deploy_from_workflow(repo, pipeline, workflow)
+            for pipeline in pipelines:
+                if not _matches_deploy_commit(pipeline, commit):
+                    log.info(
+                        "deploys_for_tags: %s tag=%s descarta pipeline#%s "
+                        "vcs.revision=%s (commit=%s)",
+                        repo, tag, pipeline.get("number"),
+                        ((pipeline.get("vcs") or {}).get("revision", "") or "")[:12],
+                        commit[:12],
+                    )
+                    continue
+                for workflow in self.workflows(pipeline.get("id", "")):
+                    if workflow.get("name", ""):
+                        return self._deploy_from_workflow(repo, pipeline, workflow)
+                return None
             return None
 
         with ThreadPoolExecutor(max_workers=min(len(tags), 4)) as ex:

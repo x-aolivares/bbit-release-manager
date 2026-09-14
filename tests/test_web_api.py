@@ -569,7 +569,7 @@ def test_scan_repo_42_slice_vivo_se_re_resuelve_sin_reescanear(monkeypatch, tmp_
 
     class StubCi:
         vcs = "bb"
-        def deploys_for_tags(self, repo, tags):
+        def deploys_for_tags(self, repo, tags, commit=""):
             return {t: None for t in tags}
         def project_id(self, repo):
             return "proj-1"
@@ -806,7 +806,7 @@ def test_scan_deploys_from_tag(monkeypatch):
 
     class StubCi:
         vcs = "bb"
-        def deploys_for_tags(self, repo, tags):
+        def deploys_for_tags(self, repo, tags, commit=""):
             return {"uat-7": SimpleNamespace(workflow="deploy-uat", status="success", created_at="x", url="http://cci/7", job="deploy-uat", approval="success")}
         def deploy_for_tag(self, repo, tag, commit, prefix):
             if tag == "uat-7" and commit == "abc123" and prefix == "uat":
@@ -861,7 +861,7 @@ def test_scan_resolves_full_hash_with_pr(monkeypatch):
 
     class StubCi:
         vcs = "bb"
-        def deploys_for_tags(self, repo, tags):
+        def deploys_for_tags(self, repo, tags, commit=""):
             return {}
         def deploy_for_tag(self, repo, tag, commit, prefix):
             assert commit == "abc123456789000000000000000000000000000000"
@@ -2343,7 +2343,7 @@ def test_flow_tags_on_demand_desde_cache_sin_tags(monkeypatch):
 
     class StubCi:
         vcs = "bb"
-        def deploys_for_tags(self, repo, tags):
+        def deploys_for_tags(self, repo, tags, commit=""):
             return {}
         def project_id(self, repo):
             return "p1"
@@ -2873,7 +2873,7 @@ def test_flow_stream_emits_fields_before_repo_complete(monkeypatch):
         vcs = "bitbucket"
         def deploy_for_tag(self, repo, tag, commit, env):
             return SimpleNamespace(status="success", url="http://ci/x", created_at="x", deploy_number=1, workflow="wf", job="job", approval=None)
-        def deploys_for_tags(self, repo, tags):
+        def deploys_for_tags(self, repo, tags, commit=""):
             return {}
         def project_id(self, repo):
             return "proj-1"

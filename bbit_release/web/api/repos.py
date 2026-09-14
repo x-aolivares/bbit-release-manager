@@ -853,7 +853,7 @@ def _resolve_tags_slice(client, ci, slug, commit, clean, match_commit="", tags=N
         names = [t["name"] for t in tags]
         if names:
             try:
-                tag_deploys = ci.deploys_for_tags(slug, names)
+                tag_deploys = ci.deploys_for_tags(slug, names, commit)
             except CircleCiError as exc:
                 ci_error = str(exc)
             ci_project = _safe_call(lambda: ci.project_id(slug), None)

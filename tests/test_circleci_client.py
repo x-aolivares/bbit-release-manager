@@ -279,7 +279,7 @@ def test_deploys_for_tags():
         ("GET", "/api/v2/workflow/w/job"): jobs,
     }))
     try:
-        found = client.deploys_for_tags("r1", ["v1", "v2"])
+        found = client.deploys_for_tags("r1", ["v1", "v2"], "x")
     finally:
         client.close()
     assert found["v1"].status == "running"
@@ -428,7 +428,7 @@ def test_deploys_for_tags_una_sola_pagina_latest(tmp_path):
     def pipelines(request):
         calls["c"] += 1
         return httpx.Response(200, json={"next_page_token": None, "items": [
-            {"id": f"p{i}", "number": i, "vcs": {"revision": f"r{i}", "tag": f"v{i}"}}
+            {"id": f"p{i}", "number": i, "vcs": {"revision": "abc", "tag": f"v{i}"}}
             for i in range(1, 11)
         ]})
 
@@ -453,13 +453,50 @@ def test_deploys_for_tags_una_sola_pagina_latest(tmp_path):
     cache = _make_cache(tmp_path)
     client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport(routes), cache=cache)
     try:
-        found = client.deploys_for_tags("r1", ["v1", "v2", "v3"])
+        found = client.deploys_for_tags("r1", ["v1", "v2", "v3"], "abc")
         assert calls["c"] == 1  # 3 tags -> 1 sola página 'latest' consultada
         assert set(found) == {"v1", "v2", "v3"}
         assert all(v is not None and v.status == "running" for v in found.values())
     finally:
         client.close()
         cache.close()
+
+
+def test_deploys_for_tags_descarta_revision_distinta_al_commit():
+    """BBIT-48: un pipeline del tag con vcs.revision != commit se descarta en batch."""
+    def pipelines(request):
+        return httpx.Response(200, json={"next_page_token": None, "items": [
+            {"id": "p2", "number": 12, "vcs": {"tag": "v1", "revision": "zzz"}},
+            {"id": "p1", "number": 3, "vcs": {"tag": "v1", "revision": "abc"}},
+        ]})
+
+    def workflows(request):
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [{"id": "w", "name": "deploy", "status": "running", "created_at": "x"}],
+        })
+
+    def jobs(request):
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [{"id": "jd", "type": "build", "name": "deploy", "status": "running"}],
+        })
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): pipelines,
+        ("GET", "/api/v2/pipeline/p1/workflow"): workflows,
+        ("GET", "/api/v2/workflow/w/job"): jobs,
+    }))
+    try:
+        # El pipeline más reciente (p2, rev zzz) se descarta por provenance;
+        # el deploy real es p1 (rev abc == commit).
+        found = client.deploys_for_tags("r1", ["v1", "v2"], "abc")
+    finally:
+        client.close()
+    assert found["v1"] is not None
+    assert found["v1"].pipeline_number == 3
+    assert found["v1"].job == "deploy"
+    assert found["v2"] is None
 
 
 def test_pipeline_404_devuelve_lista_vacia_y_se_cachea(tmp_path):
