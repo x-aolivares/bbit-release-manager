@@ -1,0 +1,83 @@
+<div class="bb-panel">
+  <div class="bb-section">
+    <div class="bb-section-header">Resolver ramas</div>
+    <div class="bb-row-top">
+      <div class="bb-field">
+        <input class="bb-input bb-mono" [ngModel]="origin" (ngModelChange)="originChange.emit($event)"
+               placeholder="Ingrese rama origen"/>
+      </div>
+      <div class="bb-field">
+        <input class="bb-input bb-mono" [ngModel]="destination" (ngModelChange)="destinationChange.emit($event)"
+               placeholder="Ingrese rama destino"/>
+      </div>
+      <label class="bb-force">
+        <input type="checkbox" [checked]="forceCache()" (change)="forceCache.set($any($event.target).checked)"/>
+        Forzar consultas (ignorar caché)
+      </label>
+      <button class="bb-btn-primary" (click)="loadRepos.emit()" [disabled]="reposLoading() || !origin">
+        @if (reposLoading()) {
+        <span class="bb-spinner-inline"></span>
+        }
+        Obtener Repositorios
+      </button>
+    </div>
+    <div class="bb-row-top">
+      <div class="bb-field" style="flex: 1;">
+        <label>Proyectos a Excluir (Blacklist)</label>
+        <div class="bb-chips">
+          @for (p of blacklisted(); track p; let i = $index) {
+          <span class="bb-chip-pill bb-chip-pill--danger bb-mono">{{ p }}
+                <button class="bb-chip-x" (click)="removeBlacklist.emit(i)">×</button>
+              </span>
+          }
+          @if (!addingBlacklist()) {
+          <button class="bb-chip-add" (click)="addingBlacklist.set(true)">+ Excluir proyecto</button>
+          } @else {
+          <input class="bb-chip-input" [ngModel]="blacklistInput" (ngModelChange)="blacklistInputChange.emit($event)"
+                 placeholder="repo-a"
+                 (keyup.enter)="addBlacklist.emit()"/>
+          <button class="bb-chip-add" (click)="addBlacklist.emit()">OK</button>
+          <button class="bb-chip-add" (click)="addingBlacklist.set(false)">×</button>
+          }
+        </div>
+      </div>
+      <div class="bb-field" style="flex: 1;">
+        <label>Prefijos de Proyectos</label>
+        <div class="bb-chips">
+          @for (p of projectPrefixes(); track p; let i = $index) {
+          <span class="bb-chip-pill bb-mono">{{ p }}
+                <button class="bb-chip-x" (click)="removeProjectPrefix.emit(i)">×</button>
+              </span>
+          }
+          @if (!addingProjectPrefix()) {
+          <button class="bb-chip-add" (click)="addingProjectPrefix.set(true)">+ Agregar prefijo</button>
+          } @else {
+          <input class="bb-chip-input" [ngModel]="projectPrefixInput" (ngModelChange)="projectPrefixInputChange.emit($event)"
+                 placeholder="orders"
+                 (keyup.enter)="addProjectPrefix.emit()"/>
+          <button class="bb-chip-add" (click)="addProjectPrefix.emit()">OK</button>
+          <button class="bb-chip-add" (click)="addingProjectPrefix.set(false)">×</button>
+          }
+        </div>
+      </div>
+      <div class="bb-field" style="flex: 1;">
+        <label>Ambientes de Deploy</label>
+        <div class="bb-chips" style="flex: 1;">
+          @for (p of prefixes(); track p; let i = $index) {
+          <span class="bb-chip-pill bb-mono">{{ p }}
+                <button class="bb-chip-x" (click)="removePrefix.emit(i)">×</button>
+              </span>
+          }
+          @if (!addingPrefix()) {
+          <button class="bb-chip-add" (click)="addingPrefix.set(true)">+ Agregar ambiente</button>
+          } @else {
+          <input class="bb-chip-input" [ngModel]="prefixInput" (ngModelChange)="prefixInputChange.emit($event)"
+                 placeholder="uat" (keyup.enter)="addPrefix.emit()"/>
+          <button class="bb-chip-add" (click)="addPrefix.emit()">OK</button>
+          <button class="bb-chip-add" (click)="addingPrefix.set(false)">×</button>
+          }
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

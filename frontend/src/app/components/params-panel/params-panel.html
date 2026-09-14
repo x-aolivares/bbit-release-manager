@@ -1,0 +1,87 @@
+@if (connected()) {
+<div class="bb-panel">
+  <div class="bb-section">
+    <div class="bb-section-header">Parámetros SSM</div>
+    <div class="bb-row-top">
+      <div class="bb-seg">
+        <button class="bb-seg-btn" [class.bb-seg-btn--active]="scanValue() === 'diff'"
+                (click)="setScanMode('diff')">Solo el diff
+        </button>
+        <button class="bb-seg-btn" [class.bb-seg-btn--active]="scanValue() === 'all'"
+                (click)="setScanMode('all')">Todos los archivos
+        </button>
+      </div>
+      <button class="bb-btn-secondary" (click)="loadParams.emit()" [disabled]="paramsLoading() || !origin()">
+        @if (paramsLoading()) {
+        <span class="bb-spinner-inline"></span>
+        }
+        Cargar parámetros
+      </button>
+      <button class="bb-btn-secondary" (click)="openParams.emit()"
+              [disabled]="params().length === 0 && removed().length === 0">
+        Ver parámetros
+      </button>
+    </div>
+    <div class="bb-muted bb-hint">
+      "Solo el diff" analiza los archivos tocados por la rama (rápido);
+      "Todos los archivos" recorre el repo completo por ref (más lento).
+    </div>
+  </div>
+</div>
+}
+
+@if (connected() && paramsLoaded()) {
+<div class="bb-panel">
+  <div class="bb-section">
+    <div class="bb-section-header">Parámetros SSM — respuesta</div>
+    @if (params().length > 0 || removed().length > 0) {
+    <div class="bb-row-top bb-params-filters">
+      <span class="bb-muted">Filtrar por estado:</span>
+      @for (estado of estadoOptions(); track estado) {
+      <button class="bb-chip" [class.bb-chip--active]="estadoFilterActive(estado)"
+              (click)="toggleEstado.emit(estado)">
+        {{ chipLabel(estado) }}
+      </button>
+      }
+    </div>
+    @if (removed().length > 0) {
+    <p class="bb-muted bb-hint bb-params-hint">
+      "Solo destino" = existe en '{{ destination() }}' pero ya no se referencias en '{{ origin() }}'.
+      No implica que el parámetro haya que borrarlo.
+    </p>
+    }
+    <div class="bb-table bb-table--params">
+      <div class="bb-repos-head">
+        <span>Parámetro</span>
+        <span>Estado</span>
+        <span>Tipo</span>
+        <span></span>
+      </div>
+      @for (p of rows(); track p.param) {
+      <div class="bb-repos-row">
+        <span class="bb-mono bb-param-cell">
+          <a class="bb-link bb-mono" [title]="p.param"
+             (click)="openSsmView.emit(p.param)">{{ p.param }}</a>
+        </span>
+        <span class="bb-badge {{ tipoClass(p.estado) }}">{{ estadoLabel(p.estado) }}</span>
+        <span>
+          @if (p.type === 'secret') {
+          <span class="bb-badge bb-badge--danger" title="Parámetro marcado como secreto en la ssm-view">secreto</span>
+          } @else {
+          <span class="bb-badge bb-badge--neutral">ssm</span>
+          }
+        </span>
+        <span>
+          <button class="bb-btn-secondary bb-btn-sm" (click)="openSsmView.emit(p.param)">
+            Revisar SSM
+          </button>
+        </span>
+      </div>
+      }
+    </div>
+    } @else if (hasRepos()) {
+    <div class="bb-muted">Sin parámetros SSM.</div>
+    }
+  </div>
+</div>
+}

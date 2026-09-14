@@ -1,0 +1,158 @@
+@if (open()) {
+<div class="bb-modal-mask" (click)="close.emit()">
+  <div class="bb-modal bb-modal--config" (click)="$event.stopPropagation()">
+    <div class="bb-modal-title">Configuración</div>
+    <div class="bb-config-meta bb-muted">
+      Cliente: <span class="bb-mono">{{ clientAlias() }}</span>
+    </div>
+    @if (configMessage(); as msg) {
+    <div class="bb-config-msg"
+         [class.bb-config-msg--ok]="msg.kind === 'ok'"
+         [class.bb-config-msg--error]="msg.kind === 'error'">
+      {{ msg.text }}
+    </div>
+    }
+    @for (svc of serviceKeys; track svc) {
+    <div class="bb-config-service">
+      <div class="bb-config-service-head">
+        <span class="bb-config-service-name">{{ serviceLabel(svc) }}</span>
+        @let st = services()[svc];
+        @if (st?.stored) {
+        <span class="bb-badge bb-badge--ok">Guardado</span>
+        } @else {
+        <span class="bb-badge bb-badge--neutral">Sin guardar</span>
+        }
+        @if (st?.warning === 'expired') {
+        <span class="bb-badge bb-badge--warn">Vencido</span>
+        } @else if (st?.warning === 'expiring') {
+        <span class="bb-badge bb-badge--warn">Vence pronto</span>
+        }
+      </div>
+      <div class="bb-config-fields">
+        @for (f of serviceFields[svc]; track f.key) {
+          @if (!f.dependsOn || configForm[svc][f.dependsOn] === '1') {
+          <div class="bb-config-field">
+            <label class="bb-auth-label">{{ f.label }}</label>
+            @if (f.checkbox) {
+            <input type="checkbox" class="bb-config-checkbox"
+                   [name]="svc + '_' + f.key"
+                   [checked]="configForm[svc][f.key] === '1'"
+                   (change)="onFieldToggle(svc, f.key, $any($event.target).checked)"/>
+            } @else {
+            <input class="bb-input bb-mono" [type]="f.secret ? 'password' : 'text'"
+                   [placeholder]="f.placeholder"
+                   [name]="svc + '_' + f.key"
+                   [(ngModel)]="configForm[svc][f.key]"/>
+            }
+          </div>
+          }
+        }
+      </div>
+      <div class="bb-modal-row">
+        <button class="bb-btn-primary bb-btn-sm" [disabled]="savingService() === svc"
+                (click)="saveServiceAuth(svc)">
+          @if (savingService() === svc) {
+          <span class="bb-spinner-inline"></span>
+          }
+          Validar y guardar
+        </button>
+      </div>
+      @if (svc === 'aws') {
+      <div class="bb-config-regions">
+        <div class="bb-config-regions-title">
+          <span class="bb-config-service-name">Ambientes y Regiones de AWS</span>
+          <span class="bb-muted">ver · editar · agregar</span>
+        </div>
+        @if (awsEnvironmentLoading()) {
+        <div class="bb-muted">Cargando…</div>
+        } @else if (awsEnvironmentRows().length === 0) {
+        <div class="bb-muted">Sin ambientes configurados. Agregá el primero abajo.</div>
+        } @else {
+        <div class="bb-region-table">
+          @for (row of awsEnvironmentRows(); track row.name) {
+          <div class="bb-region-row" [class.bb-region-row--no-endpoint]="!row.localstack">
+            <span class="bb-mono bb-region-env">{{ row.name }}</span>
+            <input class="bb-input bb-mono" [value]="row.region"
+                   (input)="setAwsRegion(row.name, $any($event.target).value)"
+                   placeholder="región (ej: us-east-1)"/>
+            <label class="bb-region-docker">
+              <input type="checkbox" [checked]="row.localstack"
+                     (change)="setAwsLocalstack(row.name, $any($event.target).checked)"/>
+              docker
+            </label>
+            @if (row.localstack) {
+            <input class="bb-input bb-mono" [value]="row.endpoint_url"
+                   (input)="setAwsEndpoint(row.name, $any($event.target).value)"
+                   placeholder="endpoint URL (ej: http://localhost:4566)"/>
+            }
+          </div>
+          }
+        </div>
+        }
+        <div class="bb-region-add">
+          <input class="bb-input bb-mono" [(ngModel)]="awsNewEnv" placeholder="ambiente (ej: prod)"/>
+          <input class="bb-input bb-mono" [(ngModel)]="awsNewRegion" placeholder="región (ej: us-east-2)"/>
+          <button class="bb-btn-secondary bb-btn-sm" (click)="addAwsEnvironment()">
+            + Agregar
+          </button>
+        </div>
+        <div class="bb-modal-row">
+          <button class="bb-btn-primary bb-btn-sm" [disabled]="savingAwsEnvironments()"
+                  (click)="saveAwsEnvironments()">
+            {{ savingAwsEnvironments() ? 'Guardando…' : 'Guardar' }}
+          </button>
+        </div>
+      </div>
+      }
+    </div>
+    }
+    <div class="bb-config-service">
+      <div class="bb-config-service-head">
+        <span class="bb-config-service-name">Motor local-git</span>
+        @if (gitClonesEnabled()) {
+        <span class="bb-badge bb-badge--ok">Activo</span>
+        } @else {
+        <span class="bb-badge bb-badge--neutral">API directo</span>
+        }
+      </div>
+      <div class="bb-config-fields">
+        <div class="bb-config-field">
+          <label class="bb-auth-label">Carpeta de clones</label>
+          <div class="bb-input-group">
+            <input class="bb-input bb-mono"
+                   [(ngModel)]="gitClonesDir"
+                   placeholder="C:\clones\bbit-repos"/>
+            <button class="bb-btn-secondary bb-btn-sm"
+                    (click)="folderPicker.click()"
+                    title="Buscar carpeta en el administrador de archivos">
+              📁 Buscar
+            </button>
+            <input type="file"
+                   webkitdirectory
+                   mozdirectory
+                   directory
+                   (change)="onFolderSelected($event)"
+                   #folderPicker
+                   style="display: none"/>
+          </div>
+        </div>
+      </div>
+      @if (gitCloneStatus(); as st) {
+      <div class="bb-muted">{{ st }}</div>
+      }
+      <div class="bb-modal-row">
+        <button class="bb-btn-primary bb-btn-sm" (click)="saveGitClonesDir()">Guardar carpeta</button>
+        <button class="bb-btn-secondary bb-btn-sm"
+                [disabled]="gitCloning() || !gitClonesDir().trim()"
+                (click)="cloneRepos()">
+          @if (gitCloning()) { <span class="bb-spinner-inline"></span> }
+          Clonar repos
+        </button>
+      </div>
+    </div>
+    <div class="bb-modal-row bb-modal-actions">
+      <button class="bb-btn-secondary bb-btn-sm" (click)="close.emit()">Cerrar</button>
+    </div>
+  </div>
+</div>
+}

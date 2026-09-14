@@ -1,0 +1,57 @@
+.bb-table--repos {
+  display: grid;
+  gap: 0;
+}
+
+.bb-table--repos .bb-repos-head,
+.bb-table--repos .bb-repos-row {
+  grid-template-columns: var(--bb-cols, 16rem 1.4fr 1fr 1.6fr);
+}
+
+@media (max-width: 860px) {
+  .bb-table--repos {
+    display: block;
+    overflow-x: auto;
+  }
+}
+
+.bb-repo-name {
+  font-size: var(--bb-font-base);
+}
+
+.bb-deploy-col {
+  font-size: var(--bb-font-sm);
+  overflow-wrap: anywhere;
+}
+
+.bb-deploy-badge {
+  display: inline-block;
+  font-size: var(--bb-font-xs);
+  font-weight: 700;
+  border-radius: var(--bb-border-radius);
+  padding: 2px 8px;
+  text-decoration: none;
+}
+
+.bb-deploy-badge:hover {
+  text-decoration: underline;
+}
+
+.bb-deploy--ok {
+  background: var(--bb-success-bg);
+  color: var(--bb-success);
+}
+
+.bb-deploy--danger {
+  background: var(--bb-danger-bg);
+  color: var(--bb-danger);
+}
+
+.bb-deploy--pending {
+  background: var(--bb-warning-bg);
+  color: var(--bb-warning);
+}
+
+.bb-taggen-link {
+  color: var(--bb-warning);
+}

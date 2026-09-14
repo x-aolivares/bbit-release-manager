@@ -1,0 +1,112 @@
+.bb-config-meta {
+  margin-bottom: 12px;
+  font-size: var(--bb-font-xs);
+}
+
+.bb-config-msg {
+  padding: 8px 12px;
+  border-radius: var(--bb-radius-md);
+  font-size: var(--bb-font-sm);
+  margin-bottom: 12px;
+}
+
+.bb-config-msg--ok {
+  color: var(--bb-success);
+  background: var(--bb-success-bg);
+}
+
+.bb-config-msg--error {
+  color: var(--bb-danger);
+  background: var(--bb-danger-bg);
+}
+
+.bb-config-service {
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius-lg);
+  padding: 12px 14px;
+  background: var(--bb-elevated);
+  margin-bottom: 14px;
+}
+
+.bb-config-service-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.bb-config-service-name {
+  font-weight: 700;
+  color: var(--bb-text);
+}
+
+.bb-config-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bb-config-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.bb-config-checkbox {
+  margin-top: 4px;
+}
+
+.bb-config-regions {
+  margin-top: 12px;
+  border-top: 1px solid var(--bb-border);
+  padding-top: 12px;
+}
+
+.bb-config-regions-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.bb-region-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bb-region-row {
+  display: grid;
+  grid-template-columns: auto 5.5rem auto 1fr;
+  gap: 6px 8px;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.bb-region-row--no-endpoint {
+  grid-template-columns: auto 5.5rem auto;
+}
+
+.bb-region-env {
+  font-weight: 700;
+  font-size: var(--bb-font-xs);
+}
+
+.bb-region-docker {
+  font-size: var(--bb-font-xs);
+  color: var(--bb-text-secondary);
+  cursor: pointer;
+}
+
+.bb-region-add {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.bb-input-group {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}

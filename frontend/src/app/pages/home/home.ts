@@ -1,17 +1,21 @@
-import { ActivatedRoute, Router } from '@angular/router';
-import { Component, HostListener, inject, signal, effect, computed, OnInit } from '@angular/core';
+import { Router } from '@angular/router';
+import { Component, inject, signal, computed, OnInit } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { FormsModule } from '@angular/forms';
-import { IonHeader } from '@ionic/angular/ion-header';
-import { IonToolbar } from '@ionic/angular/ion-toolbar';
 import { IonContent } from '@ionic/angular/ion-content';
-import { IonSpinner } from '@ionic/angular/ion-spinner';
 import { IonCard } from '@ionic/angular/ion-card';
 import { IonCardContent } from '@ionic/angular/ion-card-content';
-import { IonIcon } from '@ionic/angular';
 import { SessionHistoryService, SessionConfig } from '../../services/session-history.service';
 import { SessionSidebarComponent } from '../../components/session-sidebar/session-sidebar';
-import { buildFlowUrl, decideLoadStrategy, processSseEvent, repoUrl as flowRepoUrl, sortRepos } from './flow-utils';
+import { TopbarComponent } from '../../components/topbar/topbar';
+import { AuthPanelComponent } from '../../components/auth-panel/auth-panel';
+import { QueryPanelComponent } from '../../components/query-panel/query-panel';
+import { ReposTableComponent, ReposRow, ReposSortEvent } from '../../components/repos-table/repos-table';
+import { ParamsPanelComponent } from '../../components/params-panel/params-panel';
+import { ConfigModalComponent } from '../../components/config-modal/config-modal';
+import { ReportModalComponent } from '../../components/report-modal/report-modal';
+import { ConfirmModalComponent } from '../../components/confirm-modal/confirm-modal';
+import { LoadingModalComponent } from '../../components/loading-modal/loading-modal';
+import { buildFlowUrl, decideLoadStrategy, processSseEvent, sortRepos } from './flow-utils';
 import type { RepoSortKey, RepoSortDir } from './flow-utils';
 
 interface Health {
@@ -101,40 +105,24 @@ interface DiffResponse {
   removed: RemovedParam[];
 }
 
-interface ServiceState {
-  stored: boolean;
-  expires_at?: number | null;
-  warning?: string | null;
-}
-
-interface ConfigField {
-  key: string;
-  label: string;
-  secret: boolean;
-  placeholder: string;
-  checkbox?: boolean;
-  dependsOn?: string;
-}
-
-interface AwsEnvironment {
-  name: string;
-  region: string;
-  localstack: boolean;
-  endpoint_url: string;
-}
-
 @Component({
   selector: 'app-home',
   templateUrl: './home.html',
   styleUrl: './home.scss',
   standalone: true,
   imports: [
-    FormsModule,
-    IonHeader, IonToolbar,
-    IonContent, IonSpinner,
+    IonContent,
     IonCard, IonCardContent,
-    IonIcon,
     SessionSidebarComponent,
+    TopbarComponent,
+    AuthPanelComponent,
+    QueryPanelComponent,
+    ReposTableComponent,
+    ParamsPanelComponent,
+    ConfigModalComponent,
+    ReportModalComponent,
+    ConfirmModalComponent,
+    LoadingModalComponent,
   ],
 })
 export class Home implements OnInit {
@@ -160,10 +148,6 @@ export class Home implements OnInit {
     window.setTimeout(done, remaining);
   }
 
-  alias = '';
-  workspace = 'my_org_web_dev';
-  token = '';
-  circleciToken = '';
   origin = '';
   destination = 'master';
   prTitle = '';
@@ -191,7 +175,7 @@ export class Home implements OnInit {
       prefixes: [...this.prefixes()].sort(),
       projectPrefixes: [...this.projectPrefixes()].sort(),
       exclude: [...this.blacklisted()].sort(),
-      mode: this.scanMode,
+      mode: this.scanMode(),
     });
   }
 
@@ -203,7 +187,7 @@ export class Home implements OnInit {
       destination: this.projectsDest(),
       projectPrefixes: [...this.projectPrefixes()].sort(),
       exclude: [...this.blacklisted()].sort(),
-      mode: this.scanMode,
+      mode: this.scanMode(),
     });
   }
 
@@ -215,7 +199,7 @@ export class Home implements OnInit {
       origin: this.origin,
       destination: this.projectsDest(),
       prefixes: [...this.prefixes()].sort(),
-      mode: this.scanMode,
+      mode: this.scanMode(),
     });
   }
 
@@ -228,9 +212,6 @@ export class Home implements OnInit {
   addingBlacklist = signal(false);
   forceCache = signal(false);
 
-  bbTokenUrl = 'https://id.atlassian.com/manage-profile/security/api-tokens';
-  cciTokenUrl = 'https://app.circleci.com/settings/user/tokens';
-
   // BBIT-56: último query_diff recibido del backend (para UI / logging).
   lastQueryDiff = signal<{ identical: boolean; added: Record<string, unknown>; removed: Record<string, unknown>; changed: Record<string, unknown> } | null>(null);
 
@@ -242,337 +223,19 @@ export class Home implements OnInit {
   reposCache = signal<{slug: string, name: string, workspace: string, default_branch: string, resolved_branch?: string, branch_state?: string}[]>([]);
   params = signal<SsmParam[]>([]);
   removed = signal<RemovedParam[]>([]);
-  scanMode = 'diff';
+  scanMode = signal<'diff' | 'all'>('diff');
   stats = signal<ScanStats | null>(null);
   addingPrefix = signal(false);
   ciConfigured = signal(true);
   ciError = signal<string | null>(null);
   storedCreds = signal(false);
-  circleciOpen = false;
   askDisconnect = signal(false);
   syncingPrs = signal(false);
 
-  userMenuOpen = signal(false);
   configOpen = signal(false);
-  services = signal<Record<string, ServiceState>>({});
   clientAlias = signal('local');
-  savingService = signal<string | null>(null);
-  configMessage = signal<{ kind: 'ok' | 'error'; text: string } | null>(null);
   gitClonesDir = signal('');
   gitClonesEnabled = signal(false);
-  gitCloning = signal(false);
-  gitCloneStatus = signal<string | null>(null);
-  userMenuPosition = signal<{ top: number; right: number }>({ top: 0, right: 0 });
-  awsEnvironments = signal<AwsEnvironment[]>([]);
-  awsEnvironmentLoading = signal(false);
-  savingAwsEnvironments = signal(false);
-  awsNewEnv = '';
-  awsNewRegion = '';
-
-  readonly serviceKeys = ['bitbucket', 'circleci', 'aws'];
-  readonly serviceFields: Record<string, ConfigField[]> = {
-    bitbucket: [
-      { key: 'url', label: 'BITBUCKET_URL', secret: false, placeholder: 'https://bitbucket.org' },
-      { key: 'workspace', label: 'BITBUCKET_WORKSPACE', secret: false, placeholder: 'my_org_web_dev' },
-      { key: 'username', label: 'BITBUCKET_USERNAME', secret: false, placeholder: '@usuario' },
-      { key: 'token', label: 'BITBUCKET_TOKEN', secret: true, placeholder: 'ATATT...' },
-    ],
-    circleci: [
-      { key: 'token', label: 'CIRCLECI_TOKEN', secret: true, placeholder: 'CCIPAT...' },
-      { key: 'vcs', label: 'CIRCLECI_VCS', secret: false, placeholder: 'bb' },
-      { key: 'org', label: 'CIRCLECI_ORG', secret: false, placeholder: 'my_org_web_dev' },
-    ],
-    aws: [
-      { key: 'profile', label: 'AWS_PROFILE', secret: false, placeholder: 'bbit-release' },
-    ],
-  };
-  configForm: Record<string, Record<string, string>> = {
-    bitbucket: { url: '', workspace: '', username: '', token: '' },
-    circleci: { token: '', vcs: '', org: '' },
-    aws: { profile: '' },
-  };
-
-  serviceLabel(svc: string): string {
-    return { bitbucket: 'Bitbucket', circleci: 'CircleCI', aws: 'AWS' }[svc] ?? svc;
-  }
-
-  toggleUserMenu(): void {
-    if (this.userMenuOpen()) {
-      this.userMenuOpen.set(false);
-      return;
-    }
-    const trigger = (document.querySelector('.bb-user-menu-trigger') as HTMLElement | null);
-    if (trigger) {
-      const rect = trigger.getBoundingClientRect();
-      this.userMenuPosition.set({ top: rect.bottom + 6, right: Math.round(window.innerWidth - rect.right) });
-    }
-    this.userMenuOpen.set(true);
-  }
-
-  @HostListener('document:click', ['$event'])
-  onDocClick(event: Event): void {
-    const t = event.target as HTMLElement;
-    if (this.userMenuOpen() && !t.closest('.bb-user-menu-wrap') && !t.closest('.bb-user-menu')) {
-      this.userMenuOpen.set(false);
-    }
-  }
-
-  @HostListener('window:scroll')
-  onWindowScroll(): void {
-    if (this.userMenuOpen()) {
-      this.userMenuOpen.set(false);
-    }
-  }
-
-  @HostListener('window:resize')
-  onWindowResize(): void {
-    if (this.userMenuOpen()) {
-      this.userMenuOpen.set(false);
-    }
-  }
-
-  @HostListener('document:keydown.escape')
-  onEscape(): void {
-    this.userMenuOpen.set(false);
-  }
-
-  closeUserMenuAndDisconnect(): void {
-    this.userMenuOpen.set(false);
-    this.askDisconnect.set(true);
-  }
-
-  openConfig(): void {
-    this.userMenuOpen.set(false);
-    this.configMessage.set(null);
-    this.configOpen.set(true);
-    this.refreshClient();
-    this.loadAwsEnvironments();
-  }
-
-  awsEnvironmentRows = computed<{ name: string; region: string; localstack: boolean; endpoint_url: string }[]>(
-    () => [...this.awsEnvironments()]
-      .sort((a, b) => a.name.localeCompare(b.name)),
-  );
-
-  private loadAwsEnvironments(): void {
-    this.awsEnvironmentLoading.set(true);
-    this.http.get<any>('/api/ssm/environments').subscribe({
-      next: (r) => this.awsEnvironments.set(r.environments ?? []),
-      error: () => this.awsEnvironments.set([]),
-      complete: () => this.awsEnvironmentLoading.set(false),
-    });
-  }
-
-  setAwsRegion(name: string, value: string): void {
-    this.awsEnvironments.update((list) =>
-      list.map((e) => (e.name === name ? { ...e, region: value } : e)),
-    );
-  }
-
-  setAwsLocalstack(name: string, checked: boolean): void {
-    this.awsEnvironments.update((list) =>
-      list.map((e) => (e.name === name ? { ...e, localstack: checked } : e)),
-    );
-  }
-
-  setAwsEndpoint(name: string, value: string): void {
-    this.awsEnvironments.update((list) =>
-      list.map((e) => (e.name === name ? { ...e, endpoint_url: value } : e)),
-    );
-  }
-
-  addAwsEnvironment(): void {
-    const env = (this.awsNewEnv || '').trim();
-    if (!env) return;
-    const region = (this.awsNewRegion || '').trim();
-    this.awsEnvironments.update((list) => {
-      if (list.some((e) => e.name === env)) {
-        return list.map((e) => (e.name === env ? { ...e, region } : e));
-      }
-      return [...list, { name: env, region, localstack: false, endpoint_url: '' }];
-    });
-    this.awsNewEnv = '';
-    this.awsNewRegion = '';
-  }
-
-  saveAwsEnvironments(): void {
-    this.savingAwsEnvironments.set(true);
-    this.configMessage.set(null);
-    const environments = this.awsEnvironmentRows()
-      .filter((e) => (e.name || '').trim())
-      .map((e) => ({
-        name: e.name.trim(),
-        region: (e.region || '').trim(),
-        localstack: e.localstack,
-        endpoint_url: (e.endpoint_url || '').trim(),
-      }));
-    this.http.patch<any>('/api/ssm/environments', { environments }).subscribe({
-      next: () => {
-        this.configMessage.set({ kind: 'ok', text: 'Ambientes y regiones guardados.' });
-        this.loadAwsEnvironments();
-      },
-      error: (e) => this.configMessage.set({
-        kind: 'error',
-        text: e.error?.detail ?? e.error?.error ?? 'No se pudieron guardar los ambientes.',
-      }),
-      complete: () => this.savingAwsEnvironments.set(false),
-    });
-  }
-
-  private refreshClient(): void {
-    this.http.get<any>('/api/client').subscribe({
-      next: (r) => {
-        this.services.set(r.services ?? {});
-        this.clientAlias.set(r.client?.alias ?? 'local');
-        const auth = r.auth ?? {};
-        for (const svc of this.serviceKeys) {
-          const vals = auth[svc] ?? {};
-          if (svc === 'aws') {
-            // el rest de AWS (región/endpoint/LocalStack) vive por ambiente
-            // en la tabla de ambientes; acá solo el profile.
-            this.configForm[svc] = { ...this.configForm[svc], profile: (vals['profile'] ?? '').trim() };
-          } else {
-            this.configForm[svc] = { ...this.configForm[svc], ...vals };
-          }
-        }
-      },
-    });
-  }
-
-  saveServiceAuth(service: string): void {
-    this.savingService.set(service);
-    this.configMessage.set(null);
-    const body: Record<string, string> = { ...this.configForm[service] };
-
-    // Para AWS: enviar endpoint/region del primer ambiente docker para la
-    // validación STS, ya que el form solo expone el profile.
-    if (service === 'aws') {
-      const dockerEnv = this.awsEnvironmentRows().find(
-        (e) => e.localstack && e.endpoint_url,
-      );
-      if (dockerEnv) {
-        body['endpoint_url'] = dockerEnv.endpoint_url;
-        body['localstack'] = '1';
-        body['region'] = dockerEnv.region;
-      }
-    }
-
-    this.http.post<any>(`/api/auth/${service}`, body).subscribe({
-      next: (r) => {
-        if (r.ok) {
-          this.configMessage.set({ kind: 'ok', text: `${this.serviceLabel(service)} guardado y validado.` });
-          this.refreshClient();
-          
-          // BBIT-33 Phase 7: Si guardó Bitbucket, destruye sesión antigua e intenta conectar con nueva
-          if (service === 'bitbucket') {
-            // Destruir sesión anterior (con workspace/token viejo)
-            this.http.delete<any>('/api/session').subscribe({
-              complete: () => {
-                // Desconectar UI localmente
-                this.connected.set(false);
-                this.identity.set('');
-                this.repoCount.set(0);
-                this.repos.set([]);
-                this.reposCache.set([]);
-                this.projects.set([]);
-                this.params.set([]);
-                this.removed.set([]);
-                this.stats.set(null);
-                
-                // Ahora reconectar con nuevas credenciales
-                window.setTimeout(() => {
-                  this.reuseSession(() => {
-                    this.configOpen.set(false);
-                    this.loadLatestSession();
-                  });
-                }, 500);
-              }
-            });
-          }
-        } else {
-          this.configMessage.set({ kind: 'error', text: r.error ?? 'No se pudo guardar.' });
-        }
-      },
-      error: (e) => {
-        this.configMessage.set({
-          kind: 'error',
-          text: e.error?.error ?? e.error?.detail ?? 'Error de red al guardar.',
-        });
-        this.savingService.set(null);
-      },
-      complete: () => this.savingService.set(null),
-    });
-  }
-
-  onFieldToggle(svc: string, key: string, checked: boolean): void {
-    this.configForm[svc] = { ...this.configForm[svc], [key]: checked ? '1' : '' };
-  }
-
-  onFolderSelected(event: Event): void {
-    const input = event.target as HTMLInputElement;
-    if (!input.files || input.files.length === 0) return;
-    
-    // Obtener la ruta de la carpeta del primer archivo seleccionado
-    // En navegadores modernos, webkitdirectory proporciona la ruta relativa
-    const firstFile = input.files[0];
-    const filePath = (firstFile as any).webkitRelativePath || '';
-    
-    if (filePath) {
-      // Extraer la carpeta base (antes del primer archivo)
-      const folderPath = filePath.split('/').slice(0, -1).join('/');
-      if (folderPath) {
-        this.gitClonesDir.set(folderPath);
-      }
-    }
-    
-    // Limpiar el input para permitir seleccionar la misma carpeta nuevamente
-    input.value = '';
-  }
-
-  saveGitClonesDir(): void {
-    this.configMessage.set(null);
-    this.http.put<any>('/api/session/git', { clones_dir: this.gitClonesDir() }).subscribe({
-      next: (r) => {
-        if (r.ok) {
-          this.gitClonesEnabled.set(!!r.git?.enabled);
-          this.configMessage.set({
-            kind: 'ok',
-            text: 'Carpeta de clones guardada. Reconectá la sesión para activar el motor local-git.',
-          });
-        } else {
-          this.configMessage.set({ kind: 'error', text: r.error ?? 'No se pudo guardar.' });
-        }
-      },
-      error: (e) => this.configMessage.set({
-        kind: 'error',
-        text: e.error?.error ?? e.error?.detail ?? 'Error de red al guardar.',
-      }),
-    });
-  }
-
-  cloneRepos(): void {
-    if (!this.gitClonesDir().trim()) return;
-    this.gitCloning.set(true);
-    this.gitCloneStatus.set(null);
-    this.configMessage.set(null);
-    this.http.post<any>('/api/session/clone', {}).subscribe({
-      next: (r) => {
-        if (r.ok) {
-          const repos: Array<{ ok: boolean; slug: string }> = r.repos ?? [];
-          const ok = repos.filter((x) => x.ok).length;
-          const failed = repos.length - ok;
-          this.gitCloneStatus.set(`Repos en carpeta: ${repos.length} (${ok} ok${failed ? `, ${failed} fallidos` : ''}).`);
-        } else {
-          this.configMessage.set({ kind: 'error', text: r.error ?? 'No se pudo clonar.' });
-        }
-      },
-      error: (e) => this.configMessage.set({
-        kind: 'error',
-        text: e.error?.error ?? e.error?.detail ?? 'No se pudo clonar.',
-      }),
-      complete: () => this.gitCloning.set(false),
-    });
-  }
 
   reposLoading = signal(false);
   paramsLoading = signal(false);
@@ -631,9 +294,9 @@ export class Home implements OnInit {
   taggingRepo = signal<string | null>(null);
 
 reportOpen = signal(false);
-  reportMode: 'branch' | 'pr' | 'tag' | 'params' = 'branch';
-  reportEnv = signal(0);
-  reportCopied = signal(false);
+  // Modo inicial del modal de reporte según quién lo abre ("Ver parámetros"
+  // vs "Previsualizar reporte"); el estado del modal vive en ReportModal.
+  reportInitialMode: 'branch' | 'pr' | 'tag' | 'params' = 'branch';
 
   estadoFilter = signal<string[]>([]);
   readonly estadoOptions = ['nuevo', 'reutilizado', 'solo destino'];
@@ -736,7 +399,6 @@ reportOpen = signal(false);
     });
     this.http.get<any>('/api/session').subscribe({
       next: (r) => {
-        this.services.set(r.services ?? {});
         this.clientAlias.set(r.client_alias ?? 'local');
         this.gitClonesDir.set(r.git?.clones_dir ?? '');
         this.gitClonesEnabled.set(!!r.git?.enabled);
@@ -750,12 +412,9 @@ reportOpen = signal(false);
           // ANTES de cargar la última sesión, para no disparar /scan sin sesión.
           this.reuseSession(() => this.loadLatestSession());
         } else if (r.needs_tokens) {
-          // BBIT-33 Phase 7: Si falta token, abre Config automáticamente
-          // El usuario ingresa credenciales en Config → POST /api/auth/bitbucket
-          // → se guarda + reutiliza automáticamente
+          // BBIT-33 Phase 7: Si falta token, abre Config automáticamente.
+          // El modal refresca client + AWS al abrirse.
           this.configOpen.set(true);
-          this.refreshClient();
-          this.loadAwsEnvironments();
           this.storedCreds.set(false);
         } else {
           this.storedCreds.set(false);
@@ -853,10 +512,6 @@ reportOpen = signal(false);
     this.loading.set(true);
     this.error.set(null);
     const body: Record<string, string> = {};
-    if (this.alias.trim()) {
-      body['alias'] = this.alias.trim();
-    }
-    
     const startTime = Date.now();
     const timeoutId = window.setTimeout(() => {
       this.loading.set(false);
@@ -870,7 +525,6 @@ reportOpen = signal(false);
           this.connected.set(true);
           this.identity.set(r.identity ?? '');
           this.repoCount.set(r.repo_count ?? 0);
-          this.services.set(r.services ?? {});
           this.clientAlias.set(r.client_alias ?? 'local');
           this.storedCreds.set(false);
           if (onSuccess) {
@@ -896,20 +550,20 @@ reportOpen = signal(false);
     });
   }
 
-  connect() {
+  onConnectRequested(r: { alias: string; workspace: string; token: string; circleciToken: string }) {
     this.loading.set(true);
     this.error.set(null);
     const body: Record<string, string> = {
-      workspace: this.workspace,
-      token: this.token,
+      workspace: r.workspace,
+      token: r.token,
       project_prefixes: this.projectPrefixParam(),
       exclude_repos: this.blacklisted().join(','),
     };
-    if (this.alias.trim()) {
-      body['alias'] = this.alias.trim();
+    if (r.alias.trim()) {
+      body['alias'] = r.alias.trim();
     }
-    if (this.circleciToken) {
-      body['circleci_token'] = this.circleciToken;
+    if (r.circleciToken) {
+      body['circleci_token'] = r.circleciToken;
     }
     if (this.gitClonesDir().trim()) {
       body['git_clones_dir'] = this.gitClonesDir().trim();
@@ -928,7 +582,6 @@ reportOpen = signal(false);
             this.connected.set(true);
             this.identity.set(r.identity);
             this.repoCount.set(r.repo_count);
-            this.services.set(r.services ?? {});
             this.clientAlias.set(r.client_alias ?? 'local');
             this.storedCreds.set(false);
             this.releaseBusy(startTime, () => this.loading.set(false));
@@ -962,9 +615,7 @@ reportOpen = signal(false);
         this.params.set([]);
         this.removed.set([]);
         this.stats.set(null);
-        this.services.set({});
         this.clientAlias.set('local');
-        this.userMenuOpen.set(false);
         this.configOpen.set(false);
         this.storedCreds.set(!deleteCredentials);
       },
@@ -973,14 +624,6 @@ reportOpen = signal(false);
 
   projectsDest(): string {
     return this.destination || 'master';
-  }
-
-  identityInitials(): string {
-    const id = this.identity().trim();
-    if (!id) return '';
-    const parts = id.split(/\s+/);
-    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   }
 
   /**
@@ -1004,7 +647,7 @@ reportOpen = signal(false);
     const prefixes = scanPrefixes.join(',');
     const exclude = this.blacklisted().join(',');
     const force = this.forceCache() ? 1 : 0;
-    const url = `/api/flow/stream?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}&with_tags=${scanPrefixes.length > 0 ? 1 : 0}&with_diff=${withDiff ? 1 : 0}`;
+    const url = `/api/flow/stream?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode()}&force=${force}&with_tags=${scanPrefixes.length > 0 ? 1 : 0}&with_diff=${withDiff ? 1 : 0}`;
 
     console.log(`[SSE] Opening connection to: ${url}`);
     let firstEventReceived = false;
@@ -1465,7 +1108,7 @@ reportOpen = signal(false);
       prefixes,
       projectPrefixes: this.projectPrefixParam(),
       exclude,
-      scanMode: this.scanMode,
+      scanMode: this.scanMode(),
       force,
       withTags: this.prefixes().length > 0,
       withDiff,
@@ -1546,7 +1189,7 @@ reportOpen = signal(false);
       prefixes,
       projectPrefixes: this.projectPrefixParam(),
       exclude,
-      scanMode: this.scanMode,
+      scanMode: this.scanMode(),
       force: 0,
       withTags: this.prefixes().length > 0,
       withDiff: false,
@@ -1591,80 +1234,51 @@ reportOpen = signal(false);
     this.router.navigate(['/ssm', encodeURIComponent(param)]);
   }
 
-  estadoLabel(estado: string): string {
-    switch (estado) {
-      case 'reutilizado':
-        return 'Reutilizado (productivo)';
-      case 'solo destino':
-        return 'Solo destino';
-      default:
-        return 'Nuevo';
-    }
+  openConfig(): void {
+    this.configOpen.set(true);
   }
 
-  tipoClass(tipo: string): string {
-    switch (tipo) {
-      case 'reutilizado':
-        return 'bb-badge--warn';
-      case 'solo destino':
-        return 'bb-badge--neutral';
-      default:
-        return 'bb-badge--ok';
-    }
+  onSortRepo(event: ReposSortEvent): void {
+    this.toggleRepoSort(event.key, event.env);
+  }
+
+  onGenerateTag(event: { repo: ReposRow; env: string }): void {
+    this.generateTags(event.repo, event.env);
+  }
+
+  /** El config-modal guardó credenciales de Bitbucket → recrear la sesión. */
+  onBitbucketReauth(): void {
+    // Destruir sesión anterior (con workspace/token viejo)
+    this.http.delete<any>('/api/session').subscribe({
+      complete: () => {
+        // Desconectar UI localmente
+        this.connected.set(false);
+        this.identity.set('');
+        this.repoCount.set(0);
+        this.repos.set([]);
+        this.reposCache.set([]);
+        this.projects.set([]);
+        this.params.set([]);
+        this.removed.set([]);
+        this.stats.set(null);
+
+        // Ahora reconectar con nuevas credenciales
+        window.setTimeout(() => {
+          this.configOpen.set(false);
+          this.reuseSession(() => this.loadLatestSession());
+        }, 500);
+      },
+    });
   }
 
   openReport() {
-    this.reportMode = 'branch';
-    this.reportEnv.set(0);
-    this.reportCopied.set(false);
+    this.reportInitialMode = 'branch';
     this.reportOpen.set(true);
   }
 
   openParams() {
-    this.reportMode = 'params';
-    this.reportEnv.set(0);
-    this.reportCopied.set(false);
+    this.reportInitialMode = 'params';
     this.reportOpen.set(true);
-  }
-
-  selectReportMode(mode: 'branch' | 'pr' | 'tag' | 'params') {
-    this.reportMode = mode;
-    this.reportCopied.set(false);
-  }
-
-  reportEnvPrefix(): string {
-    return this.prefixes()[this.reportEnv()] ?? '';
-  }
-
-  reportText(): string {
-    if (this.reportMode === 'params') {
-      return this.paramRows().map((r) => r.param).join('\n');
-    }
-    const repos = [...this.repos()].sort((a, b) => a.slug.localeCompare(b.slug));
-    const lines: string[] = [];
-    for (const repo of repos) {
-      let url = '';
-      if (this.reportMode === 'branch') {
-        url = repo.branch_url ?? '';
-      } else if (this.reportMode === 'pr') {
-        url = repo.pr?.exists && repo.pr.url ? repo.pr.url : '';
-      } else {
-        const env = this.reportEnvPrefix().toLowerCase();
-        const tag = env ? this.envTag(repo, env) : null;
-        url = tag ? this.envTagHref(repo, env) : '';
-      }
-      lines.push(url || '-------------------');
-    }
-    return lines.join('\n');
-  }
-
-  async copyReport() {
-    try {
-      await navigator.clipboard.writeText(this.reportText());
-      this.reportCopied.set(true);
-    } catch {
-      this.reportCopied.set(false);
-    }
   }
 
   createPr(repo: ScanRepo) {
@@ -1727,90 +1341,6 @@ reportOpen = signal(false);
   retryFailed(): void {
     if (!this.failedSlugs().length) return;
     this.loadRepos(true);
-  }
-
-  repoUrl(repo: ScanRepo): string {
-    return flowRepoUrl(repo);
-  }
-
-  envTagHref(repo: ScanRepo, prefix: string): string {
-    const tag = this.envTag(repo, prefix);
-    if (!tag) return this.repoUrl(repo);
-    const deploy = repo.deploys[prefix];
-    if (deploy?.url) {
-      return deploy.url;
-    }
-    if (repo.ci_project) {
-      const vcs = repo.ci_vcs || 'bb';
-      return `https://app.circleci.com/pipelines/${vcs}/${repo.workspace}?useNewPipelines=true&project=${repo.ci_project}&filter=${encodeURIComponent(`git_tag:equals:${tag}`)}`;
-    }
-    return `${this.repoUrl(repo)}/src/${encodeURIComponent(tag)}`;
-  }
-
-  envTagTitle(repo: ScanRepo, prefix: string): string {
-    const tag = this.envTag(repo, prefix);
-    const deploy = repo.deploys[prefix];
-    if (!deploy) {
-      return `${tag} · sin deploy validado`;
-    }
-    const bits = [tag, deploy.workflow];
-    if (deploy.job) bits.push(deploy.job);
-    bits.push(deploy.status);
-    return bits.join(' · ');
-  }
-
-  envTag(repo: ScanRepo, prefix: string): string | null {
-    return repo.match_tag?.[prefix.toLowerCase()] ?? null;
-  }
-
-  envTagBadge(repo: ScanRepo, prefix: string): { label: string; cls: string } | null {
-    const tag = this.envTag(repo, prefix);
-    if (!tag) return null;
-    const deploy = repo.deploys?.[prefix.toLowerCase()];
-    if (!deploy) {
-      return { label: `${tag} · pendiente de aprobación`, cls: 'bb-deploy--pending' };
-    }
-    const s = deploy.status;
-    if (s === 'success') {
-      return { label: `${tag} · ok`, cls: 'bb-deploy--ok' };
-    }
-    if (s === 'failed' || s === 'error') {
-      return { label: `${tag} · falló`, cls: 'bb-deploy--danger' };
-    }
-    if (s === 'on_hold') {
-      return { label: `${tag} · esperando aprobación`, cls: 'bb-deploy--pending' };
-    }
-    if (s === 'blocked' || s === 'canceled') {
-      return { label: `${tag} · ${s}`, cls: 'bb-deploy--pending' };
-    }
-    if (s === 'running' || s === 'queued' || s === 'not_run') {
-      return { label: `${tag} · ${s}`, cls: 'bb-deploy--pending' };
-    }
-    return { label: `${tag} · ${s}`, cls: 'bb-deploy--pending' };
-  }
-
-  isEnvTag(repo: ScanRepo, name: string): boolean {
-    const n = name.toLowerCase();
-    return this.prefixes().some((p) => new RegExp(`^${p.toLowerCase()}-\\d+$`).test(n));
-  }
-
-  missingTagFor(repo: ScanRepo): boolean {
-    return this.prefixes().some((p) => !this.envTag(repo, p));
-  }
-
-  missingEnvs(repo: ScanRepo): string[] {
-    return this.prefixes().filter((p) => !this.envTag(repo, p));
-  }
-
-  reposNeedingTags(): ScanRepo[] {
-    if (!this.ciConfigured()) return [];
-    return this.repos().filter((r) => this.missingEnvs(r).length > 0);
-  }
-
-  missingTooltip(): string {
-    return this.reposNeedingTags()
-      .map((r) => `${r.slug} → ${this.missingEnvs(r).join(', ')}`)
-      .join('\n');
   }
 
   generateTags(repo?: ScanRepo, prefix?: string) {

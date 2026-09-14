@@ -1,0 +1,73 @@
+<ion-header class="bb-nav">
+  <ion-toolbar>
+    <div class="bb-topbar">
+      <div class="bb-topbar-left">
+        <div class="bb-topbar-title">
+          <span class="bb-mark">BBit</span>
+          <span class="bb-mark-sep">/</span>
+          <span class="bb-app">Release Manager</span>
+        </div>
+        <span class="bb-topbar-divider"></span>
+        @if (connected()) {
+        <button class="bb-btn-icon" (click)="openHistory.emit()" aria-label="Abrir historial">
+          <ion-icon name="time-outline"></ion-icon>
+        </button>
+        }
+        <span class="bb-topbar-badge"
+              [class.bb-topbar-badge--ok]="health()"
+              [class.bb-topbar-badge--neutral]="!health()">
+          <span class="bb-dot" [class.bb-dot--ok]="health()" [class.bb-dot--pending]="!health()"></span>
+          @if (health()) {
+            API online
+          } @else {
+            API checking…
+          }
+        </span>
+        <span class="bb-topbar-meta">
+          @if (connected()) {
+            {{ repoCount() }} repos
+          } @else {
+            sin sesión
+          }
+          · v{{ health()?.version ?? '…' }}
+        </span>
+      </div>
+
+      <div class="bb-topbar-right">
+        @if (connected()) {
+        <div class="bb-user-menu-wrap">
+          <button class="bb-user-menu-trigger" [class.bb-user-menu-trigger--open]="open()"
+                  (click)="toggle()" aria-label="Menú de usuario" aria-haspopup="menu"
+                  [attr.aria-expanded]="open()">
+            <span class="bb-topbar-avatar">{{ initials() }}</span>
+            <span class="bb-topbar-username">{{ identity() }}</span>
+            <ion-icon class="bb-user-caret" name="chevron-down-outline"></ion-icon>
+          </button>
+        </div>
+        }
+      </div>
+    </div>
+  </ion-toolbar>
+</ion-header>
+
+@if (open()) {
+<div class="bb-user-menu" role="menu"
+     [style.top.px]="position().top"
+     [style.right.px]="position().right">
+  <div class="bb-user-menu-head">
+    <div class="bb-user-menu-name">{{ identity() }}</div>
+    <div class="bb-user-menu-meta bb-muted">
+      Cliente: <span class="bb-mono">{{ clientAlias() }}</span>
+    </div>
+  </div>
+  <button class="bb-user-menu-item" role="menuitem" (click)="onConfig()">
+    <ion-icon name="settings-outline"></ion-icon>
+    Configuración
+  </button>
+  <button class="bb-user-menu-item bb-user-menu-item--danger" role="menuitem"
+          (click)="onDisconnect()">
+    <ion-icon name="log-out-outline"></ion-icon>
+    Cerrar sesión
+  </button>
+</div>
+}

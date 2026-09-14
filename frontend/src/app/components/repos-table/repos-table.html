@@ -1,0 +1,129 @@
+<div class="bb-panel">
+  <div class="bb-section">
+    <div class="bb-section-header">Tabla de repositorios</div>
+    @if (ciError(); as ce) {
+    <div class="bb-error">{{ ce }}</div>
+    }
+    @if (repos().length > 0) {
+    <div class="bb-row-top">
+      <input class="" [ngModel]="prTitle" (ngModelChange)="prTitleChange.emit($event)" placeholder="Título del PR"/>
+      <button class="bb-btn-secondary" (click)="syncPrs.emit('create')" [disabled]="syncingPrs()">Crear PRs faltantes
+      </button>
+      <button class="bb-btn-secondary" (click)="syncPrs.emit('update')" [disabled]="syncingPrs()">Actualizar</button>
+      <button class="bb-btn-secondary" (click)="generateTagsAll.emit()"
+              [disabled]="tagging() || !ciConfigured()">
+        @if (tagging()) {
+        <span class="bb-spinner-inline"></span>
+        }
+        Generar tags faltantes
+      </button>
+      <button class="bb-btn-secondary bb-btn-sm" (click)="reportRequested.emit()">Previsualizar reporte</button>
+      <button class="bb-btn-secondary bb-btn-sm" (click)="refresh.emit()" [disabled]="reposLoading()">
+        @if (reposLoading()) {
+        <span class="bb-spinner-inline"></span>
+        } @else {
+        Refrescar
+        }
+      </button>
+      @if (failedRepos().length > 0) {
+      <button class="bb-btn-secondary bb-btn-sm" (click)="retryFailed.emit()" [disabled]="reposLoading()">
+        @if (reposLoading()) {
+        <span class="bb-spinner-inline"></span>
+        } @else {
+        Reintentar fallidos ({{ failedRepos().length }})
+        }
+      </button>
+      }
+    </div>
+    <div class="bb-table bb-table--repos"
+         [style.--bb-cols]="'1.4fr 1fr 1.4fr' + prefixCols()">
+      <div class="bb-repos-head">
+        <span>
+          <button class="bb-th" type="button" (click)="onSort('name')"
+                  [title]="'Ordenar por repositorio (' + (sortDir() === 'asc' ? 'desc' : 'asc') + ')'">
+            Repositorio {{ arrow('name') }}
+          </button>
+        </span>
+        <span>PR</span>
+        <span>Tagged Commit</span>
+        @for (p of loadedPrefixes(); track p) {
+        <span class="bb-deploy-col bb-mono">
+          <button class="bb-th" type="button" (click)="onSort('status', p)"
+                  [title]="'Ordenar por estado de ' + p">
+            {{ p }} {{ arrow('status', p) }}
+          </button>
+        </span>
+        }
+      </div>
+      @for (repo of repos(); track repo.slug) {
+      <div class="bb-repos-row">
+              <span>
+                <a class="bb-link bb-repo-name" [href]="repo.branch_url" target="_blank"
+                   [title]="repo.name">{{ repo.name }}</a>
+              </span>
+        <span>
+                @if (repo.error) {
+                  <span class="bb-muted" [title]="repo.error">falló</span>
+                } @else if (repo.pr.exists && repo.pr.url) {
+                  <a class="bb-link" [href]="repo.pr.url" target="_blank"
+                     [title]="repo.pr.title">
+                    PR #{{ prNumber(repo.pr.url) }}
+                    @if (repo.pr.title) {
+                      — {{ repo.pr.title }}
+                    }
+                  </a>
+                } @else {
+                  <button class="bb-link bb-pr-link" [disabled]="creatingPr() !== null"
+                          (click)="createPr.emit(repo)"
+                          [title]="'Crea el PR hacia la rama destino'">
+                    @if (creatingPr() === repo.slug) {
+                      <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
+                    } @else {
+                      Sin PR a {{ destination() || 'master' }}
+                    }
+                  </button>
+                }
+              </span>
+        <span>
+                @if (repo.error) {
+                  <span class="bb-muted">—</span>
+                } @else {
+                  <a class="bb-link bb-mono" [href]="repo.branch_url" target="_blank"
+                     [title]="'Rama ' + origin()">{{ repo.commit.slice(0, 8) }}</a>
+                }
+              </span>
+        @for (p of loadedPrefixes(); track p) {
+        <span class="bb-deploy-col">
+                  @if (repo.error) {
+                    <span class="bb-muted">—</span>
+                  } @else {
+                    @let bd = badge(repo, p);
+                  @if (bd) {
+                    <a class="bb-link bb-mono bb-deploy-badge {{ bd.cls }}"
+                       [href]="href(repo, p)" target="_blank"
+                       [title]="title(repo, p)">
+                      {{ bd.label }}
+                    </a>
+                  } @else if (ciConfigured()) {
+                    <button class="bb-link bb-taggen-link"
+                            [disabled]="taggingRepo() !== null"
+                            (click)="onGenerateTag(repo, p)"
+                            [title]="'Genera ' + p + '-{id} según el último pipeline de la rama'">
+                      @if (taggingRepo() === repo.slug) {
+                        <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
+                      } @else {
+                        generate tag
+                      }
+                    </button>
+                  } @else {
+                    <span class="bb-muted">—</span>
+                  }
+                  }
+                </span>
+        }
+      </div>
+      }
+    </div>
+    }
+  </div>
+</div>

@@ -1,0 +1,261 @@
+/* El header debe ganar su propio stacking context frente a ion-content
+   (que crea contain: size style y pintaría por encima de un simple
+   z-index:10 del ion-header de iOS). Sin esto, el menú desplegable del
+   perfil queda atrapado bajo el área de scroll. */
+.bb-nav {
+  position: relative;
+  z-index: 101;
+
+  ion-toolbar {
+    border-bottom: 1px solid var(--bb-border);
+  }
+}
+
+.bb-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 20px;
+  width: 100%;
+}
+
+.bb-topbar-left,
+.bb-topbar-right {
+  display: flex;
+  align-items: center;
+}
+
+.bb-topbar-left {
+  gap: 18px;
+}
+
+.bb-topbar-right {
+  gap: 10px;
+}
+
+.bb-topbar-title {
+  display: flex;
+  align-items: center;
+  font-size: 19px;
+  white-space: nowrap;
+}
+
+.bb-mark {
+  color: var(--bb-blue);
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+
+.bb-mark-sep {
+  color: var(--bb-border);
+  margin: 0 4px;
+}
+
+.bb-app {
+  color: var(--bb-text);
+  font-weight: 500;
+}
+
+.bb-topbar-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--bb-border);
+}
+
+.bb-topbar-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--bb-font-sm);
+  padding: 3px 9px;
+  border-radius: var(--bb-radius-pill);
+  white-space: nowrap;
+}
+
+.bb-topbar-badge--ok {
+  color: #27500a;
+  background: #eaf3de;
+}
+
+.bb-topbar-badge--neutral {
+  color: var(--bb-text-secondary);
+  background: var(--bb-surface);
+}
+
+.bb-topbar-meta {
+  font-size: var(--bb-font-sm);
+  color: var(--bb-text-secondary);
+  white-space: nowrap;
+}
+
+.bb-topbar-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #e6f1fb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--bb-blue);
+}
+
+.bb-topbar-username {
+  font-size: 13px;
+  color: var(--bb-text-secondary);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bb-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--bb-border);
+}
+
+.bb-dot--ok {
+  background: var(--bb-success);
+}
+
+.bb-dot--pending {
+  background: var(--bb-warning);
+}
+
+/* ==== Botón de historial (solo móvil) ==== */
+.bb-btn-icon {
+  --background: transparent;
+  --color: var(--bb-text-secondary);
+  --color-hover: var(--bb-text);
+  --background-hover: var(--bb-surface);
+  --padding-start: 8px;
+  --padding-end: 8px;
+  height: 36px;
+  min-width: 36px;
+  border-radius: var(--bb-radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bb-btn-icon ion-icon {
+  font-size: 20px;
+}
+
+@media (max-width: 768px) {
+  .bb-btn-icon {
+    display: flex;
+  }
+}
+
+@media (min-width: 769px) {
+  .bb-btn-icon {
+    display: none;
+  }
+}
+
+/* ==== Menú desplegable de perfil ==== */
+.bb-user-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.bb-user-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bb-surface);
+  border: 1px solid transparent;
+  padding: 5px 10px 5px 6px;
+  border-radius: var(--bb-radius-pill);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  max-width: 230px;
+}
+
+.bb-user-menu-trigger:hover,
+.bb-user-menu-trigger--open {
+  border-color: var(--bb-border);
+  background: var(--bb-elevated);
+}
+
+.bb-user-caret {
+  font-size: 14px;
+  color: var(--bb-text-secondary);
+  flex-shrink: 0;
+}
+
+.bb-user-menu {
+  position: fixed;
+  min-width: 230px;
+  max-width: 80vw;
+  background: var(--bb-elevated);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius-lg);
+  box-shadow: 0 8px 24px rgba(9, 30, 66, 0.18);
+  padding: 6px;
+  z-index: 1300;
+}
+
+.bb-user-menu-head {
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--bb-border);
+  margin-bottom: 6px;
+}
+
+.bb-user-menu-name {
+  font-weight: 700;
+  font-size: var(--bb-font-base);
+  color: var(--bb-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bb-user-menu-meta {
+  font-size: var(--bb-font-sm);
+  margin-top: 4px;
+}
+
+.bb-user-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: var(--bb-radius-md);
+  font-size: var(--bb-font-base);
+  color: var(--bb-text);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.bb-user-menu-item:hover {
+  background: var(--bb-surface);
+}
+
+.bb-user-menu-item ion-icon {
+  font-size: 16px;
+  color: var(--bb-text-secondary);
+}
+
+.bb-user-menu-item--danger {
+  color: var(--bb-danger);
+}
+
+.bb-user-menu-item--danger ion-icon {
+  color: var(--bb-danger);
+}
+
+@media (max-width: 768px) {
+  .bb-user-menu-trigger {
+    max-width: 40vw;
+  }
+}

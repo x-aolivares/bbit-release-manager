@@ -1,0 +1,15 @@
+@if (open()) {
+<div class="bb-modal-mask" (click)="cancel.emit()">
+  <div class="bb-modal bb-modal--small" (click)="$event.stopPropagation()">
+    <div class="bb-modal-title">Desconectar</div>
+    <p class="bb-confirm-text">
+      ¿Querés cerrar la sesión y conservar o eliminar las credenciales guardadas?
+    </p>
+    <div class="bb-modal-row bb-modal-actions">
+      <button class="bb-btn-danger bb-btn-sm" (click)="confirmDelete.emit()">Sí, eliminar credenciales</button>
+      <button class="bb-btn-secondary bb-btn-sm" (click)="confirmKeep.emit()">Conservar</button>
+      <button class="bb-btn-secondary bb-btn-sm" (click)="cancel.emit()">Cancelar</button>
+    </div>
+  </div>
+</div>
+}

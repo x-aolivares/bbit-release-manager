@@ -1,76 +1,13 @@
-<ion-header class="bb-nav">
-  <ion-toolbar>
-    <div class="bb-topbar">
-      <div class="bb-topbar-left">
-        <div class="bb-topbar-title">
-          <span class="bb-mark">BBit</span>
-          <span class="bb-mark-sep">/</span>
-          <span class="bb-app">Release Manager</span>
-        </div>
-        <span class="bb-topbar-divider"></span>
-        @if (connected()) {
-        <button class="bb-btn-icon" (click)="sidebarOpen.set(true)" aria-label="Abrir historial">
-          <ion-icon name="time-outline"></ion-icon>
-        </button>
-        }
-        <span class="bb-topbar-badge"
-              [class.bb-topbar-badge--ok]="health()"
-              [class.bb-topbar-badge--neutral]="!health()">
-          <span class="bb-dot" [class.bb-dot--ok]="health()" [class.bb-dot--pending]="!health()"></span>
-          @if (health()) {
-            API online
-          } @else {
-            API checking…
-          }
-        </span>
-        <span class="bb-topbar-meta">
-          @if (connected()) {
-            {{ repoCount() }} repos
-          } @else {
-            sin sesión
-          }
-          · v{{ health()?.version ?? '…' }}
-        </span>
-      </div>
-
-      <div class="bb-topbar-right">
-        @if (connected()) {
-        <div class="bb-user-menu-wrap">
-          <button class="bb-user-menu-trigger" [class.bb-user-menu-trigger--open]="userMenuOpen()"
-                  (click)="toggleUserMenu()" aria-label="Menú de usuario" aria-haspopup="menu"
-                  [attr.aria-expanded]="userMenuOpen()">
-            <span class="bb-topbar-avatar">{{ identityInitials() }}</span>
-            <span class="bb-topbar-username">{{ identity() }}</span>
-            <ion-icon class="bb-user-caret" name="chevron-down-outline"></ion-icon>
-          </button>
-        </div>
-        }
-      </div>
-    </div>
-  </ion-toolbar>
-</ion-header>
-
-@if (userMenuOpen()) {
-<div class="bb-user-menu" role="menu"
-     [style.top.px]="userMenuPosition().top"
-     [style.right.px]="userMenuPosition().right">
-  <div class="bb-user-menu-head">
-    <div class="bb-user-menu-name">{{ identity() }}</div>
-    <div class="bb-user-menu-meta bb-muted">
-      Cliente: <span class="bb-mono">{{ clientAlias() }}</span>
-    </div>
-  </div>
-  <button class="bb-user-menu-item" role="menuitem" (click)="openConfig()">
-    <ion-icon name="settings-outline"></ion-icon>
-    Configuración
-  </button>
-  <button class="bb-user-menu-item bb-user-menu-item--danger" role="menuitem"
-          (click)="closeUserMenuAndDisconnect()">
-    <ion-icon name="log-out-outline"></ion-icon>
-    Cerrar sesión
-  </button>
-</div>
-}
+<app-topbar
+  [connected]="connected()"
+  [identity]="identity()"
+  [repoCount]="repoCount()"
+  [health]="health()"
+  [clientAlias]="clientAlias()"
+  (openHistory)="sidebarOpen.set(true)"
+  (requestConfig)="openConfig()"
+  (requestDisconnect)="askDisconnect.set(true)">
+</app-topbar>
 
 <ion-content>
   <div class="bb-page-wrapper">
@@ -98,607 +35,119 @@
       }
 
     @if (!connected()) {
-    <div class="bb-auth">
-      <div class="bb-auth-block">
-        <p class="bb-auth-title">Conectar a Bitbucket</p>
-        <div class="bb-auth-form">
-          <div class="bb-auth-field">
-            <label class="bb-auth-label">Alias</label>
-            <input class="bb-input" [(ngModel)]="alias" placeholder="aolivares"/>
-          </div>
-          <div class="bb-auth-field">
-            <label class="bb-auth-label">Workspace</label>
-            <input class="bb-input" [(ngModel)]="workspace" placeholder="bg-ti"/>
-          </div>
-          <div class="bb-auth-field">
-            <div class="bb-auth-label-row">
-              <label class="bb-auth-label">Token de Bitbucket</label>
-              <a class="bb-auth-link" [href]="bbTokenUrl" target="_blank">Generar token</a>
-            </div>
-            <input class="bb-input" [(ngModel)]="token" type="password" placeholder="ATATT..."/>
-          </div>
-          <div class="bb-auth-field">
-            <button type="button" class="bb-auth-plain" (click)="circleciOpen = !circleciOpen">
-              {{ circleciOpen ? 'Ocultar' : 'Opcional' }} — Token de CircleCI
-            </button>
-            @if (circleciOpen) {
-            <div class="bb-auth-label-row">
-              <label class="bb-auth-label">Token de CircleCI</label>
-              <a class="bb-auth-link" [href]="cciTokenUrl" target="_blank">Generar token</a>
-            </div>
-            <input class="bb-input" [(ngModel)]="circleciToken" type="password" placeholder="CCIPAT..."/>
-            }
-          </div>
-          <button class="bb-btn-primary" (click)="connect()" [disabled]="loading() || !token">
-            @if (loading()) {
-            <span class="bb-spinner-inline"></span>
-            } @else {
-            Conectar y guardar token
-            }
-          </button>
-          <p class="bb-auth-hint">
-            Los tokens se guardan en la <code class="bb-auth-code">fila de conexión</code> (data/cache.db) y se reutilizan hasta que vencen.
-          </p>
-        </div>
-      </div>
-      @if (storedCreds()) {
-      <div class="bb-auth-card">
-        <p class="bb-auth-title">Ya hay credenciales guardadas</p>
-        <p class="bb-auth-text">
-          Ingresá tu usuario para volver a iniciar sesión.
-        </p>
-        <div class="bb-auth-form">
-          <div class="bb-auth-field">
-            <label class="bb-auth-label">Usuario</label>
-            <input class="bb-input" [(ngModel)]="alias" placeholder="aolivares"/>
-          </div>
-          <div class="bb-auth-actions">
-            <button class="bb-btn-primary" (click)="reuseSession()" [disabled]="loading()">
-              @if (loading()) {
-              <span class="bb-spinner-inline"></span>
-              } @else {
-              Entrar
-              }
-            </button>
-            <button class="bb-auth-plain" (click)="storedCreds.set(false)">Usar otro token</button>
-          </div>
-        </div>
-      </div>
-      }
-
-
-    </div>
+    <app-auth-panel
+      [loading]="loading()"
+      [storedCreds]="storedCreds()"
+      (connectRequested)="onConnectRequested($event)"
+      (reuseRequested)="reuseSession()"
+      (useOtherToken)="storedCreds.set(false)">
+    </app-auth-panel>
     }
 
     @if (connected()) {
-    <div class="bb-panel">
-      <div class="bb-section">
-        <div class="bb-section-header">Resolver ramas</div>
-        <div class="bb-row-top">
-          <div class="bb-field">
-            <input class="bb-input bb-mono" [(ngModel)]="origin" placeholder="Ingrese rama origen"/>
-          </div>
-          <div class="bb-field">
-            <input class="bb-input bb-mono" [(ngModel)]="destination" placeholder="Ingrese rama destino"/>
-          </div>
-          <label class="bb-force">
-            <input type="checkbox" [(ngModel)]="forceCache"/>
-            Forzar consultas (ignorar caché)
-          </label>
-          <button class="bb-btn-primary" (click)="loadRepos()" [disabled]="reposLoading() || !origin">
-            @if (reposLoading()) {
-            <span class="bb-spinner-inline"></span>
-            }
-            Obtener Repositorios
-          </button>
-        </div>
-        <div class="bb-row-top">
-          <div class="bb-field" style="flex: 1;">
-            <label>Proyectos a Excluir (Blacklist)</label>
-            <div class="bb-chips">
-              @for (p of blacklisted(); track p; let i = $index) {
-              <span class="bb-chip-pill bb-chip-pill--danger bb-mono">{{ p }}
-                    <button class="bb-chip-x" (click)="removeBlacklist(i)">×</button>
-                  </span>
-              }
-              @if (!addingBlacklist()) {
-              <button class="bb-chip-add" (click)="addingBlacklist.set(true)">+ Excluir proyecto</button>
-              } @else {
-              <input class="bb-chip-input" [(ngModel)]="blacklistInput" placeholder="repo-a"
-                     (keyup.enter)="addBlacklist()"/>
-              <button class="bb-chip-add" (click)="addBlacklist()">OK</button>
-              <button class="bb-chip-add" (click)="addingBlacklist.set(false)">×</button>
-              }
-            </div>
-          </div>
-          <div class="bb-field" style="flex: 1;">
-            <label>Prefijos de Proyectos</label>
-            <div class="bb-chips">
-              @for (p of projectPrefixes(); track p; let i = $index) {
-              <span class="bb-chip-pill bb-mono">{{ p }}
-                    <button class="bb-chip-x" (click)="removeProjectPrefix(i)">×</button>
-                  </span>
-              }
-              @if (!addingProjectPrefix()) {
-              <button class="bb-chip-add" (click)="addingProjectPrefix.set(true)">+ Agregar prefijo</button>
-              } @else {
-              <input class="bb-chip-input" [(ngModel)]="projectPrefixInput" placeholder="orders"
-                     (keyup.enter)="addProjectPrefix()"/>
-              <button class="bb-chip-add" (click)="addProjectPrefix()">OK</button>
-              <button class="bb-chip-add" (click)="addingProjectPrefix.set(false)">×</button>
-              }
-            </div>
-          </div>
-          <div class="bb-field" style="flex: 1;">
-            <label>Ambientes de Deploy</label>
-            <div class="bb-chips" style="flex: 1;">
-              @for (p of prefixes(); track p; let i = $index) {
-              <span class="bb-chip-pill bb-mono">{{ p }}
-                    <button class="bb-chip-x" (click)="removePrefix(i)">×</button>
-                  </span>
-              }
-              @if (!addingPrefix()) {
-              <button class="bb-chip-add" (click)="addingPrefix.set(true)">+ Agregar ambiente</button>
-              } @else {
-              <input class="bb-chip-input" [(ngModel)]="prefixInput" placeholder="uat" (keyup.enter)="addPrefix()"/>
-              <button class="bb-chip-add" (click)="addPrefix()">OK</button>
-              <button class="bb-chip-add" (click)="addingPrefix.set(false)">×</button>
-              }
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <app-query-panel
+      [(origin)]="origin"
+      [(destination)]="destination"
+      [forceCache]="forceCache"
+      [prefixes]="prefixes"
+      [addingPrefix]="addingPrefix"
+      [(prefixInput)]="prefixInput"
+      [blacklisted]="blacklisted"
+      [addingBlacklist]="addingBlacklist"
+      [(blacklistInput)]="blacklistInput"
+      [projectPrefixes]="projectPrefixes"
+      [addingProjectPrefix]="addingProjectPrefix"
+      [(projectPrefixInput)]="projectPrefixInput"
+      [reposLoading]="reposLoading"
+      (loadRepos)="loadRepos()"
+      (addPrefix)="addPrefix()"
+      (removePrefix)="removePrefix($event)"
+      (addBlacklist)="addBlacklist()"
+      (removeBlacklist)="removeBlacklist($event)"
+      (addProjectPrefix)="addProjectPrefix()"
+      (removeProjectPrefix)="removeProjectPrefix($event)">
+    </app-query-panel>
+
+    @if (tableLoaded()) {
+    <app-repos-table
+      [repos]="sortedRepos()"
+      [loadedPrefixes]="loadedPrefixes()"
+      [prefixCols]="prefixCols()"
+      [destination]="destination"
+      [origin]="origin"
+      [ciConfigured]="ciConfigured()"
+      [ciError]="ciError()"
+      [creatingPr]="creatingPr()"
+      [tagging]="tagging()"
+      [taggingRepo]="taggingRepo()"
+      [reposLoading]="reposLoading()"
+      [syncingPrs]="syncingPrs()"
+      [failedRepos]="failedRepos()"
+      [sortKey]="repoSortKey()"
+      [sortEnv]="repoSortEnv()"
+      [sortDir]="repoSortDir()"
+      [(prTitle)]="prTitle"
+      (sortEvent)="onSortRepo($event)"
+      (createPr)="createPr($event)"
+      (generateTag)="onGenerateTag($event)"
+      (generateTagsAll)="generateTags()"
+      (syncPrs)="syncPrs($event)"
+      (reportRequested)="openReport()"
+      (refresh)="loadRepos()"
+      (retryFailed)="retryFailed()">
+    </app-repos-table>
     }
 
-    @if (connected() && tableLoaded()) {
-    <div class="bb-panel">
-      <div class="bb-section">
-        <div class="bb-section-header">Tabla de repositorios</div>
-        @if (ciError()) {
-        <div class="bb-error">{{ ciError() }}</div>
-        }
-        @if (repos().length > 0) {
-        <div class="bb-row-top">
-          <input class="" [(ngModel)]="prTitle" placeholder="Título del PR"/>
-          <button class="bb-btn-secondary" (click)="syncPrs('create')" [disabled]="syncingPrs()">Crear PRs faltantes
-          </button>
-          <button class="bb-btn-secondary" (click)="syncPrs('update')" [disabled]="syncingPrs()">Actualizar</button>
-          <button class="bb-btn-secondary" (click)="generateTags()"
-                  [disabled]="tagging() || !ciConfigured()">
-            @if (tagging()) {
-            <span class="bb-spinner-inline"></span>
-            }
-            Generar tags faltantes
-          </button>
-          <button class="bb-btn-secondary bb-btn-sm" (click)="reportOpen.set(true)">Previsualizar reporte</button>
-          <button class="bb-btn-secondary bb-btn-sm" (click)="loadRepos()" [disabled]="reposLoading()">
-            @if (reposLoading()) {
-            <span class="bb-spinner-inline"></span>
-            } @else {
-            Refrescar
-            }
-          </button>
-          @if (failedRepos().length > 0) {
-          <button class="bb-btn-secondary bb-btn-sm" (click)="retryFailed()" [disabled]="reposLoading()">
-            @if (reposLoading()) {
-            <span class="bb-spinner-inline"></span>
-            } @else {
-            Reintentar fallidos ({{ failedRepos().length }})
-            }
-          </button>
-          }
-        </div>
-        <div class="bb-table bb-table--repos"
-             [style.--bb-cols]="'1.4fr 1fr 1.4fr' + prefixCols()">
-          <div class="bb-repos-head">
-            <span>
-              <button class="bb-th" type="button" (click)="toggleRepoSort('name')"
-                      [title]="'Ordenar por repositorio (' + (repoSortDir() === 'asc' ? 'desc' : 'asc') + ')'">
-                Repositorio {{ sortArrow('name') }}
-              </button>
-            </span>
-            <span>PR</span>
-            <span>Tagged Commit</span>
-            @for (p of loadedPrefixes(); track p) {
-            <span class="bb-deploy-col bb-mono">
-              <button class="bb-th" type="button" (click)="toggleRepoSort('status', p)"
-                      [title]="'Ordenar por estado de ' + p">
-                {{ p }} {{ sortArrow('status', p) }}
-              </button>
-            </span>
-            }
-          </div>
-          @for (repo of sortedRepos(); track repo.slug) {
-          <div class="bb-repos-row">
-                  <span>
-                    <a class="bb-link bb-repo-name" [href]="repo.branch_url" target="_blank"
-                       [title]="repo.name">{{ repo.name }}</a>
-                  </span>
-            <span>
-                    @if (repo.error) {
-                      <span class="bb-muted" [title]="repo.error">falló</span>
-                    } @else if (repo.pr.exists && repo.pr.url) {
-                      <a class="bb-link" [href]="repo.pr.url" target="_blank"
-                         [title]="repo.pr.title">
-                        PR #{{ repo.pr.url.split('pull-requests/')[1]?.split('/')[0] ?? 'abierto' }}
-                        @if (repo.pr.title) {
-                          — {{ repo.pr.title }}
-                        }
-                      </a>
-                    } @else {
-                      <button class="bb-link bb-pr-link" [disabled]="creatingPr() !== null"
-                              (click)="createPr(repo)"
-                              [title]="'Crea el PR hacia la rama destino'">
-                        @if (creatingPr() === repo.slug) {
-                          <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
-                        } @else {
-                          Sin PR a {{ destination || 'master' }}
-                        }
-                      </button>
-                    }
-                  </span>
-            <span>
-                    @if (repo.error) {
-                      <span class="bb-muted">—</span>
-                    } @else {
-                      <a class="bb-link bb-mono" [href]="repo.branch_url" target="_blank"
-                         [title]="'Rama ' + origin">{{ repo.commit.slice(0, 8) }}</a>
-                    }
-                  </span>
-            @for (p of loadedPrefixes(); track p) {
-            <span class="bb-deploy-col">
-                      @if (repo.error) {
-                        <span class="bb-muted">—</span>
-                      } @else {
-                        @let badge = envTagBadge(repo, p);
-                      @if (badge) {
-                        <a class="bb-link bb-mono bb-deploy-badge {{ badge.cls }}"
-                           [href]="envTagHref(repo, p)" target="_blank"
-                           [title]="envTagTitle(repo, p)">
-                          {{ badge.label }}
-                        </a>
-                      } @else if (ciConfigured()) {
-                        <button class="bb-link bb-taggen-link"
-                                [disabled]="taggingRepo() !== null"
-                                (click)="generateTags(repo, p)"
-                                [title]="'Genera ' + p + '-{id} según el último pipeline de la rama'">
-                          @if (taggingRepo() === repo.slug) {
-                            <ion-spinner name="dots" class="bb-spinner"></ion-spinner>
-                          } @else {
-                            generate tag
-                          }
-                        </button>
-                      } @else {
-                        <span class="bb-muted">—</span>
-                      }
-                      }
-                    </span>
-            }
-          </div>
-          }
-        </div>
-        }
-      </div>
-    </div>
+    <app-params-panel
+      [connected]="connected()"
+      [paramsLoaded]="paramsLoaded()"
+      [origin]="origin"
+      [destination]="destination"
+      [hasRepos]="repos().length > 0"
+      [scanMode]="scanMode"
+      [paramsLoading]="paramsLoading"
+      [params]="params()"
+      [removed]="removed()"
+      [rows]="paramRows()"
+      [estadoOptions]="estadoOptions"
+      [estadoFilter]="estadoFilter"
+      (loadParams)="loadParams()"
+      (openParams)="openParams()"
+      (toggleEstado)="toggleEstado($event)"
+      (openSsmView)="openSsmView($event)">
+    </app-params-panel>
     }
 
-    @if (connected()) {
-    <div class="bb-panel">
-      <div class="bb-section">
-        <div class="bb-section-header">Parámetros SSM</div>
-        <div class="bb-row-top">
-          <div class="bb-seg">
-            <button class="bb-seg-btn" [class.bb-seg-btn--active]="scanMode === 'diff'"
-                    (click)="scanMode = 'diff'">Solo el diff
-            </button>
-            <button class="bb-seg-btn" [class.bb-seg-btn--active]="scanMode === 'all'"
-                    (click)="scanMode = 'all'">Todos los archivos
-            </button>
-          </div>
-          <button class="bb-btn-secondary" (click)="loadParams()" [disabled]="paramsLoading() || !origin">
-            @if (paramsLoading()) {
-            <span class="bb-spinner-inline"></span>
-            }
-            Cargar parámetros
-          </button>
-          <button class="bb-btn-secondary" (click)="openParams()"
-                  [disabled]="params().length === 0 && removed().length === 0">
-            Ver parámetros
-          </button>
-        </div>
-        <div class="bb-muted bb-hint">
-          "Solo el diff" analiza los archivos tocados por la rama (rápido);
-          "Todos los archivos" recorre el repo completo por ref (más lento).
-        </div>
-      </div>
-    </div>
-    }
+    <app-report-modal
+      [open]="reportOpen()"
+      [initialMode]="reportInitialMode"
+      [origin]="origin"
+      [prefixes]="prefixes()"
+      [repos]="repos()"
+      [rows]="paramRows()"
+      (close)="reportOpen.set(false)">
+    </app-report-modal>
 
-    @if (connected() && paramsLoaded()) {
-    <div class="bb-panel">
-      <div class="bb-section">
-        <div class="bb-section-header">Parámetros SSM — respuesta</div>
-        @if (params().length > 0 || removed().length > 0) {
-        <div class="bb-row-top bb-params-filters">
-          <span class="bb-muted">Filtrar por estado:</span>
-          @for (estado of estadoOptions; track estado) {
-          <button class="bb-chip" [class.bb-chip--active]="estadoFilterActive(estado)"
-                  (click)="toggleEstado(estado)">
-            @if (estado === 'solo destino') {
-            Solo destino
-            } @else if (estado === 'reutilizado') {
-            Reutilizado
-            } @else {
-            Nuevo
-            }
-          </button>
-          }
-        </div>
-        @if (removed().length > 0) {
-        <p class="bb-muted bb-hint bb-params-hint">
-          "Solo destino" = existe en '{{ destination }}' pero ya no se referencias en '{{ origin }}'.
-          No implica que el parámetro haya que borrarlo.
-        </p>
-        }
-        <div class="bb-table bb-table--params">
-          <div class="bb-repos-head">
-            <span>Parámetro</span>
-            <span>Estado</span>
-            <span>Tipo</span>
-            <span></span>
-          </div>
-          @for (p of paramRows(); track p.param) {
-          <div class="bb-repos-row">
-            <span class="bb-mono bb-param-cell">
-              <a class="bb-link bb-mono" [title]="p.param"
-                 (click)="openSsmView(p.param)">{{ p.param }}</a>
-            </span>
-            <span class="bb-badge {{ tipoClass(p.estado) }}">{{ estadoLabel(p.estado) }}</span>
-            <span>
-              @if (p.type === 'secret') {
-              <span class="bb-badge bb-badge--danger" title="Parámetro marcado como secreto en la ssm-view">secreto</span>
-              } @else {
-              <span class="bb-badge bb-badge--neutral">ssm</span>
-              }
-            </span>
-            <span>
-              <button class="bb-btn-secondary bb-btn-sm" (click)="openSsmView(p.param)">
-                Revisar SSM
-              </button>
-            </span>
-          </div>
-          }
-        </div>
-        } @else if (repos().length > 0) {
-        <div class="bb-muted">Sin parámetros SSM.</div>
-        }
-      </div>
-    </div>
-    }
-    @if (reportOpen()) {
-    <div class="bb-modal-mask" (click)="reportOpen.set(false)">
-      <div class="bb-modal" (click)="$event.stopPropagation()">
-        <div class="bb-modal-title">{{ reportMode === 'params' ? 'Parámetros SSM' : 'Listado de proyectos — ' + origin
-          }}
-        </div>
-        <div class="bb-modal-row">
-          <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'branch'"
-                  (click)="selectReportMode('branch')">URLs rama origen
-          </button>
-          <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'pr'"
-                  (click)="selectReportMode('pr')">URLs de PRs
-          </button>
-          <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'tag'"
-                  (click)="selectReportMode('tag')">URLs de tags
-          </button>
-          <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportMode === 'params'"
-                  (click)="selectReportMode('params')">Parámetros SSM
-          </button>
-        </div>
-        @if (reportMode === 'tag' && prefixes().length > 1) {
-        <div class="bb-modal-row">
-          <span class="bb-muted">Ambiente:</span>
-          @for (p of prefixes(); track p; let i = $index) {
-          <button class="bb-seg-btn" [class.bb-seg-btn--active]="reportEnv() === i"
-                  (click)="reportEnv.set(i); reportCopied.set(false)">{{ p }}
-          </button>
-          }
-        </div>
-        }
-        <textarea class="bb-report-area" readonly [value]="reportText()"></textarea>
-        <div class="bb-modal-row bb-modal-actions">
-          <button class="bb-btn-primary bb-btn-sm" (click)="copyReport()">
-            {{ reportCopied() ? '¡Copiado!' : 'Copiar' }}
-          </button>
-          <button class="bb-btn-secondary bb-btn-sm" (click)="reportOpen.set(false)">Cerrar</button>
-        </div>
-      </div>
-    </div>
-    }
-    @if (askDisconnect()) {
-    <div class="bb-modal-mask" (click)="askDisconnect.set(false)">
-      <div class="bb-modal bb-modal--small" (click)="$event.stopPropagation()">
-        <div class="bb-modal-title">Desconectar</div>
-        <p class="bb-confirm-text">
-          ¿Querés cerrar la sesión y conservar o eliminar las credenciales guardadas?
-        </p>
-        <div class="bb-modal-row bb-modal-actions">
-          <button class="bb-btn-danger bb-btn-sm" (click)="disconnect(true)">Sí, eliminar credenciales</button>
-          <button class="bb-btn-secondary bb-btn-sm" (click)="disconnect(false)">Conservar</button>
-          <button class="bb-btn-secondary bb-btn-sm" (click)="askDisconnect.set(false)">Cancelar</button>
-        </div>
-      </div>
-    </div>
-    }
-    @if (configOpen()) {
-    <div class="bb-modal-mask" (click)="configOpen.set(false)">
-      <div class="bb-modal bb-modal--config" (click)="$event.stopPropagation()">
-        <div class="bb-modal-title">Configuración</div>
-        <div class="bb-config-meta bb-muted">
-          Cliente: <span class="bb-mono">{{ clientAlias() }}</span>
-        </div>
-        @if (configMessage(); as msg) {
-        <div class="bb-config-msg"
-             [class.bb-config-msg--ok]="msg.kind === 'ok'"
-             [class.bb-config-msg--error]="msg.kind === 'error'">
-          {{ msg.text }}
-        </div>
-        }
-        @for (svc of serviceKeys; track svc) {
-        <div class="bb-config-service">
-          <div class="bb-config-service-head">
-            <span class="bb-config-service-name">{{ serviceLabel(svc) }}</span>
-            @let st = services()[svc];
-            @if (st?.stored) {
-            <span class="bb-badge bb-badge--ok">Guardado</span>
-            } @else {
-            <span class="bb-badge bb-badge--neutral">Sin guardar</span>
-            }
-            @if (st?.warning === 'expired') {
-            <span class="bb-badge bb-badge--warn">Vencido</span>
-            } @else if (st?.warning === 'expiring') {
-            <span class="bb-badge bb-badge--warn">Vence pronto</span>
-            }
-          </div>
-          <div class="bb-config-fields">
-            @for (f of serviceFields[svc]; track f.key) {
-              @if (!f.dependsOn || configForm[svc][f.dependsOn] === '1') {
-              <div class="bb-config-field">
-                <label class="bb-auth-label">{{ f.label }}</label>
-                @if (f.checkbox) {
-                <input type="checkbox" class="bb-config-checkbox"
-                       [name]="svc + '_' + f.key"
-                       [checked]="configForm[svc][f.key] === '1'"
-                       (change)="onFieldToggle(svc, f.key, $any($event.target).checked)"/>
-                } @else {
-                <input class="bb-input bb-mono" [type]="f.secret ? 'password' : 'text'"
-                       [placeholder]="f.placeholder"
-                       [name]="svc + '_' + f.key"
-                       [(ngModel)]="configForm[svc][f.key]"/>
-                }
-              </div>
-              }
-            }
-          </div>
-          <div class="bb-modal-row">
-            <button class="bb-btn-primary bb-btn-sm" [disabled]="savingService() === svc"
-                    (click)="saveServiceAuth(svc)">
-              @if (savingService() === svc) {
-              <span class="bb-spinner-inline"></span>
-              }
-              Validar y guardar
-            </button>
-          </div>
-          @if (svc === 'aws') {
-          <div class="bb-config-regions">
-            <div class="bb-config-regions-title">
-              <span class="bb-config-service-name">Ambientes y Regiones de AWS</span>
-              <span class="bb-muted">ver · editar · agregar</span>
-            </div>
-            @if (awsEnvironmentLoading()) {
-            <div class="bb-muted">Cargando…</div>
-            } @else if (awsEnvironmentRows().length === 0) {
-            <div class="bb-muted">Sin ambientes configurados. Agregá el primero abajo.</div>
-            } @else {
-            <div class="bb-region-table">
-              @for (row of awsEnvironmentRows(); track row.name) {
-              <div class="bb-region-row" [class.bb-region-row--no-endpoint]="!row.localstack">
-                <span class="bb-mono bb-region-env">{{ row.name }}</span>
-                <input class="bb-input bb-mono" [value]="row.region"
-                       (input)="setAwsRegion(row.name, $any($event.target).value)"
-                       placeholder="región (ej: us-east-1)"/>
-                <label class="bb-region-docker">
-                  <input type="checkbox" [checked]="row.localstack"
-                         (change)="setAwsLocalstack(row.name, $any($event.target).checked)"/>
-                  docker
-                </label>
-                @if (row.localstack) {
-                <input class="bb-input bb-mono" [value]="row.endpoint_url"
-                       (input)="setAwsEndpoint(row.name, $any($event.target).value)"
-                       placeholder="endpoint URL (ej: http://localhost:4566)"/>
-                }
-              </div>
-              }
-            </div>
-            }
-            <div class="bb-region-add">
-              <input class="bb-input bb-mono" [(ngModel)]="awsNewEnv" placeholder="ambiente (ej: prod)"/>
-              <input class="bb-input bb-mono" [(ngModel)]="awsNewRegion" placeholder="región (ej: us-east-2)"/>
-              <button class="bb-btn-secondary bb-btn-sm" (click)="addAwsEnvironment()">
-                + Agregar
-              </button>
-            </div>
-            <div class="bb-modal-row">
-              <button class="bb-btn-primary bb-btn-sm" [disabled]="savingAwsEnvironments()"
-                      (click)="saveAwsEnvironments()">
-                {{ savingAwsEnvironments() ? 'Guardando…' : 'Guardar' }}
-              </button>
-            </div>
-          </div>
-          }
-        </div>
-        }
-        <div class="bb-config-service">
-          <div class="bb-config-service-head">
-            <span class="bb-config-service-name">Motor local-git</span>
-            @if (gitClonesEnabled()) {
-            <span class="bb-badge bb-badge--ok">Activo</span>
-            } @else {
-            <span class="bb-badge bb-badge--neutral">API directo</span>
-            }
-          </div>
-          <div class="bb-config-fields">
-            <div class="bb-config-field">
-              <label class="bb-auth-label">Carpeta de clones</label>
-              <div class="bb-input-group">
-                <input class="bb-input bb-mono"
-                       [ngModel]="gitClonesDir()"
-                       (ngModelChange)="gitClonesDir.set($any($event))"
-                       placeholder="C:\clones\bbit-repos"
-                       #folderInput/>
-                <button class="bb-btn-secondary bb-btn-sm" 
-                        (click)="folderPicker.click()"
-                        title="Buscar carpeta en el administrador de archivos">
-                  📁 Buscar
-                </button>
-                <input type="file" 
-                       webkitdirectory 
-                       mozdirectory 
-                       directory
-                       (change)="onFolderSelected($event)"
-                       #folderPicker
-                       style="display: none"/>
-              </div>
-            </div>
-          </div>
-          @if (gitCloneStatus(); as st) {
-          <div class="bb-muted">{{ st }}</div>
-          }
-          <div class="bb-modal-row">
-            <button class="bb-btn-primary bb-btn-sm" (click)="saveGitClonesDir()">Guardar carpeta</button>
-            <button class="bb-btn-secondary bb-btn-sm"
-                    [disabled]="gitCloning() || !gitClonesDir().trim()"
-                    (click)="cloneRepos()">
-              @if (gitCloning()) { <span class="bb-spinner-inline"></span> }
-              Clonar repos
-            </button>
-          </div>
-        </div>
-        <div class="bb-modal-row bb-modal-actions">
-          <button class="bb-btn-secondary bb-btn-sm" (click)="configOpen.set(false)">Cerrar</button>
-        </div>
-      </div>
-    </div>
-    }
-    @if (spinnerVisible()) {
-    <div class="bb-modal-mask">
-      <div class="bb-modal bb-modal--loading" (click)="$event.stopPropagation()">
-        <ion-spinner name="dots" class="bb-spinner bb-spinner--lg"></ion-spinner>
-        <div class="bb-loading-text">{{ finalizing() ? 'Finalizando consultas…' : 'Procesando…' }}</div>
-      </div>
-    </div>
-    }
+    <app-confirm-modal
+      [open]="askDisconnect()"
+      (confirmDelete)="disconnect(true)"
+      (confirmKeep)="disconnect(false)"
+      (cancel)="askDisconnect.set(false)">
+    </app-confirm-modal>
+
+    <app-config-modal
+      [open]="configOpen()"
+      [(clientAlias)]="clientAlias"
+      [(gitClonesDir)]="gitClonesDir"
+      [(gitClonesEnabled)]="gitClonesEnabled"
+      (close)="configOpen.set(false)"
+      (bitbucketReauth)="onBitbucketReauth()">
+    </app-config-modal>
+
+    <app-loading-modal
+      [open]="spinnerVisible()"
+      [finalizing]="finalizing()">
+    </app-loading-modal>
 
   </div>
 </div>

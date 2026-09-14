@@ -1,0 +1,39 @@
+@if (open()) {
+<div class="bb-modal-mask" (click)="close.emit()">
+  <div class="bb-modal" (click)="$event.stopPropagation()">
+    <div class="bb-modal-title">{{ mode() === 'params' ? 'Parámetros SSM' : 'Listado de proyectos — ' + origin() }}
+    </div>
+    <div class="bb-modal-row">
+      <button class="bb-seg-btn" [class.bb-seg-btn--active]="mode() === 'branch'"
+              (click)="selectMode('branch')">URLs rama origen
+      </button>
+      <button class="bb-seg-btn" [class.bb-seg-btn--active]="mode() === 'pr'"
+              (click)="selectMode('pr')">URLs de PRs
+      </button>
+      <button class="bb-seg-btn" [class.bb-seg-btn--active]="mode() === 'tag'"
+              (click)="selectMode('tag')">URLs de tags
+      </button>
+      <button class="bb-seg-btn" [class.bb-seg-btn--active]="mode() === 'params'"
+              (click)="selectMode('params')">Parámetros SSM
+      </button>
+    </div>
+    @if (mode() === 'tag' && prefixes().length > 1) {
+    <div class="bb-modal-row">
+      <span class="bb-muted">Ambiente:</span>
+      @for (p of prefixes(); track p; let i = $index) {
+      <button class="bb-seg-btn" [class.bb-seg-btn--active]="envIndex() === i"
+              (click)="envIndex.set(i); copied.set(false)">{{ p }}
+      </button>
+      }
+    </div>
+    }
+    <textarea class="bb-report-area" readonly [value]="reportText()"></textarea>
+    <div class="bb-modal-row bb-modal-actions">
+      <button class="bb-btn-primary bb-btn-sm" (click)="copy()">
+        {{ copied() ? '¡Copiado!' : 'Copiar' }}
+      </button>
+      <button class="bb-btn-secondary bb-btn-sm" (click)="close.emit()">Cerrar</button>
+    </div>
+  </div>
+</div>
+}
