@@ -166,6 +166,7 @@ class ReleaseCache:
             self._migrate_schema()
             self._drop_legacy_tables()
             self._seed_catalog()
+            self.prune()
 
     @property
     def db_path(self) -> Path:
@@ -941,6 +942,76 @@ class ReleaseCache:
             counts.get("init_sesion", 0),
             counts.get("raw_stash", 0),
         )
+
+    def prune(
+        self,
+        *,
+        service_call_max_age_seconds: int = 7 * 86400,
+        vacuum_min_bytes: int = 1 << 20,
+    ) -> dict:
+        """Poda del SQLite: borra lo que ya venció para acotar el crecimiento.
+
+        - ``request``: filas cuyo TTL del ``request_type`` ya expiró (peso
+          muerto: ``latest_success`` no las sirve más). Las ``SUCCESS``
+          expiradas se borran; las ``PENDING`` solo con un colchón amplio
+          (10× TTL o 1 hora) para no cortar un flow en curso.
+        - ``raw_stash``: respuestas cuyo ``rs_ttl_seconds`` ya venció.
+        - ``service_call``: auditoría append-only; se poda por antigüedad
+          (default 7 días).
+        - ``VACUUM``: solo si se borró algo y la base supera el umbral.
+        """
+        now = time.time()
+        counts: dict[str, int] = {}
+        with self._lock:
+            cur = self._conn.cursor()
+            try:
+                cur.execute(
+                    """
+                    DELETE FROM request
+                    WHERE rq_created_at < ?
+                      AND rq_id IN (
+                          SELECT rq.rq_id
+                          FROM request rq
+                          JOIN request_type rt ON rt.rt_id = rq.rt_id
+                          WHERE CASE
+                              WHEN rq.rq_status = 'PENDING'
+                                THEN rq.rq_created_at + MAX(rt.rt_ttl_seconds * 10, 3600) < ?
+                              ELSE rq.rq_created_at + rt.rt_ttl_seconds < ?
+                          END
+                      )
+                    """,
+                    (now, now, now),
+                )
+                counts["request"] = cur.rowcount
+
+                cur.execute(
+                    "DELETE FROM raw_stash WHERE rs_created_at + rs_ttl_seconds <= ?",
+                    (now,),
+                )
+                counts["raw_stash"] = cur.rowcount
+
+                cur.execute(
+                    "DELETE FROM service_call WHERE sc_created_at < ?",
+                    (now - service_call_max_age_seconds,),
+                )
+                counts["service_call"] = cur.rowcount
+            finally:
+                cur.close()
+            self._conn.commit()
+        deleted = sum(counts.values())
+        try:
+            db_size = self._db_path.stat().st_size if self._db_path.exists() else 0
+        except OSError:
+            db_size = 0
+        if deleted and db_size > vacuum_min_bytes:
+            self._conn.execute("VACUUM")
+        log.info(
+            "cache prune: %d request(s), %d raw_stash(es), %d service_call(s) borrados",
+            counts.get("request", 0),
+            counts.get("raw_stash", 0),
+            counts.get("service_call", 0),
+        )
+        return counts
 
     def clear_all(self) -> dict:
         """Vacía las tablas de datos del cache, logueando cuántos registros se
