@@ -1207,6 +1207,7 @@ def flow(
     force: int = 0,
     repos: str = "",
     with_tags: int = 1,
+    with_diff: int = 1,
 ):
     """Endpoint unificado que resuelve repos UNA VEZ y computa scan + diff.
 
@@ -1222,6 +1223,11 @@ def flow(
 
     `with_tags=0` omite la consulta de tags/deploys del scan (ahorro a escala);
     el front lo pide solo cuando se seleccionan ambientes.
+
+    `with_diff=0` omite el diff SSM: solo se computa el scan de repos y se
+    devuelve un diff vacío. El diff (params SSM) es un cálculo caro (raw de
+    archivos + master params de todos los repos) que el front pide solo
+    cuando el usuario presiona "Cargar parámetros" (BBIT-53).
     """
     data = _require_session()
     cfg_scan = Config()
@@ -1261,10 +1267,10 @@ def flow(
     # completo ya está cacheado, se reusa el diff y no se lanza master params.
     cached_flow = None
     if only_repos:
-        cached_flow = cache.get_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode, with_tags=with_tags)
+        cached_flow = cache.get_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode, with_tags=with_tags, with_diff=with_diff)
 
     dest_by_repo = None
-    if cached_flow is None and mode == "diff":
+    if cached_flow is None and mode == "diff" and with_diff:
         # Overlap de fases: el scan y la resolución de master params corren en
         # paralelo (comparten el rate limiter global de BBIT-30) y el diff
         # reusa el resultado en vez de recomputarlo.
@@ -1287,6 +1293,18 @@ def flow(
 
     if cached_flow is not None:
         diff_raw = cached_flow["diff"]
+    elif not with_diff:
+        # BBIT-53: sin diff — la sección SSM solo se computa cuando el usuario
+        # presiona "Cargar parámetros", no en la carga de la tabla de repos.
+        diff_raw = {
+            "origin": origin,
+            "destination": destination,
+            "prefixes": [p.rstrip("/") for p in deploy_prefixes],
+            "mode": mode,
+            "repos": [],
+            "params": [],
+            "removed": [],
+        }
     else:
         diff_raw = _compute_diff(
             data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
@@ -1309,7 +1327,7 @@ def flow(
         "diff": diff_raw,
     }
     if not only_repos:
-        cache.set_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode, result, with_tags=with_tags)
+        cache.set_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode, result, with_tags=with_tags, with_diff=with_diff)
     result["diff"] = _enrich_diff_ssm(result["diff"], cfg_diff)
     return result
 
@@ -1325,6 +1343,7 @@ def flow_stream(
     force: int = 0,
     repos: str = "",
     with_tags: int = 1,
+    with_diff: int = 1,
 ):
     """Endpoint SSE de streaming del scan — entrega cada repo a medida que se completa.
 
@@ -1334,6 +1353,10 @@ def flow_stream(
     este endpoint para render incremental.
 
     ``with_tags=0`` omite la consulta de tags/deploys del scan.
+
+    ``with_diff=0`` omite el diff SSM (master params + diffs por repo):
+    no se emite el evento ``diff``. La sección SSM se procesa solo cuando
+    el front pide los parámetros en "Cargar parámetros" (BBIT-53).
     """
     import json as _json
 
@@ -1391,7 +1414,7 @@ def flow_stream(
         with ThreadPoolExecutor(max_workers=1) as ex:
             ctx.update({r.slug: {} for r in repos_list})
             master_fut = None
-            if mode == "diff":
+            if mode == "diff" and with_diff:
                 master_fut = ex.submit(_resolve_masters, data.client, repos_list, destination, ssm_prefixes, cache, ctx)
 
             # BBIT-35 P4: emitir los repos sin la rama ANTES del scan, para que el
@@ -1450,13 +1473,14 @@ def flow_stream(
             print(f"[STREAM] DONE: {len(visible_items)} repos, {with_pr} con PR", file=sys.stderr)
             yield _event("stats", stats)
 
-            dest_by_repo = master_fut.result() if master_fut is not None else None
-            diff_raw = _compute_diff(
-                data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
-                dest_by_repo=dest_by_repo,
-            )
-            diff_enriched = _enrich_diff_ssm(diff_raw, cfg_diff)
-            yield _event("diff", diff_enriched)
+            if with_diff:
+                dest_by_repo = master_fut.result() if master_fut is not None else None
+                diff_raw = _compute_diff(
+                    data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
+                    dest_by_repo=dest_by_repo,
+                )
+                diff_enriched = _enrich_diff_ssm(diff_raw, cfg_diff)
+                yield _event("diff", diff_enriched)
 
             yield _event("done", {})
 

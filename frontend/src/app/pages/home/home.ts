@@ -766,6 +766,11 @@ reportOpen = signal(false);
     // que un reload nunca dispare de nuevo el barrido completo a las APIs.
     this.forceCache.set(false);
     this.currentSessionId.set(session.id);
+    // BBIT-53: la sección SSM pertenece a la sesión que la calculó; al
+    // cambiar de sesión se limpia y solo reaparece al presionar "Cargar parámetros".
+    this.params.set([]);
+    this.removed.set([]);
+    this.paramsLoaded.set(false);
     this.loadRepos();
   }
 
@@ -908,6 +913,7 @@ reportOpen = signal(false);
    * Returns true if SSE started successfully, false if fallback is needed.
    */
   private scanSse(
+    withDiff: boolean,
     onRepo: (item: ScanRepo) => void,
     onStats: (stats: ScanStats) => void,
     onDiff: (diff: DiffResponse) => void,
@@ -921,7 +927,7 @@ reportOpen = signal(false);
     const prefixes = this.prefixes().join(',');
     const exclude = this.blacklisted().join(',');
     const force = this.forceCache() ? 1 : 0;
-    const url = `/api/flow/stream?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}&with_tags=${this.prefixes().length > 0 ? 1 : 0}`;
+    const url = `/api/flow/stream?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&prefixes=${encodeURIComponent(prefixes)}&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(exclude)}&mode=${this.scanMode}&force=${force}&with_tags=${this.prefixes().length > 0 ? 1 : 0}&with_diff=${withDiff ? 1 : 0}`;
 
     console.log(`[SSE] Opening connection to: ${url}`);
     let firstEventReceived = false;
@@ -1018,31 +1024,38 @@ reportOpen = signal(false);
     return true;
   }
 
-  loadRepos(retryOnly = false) {
+  loadRepos(retryOnly = false, withDiff = false) {
     if (!this.origin) return;
     this.reposLoading.set(true);
     this.error.set(null);
     this.creatingPr.set(null);
     this.scheduleSpinnerCap();
     if (!retryOnly) {
-      this.paramsLoading.set(true);
       this.tableLoaded.set(true);
-      this.params.set([]);
-      this.removed.set([]);
-      this.paramsLoaded.set(false);
+      // BBIT-53: el diff SSM solo se procesa cuando el usuario presiona
+      // "Cargar parámetros" (withDiff=true). Sin diffs, se preserva el
+      // estado previo de la sección y no se prende el spinner del botón.
+      if (withDiff) {
+        this.paramsLoading.set(true);
+        this.params.set([]);
+        this.removed.set([]);
+        this.paramsLoaded.set(false);
+      }
     }
     const startedAt = Date.now();
     const done = () => this.releaseBusy(startedAt, () => {
       this.clearSpinner();
       this.reposLoading.set(false);
-      if (!retryOnly) {
+      if (!retryOnly && withDiff) {
         this.paramsLoading.set(false);
       }
     });
 
     // Retry-only path always uses batch HTTP (single repo re-scan).
+    // BBIT-53: el retry no pide diff (with_diff=0); re-escanea solo los
+    // repos fallidos y la sección SSM queda como estaba (no se re-procesa).
     if (retryOnly) {
-      this.loadReposBatch(retryOnly, done);
+      this.loadReposBatch(retryOnly, done, withDiff);
       return;
     }
 
@@ -1051,7 +1064,7 @@ reportOpen = signal(false);
     if (this.reposCache().length > 0) {
       // Ya tenemos repos: mostrar tabla filtrada, cargar datos pesados en background
       this.displayFilteredRepos();
-      this.loadReposHeavy(done);
+      this.loadReposHeavy(done, withDiff);
       return;
     }
     
@@ -1073,12 +1086,12 @@ reportOpen = signal(false);
           this.displayFilteredRepos();
           this.clearSpinner();
           // Ahora cargar datos pesados en background
-          this.loadReposHeavy(done);
+          this.loadReposHeavy(done, withDiff);
         }
       },
       error: () => {
         // Si falla /repos-quick, fallback a SSE/batch
-        this.loadReposHeavy(done);
+        this.loadReposHeavy(done, withDiff);
       }
     });
   }
@@ -1121,17 +1134,18 @@ reportOpen = signal(false);
     this.repos.set(quickRepos);
   }
 
-  private loadReposHeavy(done: () => void): void {
+  private loadReposHeavy(done: () => void, withDiff = false): void {
     // Normal load: try SSE streaming first, fallback to batch on failure.
     let batchFallbackScheduled = false;
     const scheduleFallback = () => {
       if (batchFallbackScheduled) return;
       batchFallbackScheduled = true;
       console.warn('SSE streaming unavailable, falling back to batch.');
-      this.loadReposBatch(false, done);
+      this.loadReposBatch(false, done, withDiff);
     };
 
     this.scanSse(
+      withDiff,
       (item) => {
         // Actualizar el signal DIRECTAMENTE: agregar el nuevo repo a la tabla
         this.repos.update((current) => {
@@ -1150,6 +1164,8 @@ reportOpen = signal(false);
         this.stats.set(stats as ScanStats);
       },
       (diff) => {
+        // BBIT-53: sin diff solicitado no se pinta la sección SSM.
+        if (!withDiff) return;
         this.params.set((diff.params ?? []) as unknown as SsmParam[]);
         this.removed.set((diff.removed ?? []) as unknown as RemovedParam[]);
         this.paramsLoaded.set(true);
@@ -1184,7 +1200,7 @@ reportOpen = signal(false);
     );
   }
 
-  private loadReposBatch(retryOnly: boolean, done: () => void): void {
+  private loadReposBatch(retryOnly: boolean, done: () => void, withDiff = false): void {
     const dest = this.projectsDest();
     const prefixes = this.prefixes().join(',');
     const exclude = this.blacklisted().join(',');
@@ -1198,6 +1214,7 @@ reportOpen = signal(false);
       scanMode: this.scanMode,
       force,
       withTags: this.prefixes().length > 0,
+      withDiff,
     });
     if (retryOnly) {
       const slugs = this.failedSlugs();
@@ -1230,9 +1247,12 @@ reportOpen = signal(false);
         }
 
         const diff = r.diff ?? {};
-        this.params.set(diff.params ?? []);
-        this.removed.set(diff.removed ?? []);
-        this.paramsLoaded.set(true);
+        // BBIT-53: sin diff solicitado no se pinta la sección SSM.
+        if (withDiff) {
+          this.params.set(diff.params ?? []);
+          this.removed.set(diff.removed ?? []);
+          this.paramsLoaded.set(true);
+        }
       },
       error: () => {
         this.error.set('Error al cargar la tabla.');
@@ -1246,12 +1266,14 @@ reportOpen = signal(false);
   }
 
   loadParams() {
-    this.loadRepos();
+    // BBIT-53: "Cargar parámetros" es el único camino que procesa el diff SSM.
+    this.loadRepos(false, true);
   }
 
   // Alias: tras crear/actualizar PRs o tags se recarga la tabla (no encadena params).
+  // Solo reprocesa el diff SSM si la sección ya estaba cargada (paramsLoaded).
   resolve() {
-    this.loadRepos();
+    this.loadRepos(false, this.paramsLoaded());
   }
 
   /** Re-escanea un solo repo (deploy status, tags, PRs) y hace merge. */
@@ -1270,6 +1292,7 @@ reportOpen = signal(false);
       scanMode: this.scanMode,
       force: 0,
       withTags: this.prefixes().length > 0,
+      withDiff: false,
       repos: [slug],
     });
     this.http.get<any>(url).subscribe({

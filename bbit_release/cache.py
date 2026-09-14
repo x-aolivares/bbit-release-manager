@@ -1089,16 +1089,18 @@ class ReleaseCache:
             _repo_details(prefixes, exclude, ssm_prefixes=ssm_prefixes), data,
         )
 
-    def get_flow(self, origin: str, destination: str, project_prefixes: list[str] | None, exclude: set[str] | None, deploy_prefixes: list[str] | None = None, ssm_prefixes: list[str] | None = None, mode: str = "diff", with_tags: int = 1):
+    def get_flow(self, origin: str, destination: str, project_prefixes: list[str] | None, exclude: set[str] | None, deploy_prefixes: list[str] | None = None, ssm_prefixes: list[str] | None = None, mode: str = "diff", with_tags: int = 1, with_diff: int = 1):
         details = _repo_details(project_prefixes, exclude, deploy_prefixes, ssm_prefixes=ssm_prefixes)
         details["mode"] = mode
         details["with_tags"] = bool(with_tags)
+        details["with_diff"] = bool(with_diff)
         return self._get_cached("flow_release", origin, destination, details)
 
-    def set_flow(self, origin: str, destination: str, project_prefixes: list[str] | None, exclude: set[str] | None, deploy_prefixes: list[str] | None, ssm_prefixes: list[str] | None, mode: str, data: dict, with_tags: int = 1) -> None:
+    def set_flow(self, origin: str, destination: str, project_prefixes: list[str] | None, exclude: set[str] | None, deploy_prefixes: list[str] | None, ssm_prefixes: list[str] | None, mode: str, data: dict, with_tags: int = 1, with_diff: int = 1) -> None:
         details = _repo_details(project_prefixes, exclude, deploy_prefixes, ssm_prefixes=ssm_prefixes)
         details["mode"] = mode
         details["with_tags"] = bool(with_tags)
+        details["with_diff"] = bool(with_diff)
         self._set_cached("flow_release", origin, destination, details, data)
 
     def get_master(self, slug: str, destination: str) -> set | None:
