@@ -1288,6 +1288,11 @@ def flow(
             "repositories": {"excluded": sorted(blocked), "prefixes": sorted(proj or [])}
         })
 
+    # BBIT-56: registrar la consulta y su diff vs la anterior. Con force el
+    # snapshot previo quedó borrado por invalidate → se comporta como primera.
+    query_snapshot = _flow_query(origin, destination, deploy_prefixes, proj, blocked, mode, force, with_tags, with_diff)
+    query_diff = _record_flow_snapshot(cache, origin, destination, query_snapshot)
+
     repos = _apply_filters(
         _branch_repos_cached(data.client, origin, destination, proj, blocked),
         proj, blocked,
@@ -1360,6 +1365,7 @@ def flow(
         "origin": origin,
         "destination": destination,
         "projects": projects,
+        "query_diff": query_diff,
         "scan": {
             "prefixes": deploy_prefixes,
             "ci_configured": ci_configured,
@@ -1373,6 +1379,54 @@ def flow(
         cache.set_flow(origin, destination, proj, blocked, deploy_prefixes, ssm_prefixes, mode, result, with_tags=with_tags, with_diff=with_diff)
     result["diff"] = _enrich_diff_ssm(result["diff"], cfg_diff)
     return result
+
+
+def _flow_query(
+    origin: str,
+    destination: str,
+    deploy_prefixes: list[str],
+    proj: list[str] | None,
+    blocked: set[str],
+    mode: str,
+    force: int = 0,
+    with_tags: int = 1,
+    with_diff: int = 1,
+) -> dict:
+    """Snapshot canónico de una consulta del front (BBIT-56).
+
+    Es la firma completa de lo que el cliente pide: se guarda en la lista
+    de snapshots del par de ramas y sirve para detectar consultas idénticas
+    y calcular el diff (qué columnas/ambientes se agregaron o quitaron).
+    """
+    return {
+        "origin": origin,
+        "destination": destination,
+        "prefixes": sorted(deploy_prefixes or []),
+        "project_prefixes": sorted(proj or []),
+        "exclude": sorted(blocked or []),
+        "mode": mode,
+        "force": bool(force),
+        "with_tags": bool(with_tags),
+        "with_diff": bool(with_diff),
+    }
+
+
+def _record_flow_snapshot(cache, origin: str, destination: str, query: dict) -> dict:
+    """Registra la consulta en el historial de snapshots y devuelve su diff.
+
+    Retorna ``{"identical", "added", "removed", "changed"}``. ``identical``
+    refleja una consulta exactamente igual a la anterior (la info ya está en
+    memoria del front); ``added/removed/changed`` desglosan qué cambió campo
+    a campo para el render bajo demanda de columnas (BBIT-56).
+    """
+    rec = cache.append_snapshot(origin, destination, query)
+    diff = cache.diff_snapshots(rec["previous"], query)
+    return {
+        "identical": rec["identical"],
+        "added": diff["added"],
+        "removed": diff["removed"],
+        "changed": diff["changed"],
+    }
 
 
 @router.get("/flow/stream")
@@ -1419,6 +1473,12 @@ def flow_stream(
             "repositories": {"excluded": sorted(blocked), "prefixes": sorted(proj or [])}
         })
 
+    # BBIT-56: registrar la consulta y su diff vs la anterior; el diff se emite
+    # como primer evento SSE para que el front sepa si respondió una consulta
+    # idéntica (no re-renderiza) o qué columnas agregar/quitar bajo demanda.
+    query_snapshot = _flow_query(origin, destination, deploy_prefixes, proj, blocked, mode, force, with_tags, with_diff)
+    query_diff = _record_flow_snapshot(cache, origin, destination, query_snapshot)
+
     # BBIT-33 Phase 8: Obtener repos con rama RÁPIDAMENTE (API paralela, clone background)
     # No esperamos al clone - devolvemos rápido y enviamos eventos SSE inmediatamente
     # BBIT-35 P3/P4: la cache persiste found + not_found; separamos ambos.
@@ -1450,6 +1510,14 @@ def flow_stream(
         items = []
         scan_ci_error = None
         repo_count = 0
+
+        # BBIT-56: primer evento = diff de la consulta vs la anterior. Con
+        # esto el front sabe desde el inicio si es idéntica (no toca la tabla)
+        # o qué prefixes/agrupaciones cambian (render bajo demanda).
+        try:
+            yield _event("query_diff", query_diff)
+        except Exception as exc:
+            log.debug("flow_stream: query_diff no entregado: %s", exc)
 
         # Overlap de fases: master params corren en un hilo paralelo al scan
         # (mismo rate limiter global). El executor se cierra al terminar o al

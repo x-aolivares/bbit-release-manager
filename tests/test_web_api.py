@@ -3445,3 +3445,109 @@ def test_flow_stream_with_diff_0_skips_diff_event(monkeypatch):
     assert "event: diff" not in data
     assert "event: done" in data
     assert diff_calls == []
+
+
+# ---------------------------------------------------------------------------
+# BBIT-56: snapshot wiring (query_diff en /api/flow y /api/flow/stream)
+# ---------------------------------------------------------------------------
+
+def test_flow_returns_query_diff(monkeypatch):
+    """GET /api/flow incluye 'query_diff' con la estructura completa."""
+    from bbit_release.web.api import repos as _repos
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True), "Jane (@jane)")
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return []
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def find_pr(self, repo, origin, destination):
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr(_repos, "_circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    resp = client.get("/api/flow", params={"origin": "release/x", "prefixes": "uat"})
+    body = resp.json()
+    assert "query_diff" in body
+    qd = body["query_diff"]
+    assert qd["identical"] is False          # primera consulta
+    assert isinstance(qd["added"], dict)
+    assert isinstance(qd["removed"], dict)
+    assert isinstance(qd["changed"], dict)
+
+
+def test_flow_repeated_identical_returns_identical(monkeypatch):
+    """Dos consultas idénticas seguidas → query_diff.identical=True en la segunda."""
+    from bbit_release.web.api import repos as _repos
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True), "Jane (@jane)")
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return []
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def find_pr(self, repo, origin, destination):
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr(_repos, "_circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    params = {"origin": "release/x", "prefixes": "uat", "project_prefixes": "orders"}
+    r1 = client.get("/api/flow", params=params).json()
+    r2 = client.get("/api/flow", params=params).json()
+
+    assert r1["query_diff"]["identical"] is False
+    assert r2["query_diff"]["identical"] is True
+    assert r2["query_diff"]["added"] == {}
+    assert r2["query_diff"]["removed"] == {}
+
+
+def test_flow_stream_emits_query_diff_event(monkeypatch):
+    """flow_stream emite 'query_diff' como primer evento SSE."""
+    from bbit_release.web.api import repos as _repos
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True), "Jane (@jane)")
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return []
+        def commit_for_branch(self, repo, branch, resolved=""):
+            return "abc123"
+        def find_pr(self, repo, origin, destination):
+            return None
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr(_repos, "_circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    with client.stream("GET", "/api/flow/stream", params={"origin": "release/x", "prefixes": "uat"}) as resp:
+        data = "".join(resp.iter_text())
+
+    # El primer evento debe ser query_diff
+    import json
+    lines = data.splitlines()
+    assert "event: query_diff" in lines
+    idx = lines.index("event: query_diff")
+    data_line = lines[idx + 1]
+    payload = json.loads(data_line.replace("data: ", ""))
+    assert "identical" in payload
+    assert "added" in payload
+    assert "removed" in payload
+    assert "changed" in payload
