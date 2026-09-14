@@ -432,6 +432,81 @@ def test_is_expired_semantics(tmp_path):
     assert not cache.is_expired(now - 10**6, -1)
 
 
+# -- prune ------------------------------------------------------------------
+
+def test_prune_borra_request_expirado_y_conserva_vigente(tmp_path, monkeypatch):
+    cache = _make_cache(tmp_path)
+    sid = cache.create_session("release/x", "master", {})
+    rt = cache.get_rt("scan_release")
+
+    times = [time.time()]
+    monkeypatch.setattr(cache_mod.time, "time", lambda: times[0])
+    cache.add_request(sid, rt["id"], {"viejo": True})
+
+    times[0] += rt["ttl_seconds"] + 100
+    cache.add_request(sid, rt["id"], {"nuevo": True})
+
+    counts = cache.prune()
+    assert counts["request"] == 1
+    row = cache._fetchone(
+        "SELECT COUNT(*) FROM request WHERE rq_details LIKE '%viejo%'", ()
+    )
+    assert row[0] == 0
+    row = cache._fetchone(
+        "SELECT COUNT(*) FROM request WHERE rq_details LIKE '%nuevo%'", ()
+    )
+    assert row[0] == 1
+
+
+def test_prune_respeta_pending_reciente_y_poda_anomalo(tmp_path, monkeypatch):
+    cache = _make_cache(tmp_path)
+    sid = cache.create_session("release/x", "master", {})
+    rt = cache.get_rt("scan_release")
+
+    times = [time.time()]
+    monkeypatch.setattr(cache_mod.time, "time", lambda: times[0])
+    cache.add_request(sid, rt["id"], {"in": "flight"}, status="PENDING")
+
+    times[0] += rt["ttl_seconds"] * 2
+    assert cache.prune()["request"] == 0  # colchón amplio: no se toca
+
+    times[0] += rt["ttl_seconds"] * 20 + 3600
+    assert cache.prune()["request"] == 1  # PENDING anómalo (stale) sí se poda
+
+
+def test_prune_borra_raw_stash_expirado(tmp_path, monkeypatch):
+    cache = _make_cache(tmp_path)
+
+    times = [time.time()]
+    monkeypatch.setattr(cache_mod.time, "time", lambda: times[0])
+    cache.set_raw(source="Bitbucket", method="GET", url="/a", status=200,
+                  response="{}", ttl_seconds=60)
+    times[0] += 61
+    cache.set_raw(source="Bitbucket", method="GET", url="/b", status=200,
+                  response="{}", ttl_seconds=60)
+
+    counts = cache.prune()
+    assert counts["raw_stash"] == 1
+    assert cache.count_raw() == 1
+
+
+def test_prune_poda_service_call_por_antiguedad(tmp_path, monkeypatch):
+    cache = _make_cache(tmp_path)
+
+    times = [time.time()]
+    monkeypatch.setattr(cache_mod.time, "time", lambda: times[0])
+    cache.record_service_call(
+        source="circleci", method="GET", url="/api/v2/me", params=None,
+        status=200, duration_ms=1.0, response="{}",
+    )
+    times[0] += 8 * 86400
+
+    counts = cache.prune()
+    assert counts["service_call"] == 1
+    row = cache._fetchone("SELECT COUNT(*) FROM service_call", ())
+    assert row[0] == 0
+
+
 # -- facade roundtrips ------------------------------------------------------
 
 def test_repos_roundtrip(tmp_path):

@@ -64,6 +64,83 @@ def test_snapshot_none_si_el_ref_no_existe():
         client.close()
 
 
+def test_snapshot_cache_hit_evita_redescarga(tmp_path):
+    import io
+    import tarfile
+
+    from bbit_release.cache import ReleaseCache
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        info = tarfile.TarInfo("ws-r1-abc/")
+        info.type = tarfile.DIRTYPE
+        info.mode = 0o755
+        tar.addfile(info, io.BytesIO(b""))
+        data = b"a: {{resolve:ssm:/config/x}}"
+        info = tarfile.TarInfo("ws-r1-abc/app.yml")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    content = buf.getvalue()
+    calls = {"c": 0}
+
+    def archive(request):
+        calls["c"] += 1
+        return httpx.Response(
+            200, content=content, headers={"Content-Type": "application/x-tar-gz"}
+        )
+
+    cache = ReleaseCache(tmp_path / "cache.db")
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/ws/r1/get/abc.tar.gz"): archive,
+    }), cache=cache)
+    try:
+        snap1 = client.snapshot("r1", "abc")
+        snap2 = client.snapshot("r1", "abc")
+        assert calls["c"] == 1  # el 2do pega en SQLite, no re-descarga
+        assert snap1 == snap2 == {"app.yml": "a: {{resolve:ssm:/config/x}}"}
+    finally:
+        client.close()
+        cache.close()
+
+
+def test_snapshot_force_redescarga(tmp_path):
+    import io
+    import tarfile
+
+    from bbit_release.cache import ReleaseCache
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        info = tarfile.TarInfo("ws-r1-abc/")
+        info.type = tarfile.DIRTYPE
+        info.mode = 0o755
+        tar.addfile(info, io.BytesIO(b""))
+        data = b"x"
+        info = tarfile.TarInfo("ws-r1-abc/f.txt")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    content = buf.getvalue()
+    calls = {"c": 0}
+
+    def archive(request):
+        calls["c"] += 1
+        return httpx.Response(
+            200, content=content, headers={"Content-Type": "application/x-tar-gz"}
+        )
+
+    cache = ReleaseCache(tmp_path / "cache.db")
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/ws/r1/get/abc.tar.gz"): archive,
+    }), cache=cache)
+    try:
+        client.snapshot("r1", "abc")
+        client.snapshot("r1", "abc", force=True)
+        assert calls["c"] == 2  # force saltea la caché y re-descarga
+    finally:
+        client.close()
+        cache.close()
+
+
 def test_session_ok():
     def user(request):
         return httpx.Response(200, json={"username": "jane", "display_name": "Jane"})
@@ -126,13 +203,114 @@ def test_repos_with_branch():
     assert found[0].resolved_branch == "release"
 
 
-def test_resolve_branch_variant_is_not_fallback():
-    """Sin fallback a variantes -Vn: solo coincide la literal exacta."""
-    client = BitbucketClient("ws", "tok", transport=_transport({}))
+def test_list_repos_two_prefixes_one_workspace_scan(tmp_path):
+    """BBIT-46: prefijos distintos comparten el índice filter-free sin re-barrer."""
+    from bbit_release.cache import ReleaseCache
+
+    hits = {"repos": 0}
+
+    def repos_list(request):
+        hits["repos"] += 1
+        return httpx.Response(200, json={"values": [
+            {"slug": "svc-accounting-api", "name": "Accounting API", "workspace": {"slug": "ws"}},
+            {"slug": "svc-billing", "name": "Billing", "workspace": {"slug": "ws"}},
+        ]})
+
+    routes = {("GET", "/2.0/repositories/ws"): repos_list}
+    cache = ReleaseCache(db_path=tmp_path / "index.db")
+    client = BitbucketClient("ws", "tok", cache=cache, transport=_transport(routes))
     try:
-        assert client.resolve_branch("r1", "release/REP-325073") == ""
+        first = client.list_repos(prefixes=["svc-accounting-"])
+        assert [r.slug for r in first] == ["svc-accounting-api"]
+        assert hits["repos"] == 1
+
+        second = client.list_repos(prefixes=["svc-"])
+        assert [r.slug for r in second] == ["svc-accounting-api", "svc-billing"]
+        assert hits["repos"] == 1  # una sola búsqueda del workspace
     finally:
         client.close()
+        cache.close()
+
+
+def test_repos_with_branch_delta_cache(tmp_path):
+    """Con cache, solo los repos nuevos se resuelven contra la API en re-consultas."""
+    from bbit_release.cache import ReleaseCache
+
+    hits = {"branch": 0}
+
+    def repos_list(request):
+        return httpx.Response(200, json={"values": [
+            {"slug": "a", "name": "A", "workspace": {"slug": "ws"}},
+            {"slug": "b", "name": "B", "workspace": {"slug": "ws"}},
+        ]})
+
+    def repos_list_with_c(request):
+        return httpx.Response(200, json={"values": [
+            {"slug": "a", "name": "A", "workspace": {"slug": "ws"}},
+            {"slug": "b", "name": "B", "workspace": {"slug": "ws"}},
+            {"slug": "c", "name": "C", "workspace": {"slug": "ws"}},
+        ]})
+
+    def branch_a(request):
+        hits["branch"] += 1
+        return httpx.Response(200, json={"name": "release"})
+
+    def branch_b(request):
+        hits["branch"] += 1
+        return httpx.Response(404, json={"message": "not found"})
+
+    def branch_c(request):
+        hits["branch"] += 1
+        return httpx.Response(200, json={"name": "release"})
+
+    routes = {
+        ("GET", "/2.0/repositories/ws"): repos_list,
+        ("GET", "/2.0/repositories/ws/a/refs/branches/release"): branch_a,
+        ("GET", "/2.0/repositories/ws/b/refs/branches/release"): branch_b,
+    }
+
+    cache = ReleaseCache(db_path=tmp_path / "delta.db")
+    client = BitbucketClient("ws", "tok", cache=cache, transport=_transport(routes))
+    try:
+        first = client.repos_with_branch("release")
+        assert [r.slug for r in first] == ["a"]
+        assert hits["branch"] == 2
+
+        second = client.repos_with_branch("release")
+        # BBIT-46: el universo (list_repos) queda cacheado filter-free; el repo
+        # nuevo "c" no aparece hasta invalidar el índice o que expire su TTL, y
+        # a/b NO se re-resuelven (delta de branch_refs intacto).
+        assert [r.slug for r in second] == ["a"]
+        assert hits["branch"] == 2
+
+        routes[("GET", "/2.0/repositories/ws/c/refs/branches/release")] = branch_c
+        # Nuevo repo: invalidar SOLO el índice de repos (no el delta de ramas).
+        cache.invalidate("ws", "all", {})
+        routes[("GET", "/2.0/repositories/ws")] = repos_list_with_c
+
+        third = client.repos_with_branch("release")
+        assert [r.slug for r in third] == ["a", "c"]
+        assert hits["branch"] == 3
+    finally:
+        client.close()
+
+
+def test_resolve_branch_prefix_matches_latest():
+    def branches_list(request):
+        return httpx.Response(200, json={"values": [
+            {"name": "release/REP-325073-V1"},
+            {"name": "release/REP-325073-V2"},
+            {"name": "release/REP-999999-X"},
+        ]})
+
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/2.0/repositories/ws/r1/refs/branches"): branches_list,
+    }))
+    try:
+        resolved = client.resolve_branch("r1", "release/REP-325073")
+    finally:
+        client.close()
+    assert resolved == "release/REP-325073-V2"
 
 
 def test_resolve_branch_exact_wins():
@@ -160,6 +338,12 @@ def test_resolve_branch_none():
     finally:
         client.close()
     assert resolved == ""
+
+
+def test_latest_branch_version_suffix():
+    from bbit_release.bitbucket.client import BitbucketClient as B
+    names = ["release/REP/a-V1", "release/REP/a-V2", "release/REP/a-V10", "release/REP/a"]
+    assert B._latest_branch(names) == "release/REP/a-V10"
 
 
 def test_diff():

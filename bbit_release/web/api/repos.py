@@ -67,9 +67,11 @@ def _apply_filters(repos, prefs: list[str] | None, blocked: set[str]) -> list:
 def _all_repos_cached(client, prefs: list[str] | None, exclude: set[str]) -> list | None:
     """Todos los repos del workspace (lista completa), con caché SQLite.
 
-    Key por prefijos/exclusión (sin origin → todo el workspace). Comparte la
-    misma cache que /api/repos sin origin, así el barrido paginado de
-    `list_repos` no se repite entre endpoints.
+    BBIT-46: el índice es filter-free keyed por workspace (``set_repos_by_prefix``),
+    sin prefijos/blacklist en la clave; los filtros se aplican como VISTA por el
+    llamador (``_apply_filters``). Cambiar prefijos no invalida el índice ni
+    vuelve a barrer el workspace. Comparte el índice con `list_repos`, de modo
+    que el barrido paginado no se repite entre endpoints.
 
     Si el cliente no expone `list_repos` (stubs de test), devuelve None y el
     llamador cae en `repos_with_branch` sin base.
@@ -77,13 +79,13 @@ def _all_repos_cached(client, prefs: list[str] | None, exclude: set[str]) -> lis
     if not hasattr(client, "list_repos"):
         return None
     cache = get_cache()
-    cached = cache.get_repos("", "all", prefs, exclude)
+    cached = cache.get_repos_by_prefix(client.workspace, None)
     if cached is not None:
         from types import SimpleNamespace
         return [SimpleNamespace(**r) for r in cached]
-    repos = client.list_repos(prefixes=prefs)
+    repos = client.list_repos(prefixes=None)
     items = [{"slug": r.slug, "name": r.name, "workspace": r.workspace, "default_branch": r.default_branch} for r in repos]
-    cache.set_repos("", "all", prefs, exclude, items)
+    cache.set_repos_by_prefix(client.workspace, None, items)
     return repos
 
 
@@ -817,6 +819,93 @@ def _safe_call(fn, default):
         return default
 
 
+def _empty_tags_slice(clean):
+    return {
+        "tags": [],
+        "deploys": {e.lower(): None for e in clean},
+        "match_tag": {e.lower(): None for e in clean},
+        "ci_project": None,
+        "ci_error": None,
+    }
+
+
+def _resolve_tags_slice(client, ci, slug, commit, clean, match_commit="", tags=None):
+    """Slice vivo de tags/deploys de CircleCI para el scan de un repo.
+
+    Independiente del item estático: se cachea por ``(slug, commit)`` con TTL
+    corto (BBIT-42) para que un deploy nuevo en CircleCI se refleje sin
+    invalidar ni re-escancar Bitbucket. Los tags vienen de Bitbucket y se
+    incluyen siempre; los deploys/asociaciones a CircleCI se resuelven solo
+    si ``ci`` está configurado. ``match_commit`` es el commit contra el que
+    se matchea ``vcs.revision`` del pipeline; ``tags=None`` fuerza a
+    re-consultar ``tags_on_commit``.
+    """
+    if tags is None:
+        try:
+            tags = client.tags_on_commit(slug, commit)
+        except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+            log.warning("scan tags %s: tags_on_commit falló: %s", slug, exc)
+            tags = []
+    tag_deploys = {}
+    ci_error = None
+    ci_project = None
+    if ci is not None:
+        names = [t["name"] for t in tags]
+        if names:
+            try:
+                tag_deploys = ci.deploys_for_tags(slug, names, commit)
+            except CircleCiError as exc:
+                ci_error = str(exc)
+            ci_project = _safe_call(lambda: ci.project_id(slug), None)
+    tag_rows = [{"name": t["name"], "deploy": _serialize_deploy(tag_deploys.get(t["name"]))} for t in tags]
+    match_tag: dict[str, str | None] = {}
+    deploys: dict[str, dict | None] = {}
+    env_tasks: list[tuple[str, str]] = []
+    for prefix in clean:
+        env = prefix.lower()
+        found_tag = None
+        for t in tags:
+            if _tag_match(env).match(t["name"]):
+                found_tag = t["name"]
+                break
+        match_tag[env] = found_tag
+        deploys[env] = None
+        if ci is not None and found_tag and match_commit:
+            env_tasks.append((env, found_tag))
+    if env_tasks:
+        def _env_deploy(task):
+            env, found_tag = task
+            deploy = None
+            err = None
+            try:
+                deploy = ci.deploy_for_tag(slug, found_tag, match_commit, env)
+            except CircleCiError as exc:
+                err = str(exc)
+            return env, _serialize_deploy(deploy), err
+
+        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(env_tasks) or 1)) as ex:
+            results = list(ex.map(_env_deploy, env_tasks))
+        for env, deploy, err in results:
+            deploys[env] = deploy
+            if err:
+                ci_error = ci_error or err
+    return {
+        "tags": tag_rows,
+        "deploys": deploys,
+        "match_tag": match_tag,
+        "ci_project": ci_project,
+        "ci_error": ci_error,
+    }
+
+
+def _merge_tags_slice(item, slice_data, ci):
+    item["tags"] = slice_data["tags"]
+    item["deploys"] = slice_data["deploys"]
+    item["match_tag"] = slice_data["match_tag"]
+    item["ci_project"] = slice_data["ci_project"]
+    item["ci_vcs"] = ci.vcs if ci else None
+
+
 def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=None, with_tags=True):
     """Payload de un repo (etapa paralela de /scan).
 
@@ -835,6 +924,10 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
     apenas se resuelve para que el frontend pinte la fila por campo async.
     El retorno ``(item, err)`` no cambia (el item completo sigue servido por
     el evento ``repo`` final).
+
+    BBIT-42: el item cacheado (``scan_repo``) es ESTÁTICO (sin tags/deploys);
+    el slice vivo de CircleCI se resuelve y cachea por ``(slug, commit)`` con
+    TTL corto. Un deploy nuevo se refleja sin invalidar el scan completo.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     
@@ -843,19 +936,14 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
     # BBIT-36 P2: scan por repo en SQLite keyed por (origin, destination,
     # slug). Cache hit → se sirve SIN re-consultar Bitbucket/CircleCI: cambiar
     # project_prefixes/blacklist = vista (mostrar/ocultar filas), no re-escaneo.
-    # Solo se re-consulta si el request pide tags (with_tags=1) y el payload
-    # cacheado no los trae (se almacenó con with_tags=0).
+    # BBIT-42: el item cacheado es ESTÁTICO (sin tags/deploys): el slice vivo
+    # (tags/deploys de CircleCI) vive en un key propio (slug, commit) con TTL
+    # corto; si venció, se re-resuelve on-demand sin tocar el item estático.
     request_with = bool(with_tags)
     cache = get_cache()
     cached = cache.get_scan_repo(origin, destination, repo.slug)
-    if cached is not None and (not request_with or cached.get("with_tags")):
+    if cached is not None:
         item = dict(cached["item"])
-        if not request_with:
-            # Contrato with_tags=0: el item llega sin tags/deploys/match_tag.
-            item["tags"] = []
-            item["deploys"] = {e.lower(): None for e in clean}
-            item["match_tag"] = {e.lower(): None for e in clean}
-            item["ci_project"] = None
         if ctx is not None:
             # Reusa el PR/origin_ref ya resueltos para que el diff no repita
             # find_pr/commit_for_branch sobre repos cacheados (BBIT-36 P4).
@@ -864,7 +952,20 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
                 _c["pr"] = cached.get("pr_raw")
             if "origin_ref" not in _c:
                 _c["origin_ref"] = item.get("commit", "")
-        return item, cached.get("ci_error")
+        if not request_with:
+            # Contrato with_tags=0: el item llega sin tags/deploys/match_tag.
+            _merge_tags_slice(item, _empty_tags_slice(clean), ci)
+            return item, None
+        commit = item.get("commit") or ""
+        slice_data = None
+        if commit:
+            slice_data = cache.get_scan_repo_tags(origin, destination, repo.slug, commit)
+        if slice_data is None:
+            slice_data = _resolve_tags_slice(client, ci, repo.slug, commit, clean, match_commit=commit)
+            if commit:
+                cache.set_scan_repo_tags(origin, destination, repo.slug, commit, slice_data)
+        _merge_tags_slice(item, slice_data, ci)
+        return item, slice_data["ci_error"]
 
     def _emit(field, value):
         if on_field is not None:
@@ -909,22 +1010,7 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
         
         # Obtener tags
         tags = tags_fut.result() if tags_fut else []
-        
-        # Request 5: Obtener branch head actual (solo si hay PR)
-        branch_head_fut = None
-        if ci is not None and pr and pr.get("source_commit"):
-            branch_head_fut = ex.submit(lambda: client.commit_for_branch(repo.slug, origin, resolved=resolved))
-        
-        # Request 6: CircleCI deploys (depende de tags)
-        ci_deploys_fut = None
-        ci_project_fut = None
-        if ci is not None and tags:
-            ci_deploys_fut = ex.submit(lambda: _safe_call(
-                lambda: ci.deploys_for_tags(repo.slug, [t["name"] for t in tags]),
-                {}
-            ))
-            ci_project_fut = ex.submit(lambda: _safe_call(lambda: ci.project_id(repo.slug), None))
-    
+
     # FASE 2: Recopilar resultados (ya están esperados)
     if ctx is not None:
         ctx.setdefault(repo.slug, {})["pr"] = pr
@@ -935,80 +1021,39 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
         no_changes = not has_commits_fut.result()
     _emit("no_changes", no_changes)
     
+    # BBIT-49: match_commit estricto = el commit en análisis. Se elimina el
+    # fallback a la cabeza actual de la rama (branch_head): puede avanzar tras
+    # el deploy y asociaría el deploy del tag a un HEAD que nada tiene que ver.
+    # Los tags se resolvieron sobre `commit` (tags_on_commit), así que la
+    # provenance real del deploy sale del vcs.revision del pipeline del tag
+    # (deploy_for_tag/deploys_for_tags, BBIT-48) comparado contra ESTE commit.
+    # Tanto el scan como el diff verifican el mismo commit → el estado deploy
+    # coincide entre ambos paths.
     match_commit = commit
-    if ci is not None and pr and pr.get("source_commit") and branch_head_fut:
-        branch_head = branch_head_fut.result()
+    if ci is not None and pr and pr.get("source_commit") and pr["source_commit"] != commit:
         log.info(
-            "scan: %s pr.source_commit=%s branch_head=%s match_commit=%s",
-            repo.slug,
-            commit[:12],
-            (branch_head or "?")[:12],
-            (branch_head or commit)[:12],
+            "scan: %s commit=%s pr.source_commit=%s (no se usa como match_commit)",
+            repo.slug, commit[:12], pr["source_commit"][:12],
         )
-        match_commit = branch_head or commit
-    
-    # Procesar tags y deploys
-    ci_error = None
-    ci_project = None
-    tag_rows = []
-    tag_deploys = {}
-    
-    if ci_deploys_fut:
-        tag_deploys = ci_deploys_fut.result()
-        ci_error = None  # Si llegamos acá, no hay error
-    
-    if ci_project_fut:
-        ci_project = ci_project_fut.result()
-    
-    for t in tags:
-        tag_rows.append({"name": t["name"], "deploy": _serialize_deploy(tag_deploys.get(t["name"]))})
-    _emit("tags", tag_rows)
-
-    deploys: dict[str, dict | None] = {}
-    match_tag: dict[str, str | None] = {}
-    env_tasks: list[tuple[str, str]] = []
-    for prefix in clean:
-        env = prefix.lower()
-        found_tag = None
-        for t in tags:
-            if _tag_match(env).match(t["name"]):
-                found_tag = t["name"]
-                break
-        match_tag[env] = found_tag
-        deploys[env] = None
-        if ci is not None and with_tags and not found_tag:
-            log.info("scan: %s env=%s sin tag %s-en en commit %s", repo.slug, env, env, match_commit[:12])
-        if ci is not None and found_tag and match_commit:
-            env_tasks.append((env, found_tag))
-    
-    # Lanzar requests de deploy_for_tag en paralelo
-    def _env_deploy(task):
-        """Deploy por tag/env aislado: devuelve (env, payload, err) para
-        mergear el resultado en el hilo principal sin tocar ci_error."""
-        env, found_tag = task
-        deploy = None
-        err = None
+    elif ci is not None and pr:
         log.info(
-            "scan: %s env=%s tag=%s commit=%s -> buscando deploy_for_tag",
-            repo.slug, env, found_tag, match_commit[:12],
+            "scan: %s match_commit=%s (commit en análisis, PR presente)",
+            repo.slug, commit[:12],
         )
-        try:
-            deploy = ci.deploy_for_tag(repo.slug, found_tag, match_commit, env)
-        except CircleCiError as exc:
-            err = str(exc)
-        log.info("scan: %s env=%s deploy=%s", repo.slug, env, f"{deploy.status}" if deploy else "None")
-        return env, _serialize_deploy(deploy), err
-
-    if env_tasks:
-        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(env_tasks) or 1)) as ex:
-            results = list(ex.map(_env_deploy, env_tasks))
-        for env, deploy, err in results:
-            deploys[env] = deploy
-            if err:
-                ci_error = ci_error or err
-    _emit("match_tag", match_tag)
-    _emit("deploys", deploys)
-    _emit("ci_project", ci_project)
+    
+    # BBIT-42: el slice vivo (tags/deploys) se resuelve aparte del item
+    # estático y se cachea por (slug, commit) con el TTL corto de CircleCI.
+    slice_data = _empty_tags_slice(clean)
+    if with_tags:
+        slice_data = _resolve_tags_slice(
+            client, ci, repo.slug, commit, clean,
+            match_commit=match_commit, tags=tags,
+        )
+        cache.set_scan_repo_tags(origin, destination, repo.slug, commit, slice_data)
+    _emit("tags", slice_data["tags"])
+    _emit("match_tag", slice_data["match_tag"])
+    _emit("deploys", slice_data["deploys"])
+    _emit("ci_project", slice_data["ci_project"])
     _emit("ci_vcs", ci.vcs if ci else None)
 
     item = {
@@ -1020,20 +1065,14 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
         "branch_url": client.branch_url(repo.slug, origin),
         "commit": commit,
         "no_changes": no_changes,
-        "tags": tag_rows,
         "pr": _serialize_pr(pr),
-        "deploys": deploys,
-        "match_tag": match_tag,
-        "ci_project": ci_project,
-        "ci_vcs": ci.vcs if ci else None,
     }
+    _merge_tags_slice(item, slice_data, ci)
     cache.set_scan_repo(origin, destination, repo.slug, {
-        "item": item,
-        "with_tags": request_with,
-        "ci_error": ci_error,
+        "item": {k: v for k, v in item.items() if k not in ("tags", "deploys", "match_tag", "ci_project", "ci_vcs")},
         "pr_raw": pr,
     })
-    return item, ci_error
+    return item, slice_data["ci_error"]
 
 
 def _failed_repo_item(repo, client, origin, exc):
@@ -1308,7 +1347,7 @@ def flow(
     else:
         diff_raw = _compute_diff(
             data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
-            dest_by_repo=dest_by_repo,
+            dest_by_repo=dest_by_repo, force=bool(force),
         )
 
     diff_enriched = _enrich_diff_ssm(diff_raw, cfg_diff)
@@ -1415,7 +1454,7 @@ def flow_stream(
             ctx.update({r.slug: {} for r in repos_list})
             master_fut = None
             if mode == "diff" and with_diff:
-                master_fut = ex.submit(_resolve_masters, data.client, repos_list, destination, ssm_prefixes, cache, ctx)
+                master_fut = ex.submit(_resolve_masters, data.client, repos_list, destination, ssm_prefixes, cache, ctx, bool(force))
 
             # BBIT-35 P4: emitir los repos sin la rama ANTES del scan, para que el
             # frontend remueva sus filas placeholder con branch_state=not_found.
@@ -1473,11 +1512,11 @@ def flow_stream(
             print(f"[STREAM] DONE: {len(visible_items)} repos, {with_pr} con PR", file=sys.stderr)
             yield _event("stats", stats)
 
-            if with_diff:
+            if mode == "diff" and with_diff:
                 dest_by_repo = master_fut.result() if master_fut is not None else None
                 diff_raw = _compute_diff(
                     data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
-                    dest_by_repo=dest_by_repo,
+                    dest_by_repo=dest_by_repo, force=bool(force),
                 )
                 diff_enriched = _enrich_diff_ssm(diff_raw, cfg_diff)
                 try:
@@ -1656,20 +1695,28 @@ def generate_tags(origin: str, prefixes: str = "", repo: str = "", destination: 
         )
 
     items = []
-    for r in candidates:
+
+    def _process(r):
         slug = r.slug
-        commit = data.client.commit_for_branch(slug, origin)
+        resolved = getattr(r, "resolved_branch", "") or ""
+        try:
+            commit = data.client.commit_for_branch(slug, origin, resolved)
+        except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+            return {"repo": slug, "commit": "", "pipeline_id": None,
+                    "created": [], "skipped": [], "errors": [str(exc)]}
+        if not commit:
+            return {"repo": slug, "commit": commit, "pipeline_id": None,
+                    "created": [], "skipped": [],
+                    "errors": [f"El repo '{slug}' no contiene la rama '{origin}'."]}
         try:
             pipeline_id = ci.pipeline_id_for_commit(slug, origin, commit)
         except CircleCiError as exc:
-            items.append({"repo": slug, "commit": commit, "pipeline_id": None,
-                          "created": [], "skipped": [], "errors": [str(exc)]})
-            continue
+            return {"repo": slug, "commit": commit, "pipeline_id": None,
+                    "created": [], "skipped": [], "errors": [str(exc)]}
         if not pipeline_id:
-            items.append({"repo": slug, "commit": commit, "pipeline_id": None,
-                          "created": [], "skipped": [],
-                          "errors": [f"El commit {commit[:8]} no tiene pipeline en CircleCI"]})
-            continue
+            return {"repo": slug, "commit": commit, "pipeline_id": None,
+                    "created": [], "skipped": [],
+                    "errors": [f"El commit {commit[:8]} no tiene pipeline en CircleCI"]}
         created, skipped, errors = [], [], []
         for env in envs:
             tag = f"{env}-{pipeline_id}"
@@ -1681,8 +1728,15 @@ def generate_tags(origin: str, prefixes: str = "", repo: str = "", destination: 
                 created.append(tag)
             except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
                 errors.append(f"{tag}: {exc}")
-        items.append({"repo": slug, "commit": commit, "pipeline_id": pipeline_id,
-                      "created": created, "skipped": skipped, "errors": errors})
+        return {"repo": slug, "commit": commit, "pipeline_id": pipeline_id,
+                "created": created, "skipped": skipped, "errors": errors}
+
+    if candidates:
+        workers = min(MAX_WORKERS, len(candidates) or 1)
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = [ex.submit(_process, r) for r in candidates]
+            for fut in futures:
+                items.append(fut.result())
     return {"ok": True, "origin": origin, "envs": envs, "items": items}
 
 
@@ -1782,19 +1836,24 @@ def _ref_for(client, slug: str, branch: str) -> str:
         return branch
 
 
-def _snapshot_for(client, slug: str, ref: str, ctx: dict | None = None) -> dict[str, str] | None:
-    """Snapshot {path: contenido} con cache por (slug, ref) en ctx.
+def _snapshot_for(client, slug: str, ref: str, ctx: dict | None = None, force: bool = False) -> dict[str, str] | None:
+    """Snapshot {path: contenido} con cache por (slug, ref).
+
+    La caché de primer nivel es el ctx del request (dedupe intra-request);
+    la de segundo el SQLite keyed (slug, ref) con TTL 3600 (BBIT-44), que
+    persiste entre requests y al cambiar filtros. ``force`` saltea ambas y
+    re-descarga el tarball (BBIT-44).
 
     Si el cliente no ofrece snapshot (o el ref no existe) devuelve None
     y el flujo cae en list_files + raw_file."""
     entry = (ctx or {}).setdefault(slug, {})
     snaps = entry.setdefault("snapshots", {})
-    if ref in snaps:
+    if not force and ref in snaps:
         return snaps[ref]
     if not hasattr(client, "snapshot"):
         return None
     try:
-        snap = client.snapshot(slug, ref)
+        snap = client.snapshot(slug, ref, force=force)
     except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
         log.warning("snapshot %s %s falló: %s", slug, ref, exc)
         return None
@@ -1802,38 +1861,43 @@ def _snapshot_for(client, slug: str, ref: str, ctx: dict | None = None) -> dict[
     return snap
 
 
-def _read_all_params(client, slug: str, ref: str, prefixes, ctx: dict | None = None) -> set:
+def _read_all_params(client, slug: str, ref: str, prefixes, ctx: dict | None = None, force: bool = False) -> set:
     """Params SSM de todos los archivos de texto de un ref. Con snapshot
     es un solo tarball; sin él, list_files + raw_file por archivo."""
-    snap = _snapshot_for(client, slug, ref, ctx)
+    snap = _snapshot_for(client, slug, ref, ctx, force=force)
     if snap is not None:
         return _read_files_params(client, slug, ref, list(snap), prefixes, source=snap)
     return _read_files_params(client, slug, ref, client.list_files(slug, ref), prefixes)
 
 
-def _resolve_master(client, repo, destination: str, prefixes, cache, ctx: dict | None = None) -> set:
+def _resolve_master(client, repo, destination: str, prefixes, cache, ctx: dict | None = None, force: bool = False) -> set:
     """Master params de un repo (cache o lectura completa).
 
-    Devuelve el set de tuplas (path, arn) tal como se guarda en disco."""
-    cached_params = cache.get_master(repo.slug, destination)
-    if cached_params is not None:
-        return cached_params
+    Devuelve el set de tuplas (path, arn) tal como se guarda en disco.
+    Con ``force`` se saltea el cache de master params y se re-resuelve
+    (BBIT-44)."""
+    if not force:
+        cached_params = cache.get_master(repo.slug, destination)
+        if cached_params is not None:
+            return cached_params
     entry = (ctx or {}).setdefault(repo.slug, {})
-    dest_ref = entry.get("dest_ref") or ""
+    dest_ref = "" if force else entry.get("dest_ref") or ""
     if not dest_ref:
         dest_ref = _ref_for(client, repo.slug, destination)
         entry["dest_ref"] = dest_ref
     try:
-        params = _read_all_params(client, repo.slug, dest_ref, prefixes, ctx)
+        params = _read_all_params(client, repo.slug, dest_ref, prefixes, ctx, force=force)
     except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
         log.warning("master params %s falló: %s", repo.slug, exc)
         return set()
-    if params:
-        cache.set_master(repo.slug, destination, params)
+    # BBIT-45: se cachea TAMBIÉN el empty para distinguir 'master sin params'
+    # de 'no resuelto aún': un master sin archivos SSM no re-baja el tarball
+    # en cada diff. force=1 lo saltea.
+    cache.set_master(repo.slug, destination, params)
     return params
 
 
-def _resolve_masters(client, repos, destination: str, prefixes, cache, ctx: dict | None = None) -> dict[str, set]:
+def _resolve_masters(client, repos, destination: str, prefixes, cache, ctx: dict | None = None, force: bool = False) -> dict[str, set]:
     """Master params de todos los repos en paralelo: {slug: {paths sin ARN}}.
 
     Se usa en el overlap scan+diff: esta fase corre en paralelo con el scan
@@ -1842,7 +1906,7 @@ def _resolve_masters(client, repos, destination: str, prefixes, cache, ctx: dict
     if not repos:
         return dest_by_repo
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(repos) or 1)) as ex:
-        futures = {ex.submit(_resolve_master, client, r, destination, prefixes, cache, ctx): r.slug for r in repos}
+        futures = {ex.submit(_resolve_master, client, r, destination, prefixes, cache, ctx, force): r.slug for r in repos}
         for fut, slug in futures.items():
             dest_by_repo[slug] = {p for p, _ in fut.result()}
     return dest_by_repo
@@ -1859,6 +1923,7 @@ def _compute_diff(
     cache,
     ctx: dict | None = None,
     dest_by_repo: dict[str, set] | None = None,
+    force: bool = False,
 ) -> dict:
     """Computa el payload del diff (sin valores SSM; esos van por overlay).
 
@@ -1880,13 +1945,12 @@ def _compute_diff(
             slug = repo.slug
             try:
                 origin_ref, dest_ref = _repo_refs(client, repo, origin, destination, ctx)
-                origin_params = _read_all_params(client, slug, origin_ref, prefixes, ctx)
-                dest_params = _read_all_params(client, slug, dest_ref, prefixes, ctx)
+                origin_params = _read_all_params(client, slug, origin_ref, prefixes, ctx, force=force)
+                dest_params = _read_all_params(client, slug, dest_ref, prefixes, ctx, force=force)
             except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
                 log.warning("scan all %s falló: %s", slug, exc)
                 return slug, set(), set()
-            if dest_params:
-                cache.set_master(slug, destination, dest_params)
+            cache.set_master(slug, destination, dest_params)
             return slug, origin_params, dest_params
 
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(master_repos) or 1)) as ex:
@@ -1907,7 +1971,7 @@ def _compute_diff(
         # Master params de TODOS los repos (cache o lectura completa). Si
         # el overlap ya los resolvió (dest_by_repo precomputado), se reusan.
         if not dest_by_repo:
-            dest_by_repo = _resolve_masters(client, master_repos, destination, prefixes, cache, ctx)
+            dest_by_repo = _resolve_masters(client, master_repos, destination, prefixes, cache, ctx, force=force)
 
         # Etapa A: diffs y selección de archivos con indicio SSM (solo branch repos).
         candidates: list[tuple[str, str, str, str]] = []
@@ -1928,8 +1992,8 @@ def _compute_diff(
         def _file_params(client, cand):
             slug, path, origin_ref, dest_ref = cand
             try:
-                snap_o = _snapshot_for(client, slug, origin_ref, ctx)
-                snap_d = _snapshot_for(client, slug, dest_ref, ctx)
+                snap_o = _snapshot_for(client, slug, origin_ref, ctx, force=force)
+                snap_d = _snapshot_for(client, slug, dest_ref, ctx, force=force)
                 if snap_o is not None and snap_d is not None:
                     raw_origin = snap_o.get(path)
                     raw_dest = snap_d.get(path)

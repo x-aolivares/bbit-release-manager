@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Callable
 
 import httpx
 
-from ..http import get_global_rate_limiter, MAX_RETRIES, RETRY_BASE_DELAY
+from ..http import get_rate_limiter, MAX_RETRIES, RETRY_BASE_DELAY
 
 if TYPE_CHECKING:
     from ..cache import ReleaseCache
@@ -46,6 +46,17 @@ class DeployJob:
     url: str
     job: str = ""
     approval: str = ""
+
+
+def _matches_deploy_commit(pipeline: dict, commit: str) -> bool:
+    """La revision del pipeline == el commit esperado del deploy (BBIT-48).
+
+    Criterio estricto unificado: un pipeline es un deploy del tag/branch solo
+    si su ``vcs.revision`` es exactamente el commit que se quiere deployar.
+    Sin esto, un pipeline disparado sobre otra revisión cuenta como deploy
+    fantasma en ``deploys_for_tags``.
+    """
+    return (pipeline.get("vcs") or {}).get("revision", "") == commit
 
 
 class CircleCiClient:
@@ -158,7 +169,7 @@ class CircleCiClient:
         if stash is not None and stash["status"] == 200:
             return json.loads(stash["response"])
         last_error: CircleCiError | None = None
-        _rate_limiter = get_global_rate_limiter()
+        _rate_limiter = get_rate_limiter("circleci")
         for attempt in range(1, MAX_RETRIES + 1):
             _rate_limiter.acquire()
             try:
@@ -232,6 +243,22 @@ class CircleCiClient:
                 break
         return items
 
+    def _pipeline_page(self, path: str, params: dict) -> list[dict]:
+        """Una página de pipelines; un 404 (proyecto sin pipelines aún) devuelve [].
+
+        CircleCI responde 404 para proyectos válidos que todavía no corrieron
+        ninguna pipeline. Ese caso NO es un fallo: se devuelve lista vacía para
+        que quede cacheable y no se re-consulte en cada corrida (BBIT-41).
+        Los demás errores (500, auth, rate limit) siguen lanzando.
+        """
+        try:
+            return self._paginate_capped(path, params, max_pages=1)
+        except CircleCiError as exc:
+            if not str(exc).startswith("CircleCI 404 en "):
+                raise
+            log.info("CircleCI 404 en %s: proyecto sin pipelines -> lista vacía cacheable", path)
+            return []
+
     def pipelines(self, repo: str, branch: str | None = None, tag: str | None = None) -> list[dict]:
         """Pipelines del proyecto, opcionalmente filtrados por rama o tag.
 
@@ -240,42 +267,54 @@ class CircleCiClient:
         El corte real de "no traer el histórico completo" es ``max_pages``
         vía ``_paginate_capped``: una sola página (``limit`` pipelines) y
         listo, sin seguir ``next_page_token``.
+
+        BBIT-41: un proyecto sin pipelines devuelve 404; se trata como lista
+        vacía y se cachea (no vuelve a golpear la API hasta expirar el TTL).
+
+        BBIT-43: las pipelines de TAGS ya no se cachean por tag (kind='tag',
+        N copias idénticas de la misma página). Se cachea UNA sola página
+        'latest' por proyecto keyed (slug, kind=latest) y cada tag filtra
+        client-side sobre esa misma página: N tags = 1 request en frío.
         """
-        params: dict = {"limit": 20}
-        key = ""
-        kind = ""
+        slug = self.project_slug(repo)
+        if tag:
+            return [
+                p for p in self._pipelines_latest_page(repo)
+                if (p.get("vcs") or {}).get("tag") == tag
+            ]
         if branch:
-            params["branch"] = branch
-            key, kind = branch, "branch"
-        elif tag:
-            key, kind = tag, "tag"
-        
-        if self._cache is not None and key:
-            cached = self._cache.get_circleci_pipelines(self.project_slug(repo), key, kind)
+            params: dict = {"limit": 20, "branch": branch}
+            if self._cache is not None:
+                cached = self._cache.get_circleci_pipelines(slug, branch, "branch")
+                if cached is not None:
+                    return cached
+            items = self._pipeline_page(f"/project/{slug}/pipeline", params)
+            if self._cache is not None:
+                self._cache.set_circleci_pipelines(slug, branch, "branch", items)
+            return items
+        return self._pipelines_latest_page(repo)
+
+    def _pipelines_latest_page(self, repo: str) -> list[dict]:
+        """La página más reciente de pipelines del proyecto, cacheada por slug.
+
+        Todos los tags filtran client-side sobre esta misma página (BBIT-43).
+        El lock evita duplicar el fetch cuando N tags entran en frío a la vez
+        (sustituye al viejo per-repo ``_pipeline_lock`` de las keys por tag).
+        """
+        slug = self.project_slug(repo)
+        if self._cache is not None:
+            cached = self._cache.get_circleci_pipelines(slug, "latest", "latest")
             if cached is not None:
                 return cached
-        
-        if tag:
-            # Para tags: una sola página de las pipelines más recientes del
-            # proyecto (no hay filtro server-side por tag), filtrada
-            # client-side. Si el tag buscado no está en esa página reciente
-            # no se encuentra — trade-off aceptado a cambio de no paginar
-            # el histórico completo del proyecto por cada tag.
-            project_pipelines = self._paginate_capped(
-                f"/project/{self.project_slug(repo)}/pipeline", {"limit": 20}, max_pages=1,
-            )
-            items = [p for p in project_pipelines
-                     if (p.get("vcs") or {}).get("tag") == tag]
-        else:
-            # Para branches: CircleCI filtra server-side por branch, así que
-            # una sola página alcanza (la última pipeline de esa rama).
-            items = self._paginate_capped(
-                f"/project/{self.project_slug(repo)}/pipeline", params, max_pages=1,
-            )
-        
-        if self._cache is not None and key:
-            self._cache.set_circleci_pipelines(self.project_slug(repo), key, kind, items)
-        return items
+        with self._pipeline_lock:
+            if self._cache is not None:
+                cached = self._cache.get_circleci_pipelines(slug, "latest", "latest")
+                if cached is not None:
+                    return cached
+            items = self._pipeline_page(f"/project/{slug}/pipeline", {"limit": 20})
+            if self._cache is not None:
+                self._cache.set_circleci_pipelines(slug, "latest", "latest", items)
+            return items
 
     def workflows(self, pipeline_id: str) -> list[dict]:
         if self._cache is not None:
@@ -358,19 +397,72 @@ class CircleCiClient:
             approval=approval.get("status", "") if approval else "",
         )
 
-    def pipeline_id_for_commit(self, repo: str, branch: str, commit: str) -> int | None:
-        """Número de pipeline más reciente que vcs.revision == commit en la rama."""
+    def pipeline_id_for_commit(
+        self, repo: str, branch: str, commit: str, max_pages: int = 5
+    ) -> int | None:
+        """Número de pipeline más reciente que vcs.revision == commit en la rama.
+
+        BBIT-50: un commit de un repo activo puede no estar en la primera
+        página (limit 20). Si no aparece en la página cacheada, se sigue
+        ``next_page_token`` en vivo hasta ``max_pages`` páginas (tope). Las
+        páginas extra del barrido NO se cachean: la cache ``circleci_pipelines``
+        de la primera página (TTL 120s) no se degrada por el barrido.
+        """
         if not commit:
             return None
-        best = None
-        for pipeline in self.pipelines(repo, branch=branch):
-            revision = (pipeline.get("vcs") or {}).get("revision", "")
-            if revision != commit:
-                continue
-            number = pipeline.get("number") or 0
-            if best is None or number > best:
-                best = number
-        return best
+        slug = self.project_slug(repo)
+
+        def _scan(items: list[dict]) -> int | None:
+            best = None
+            for pipeline in items:
+                revision = (pipeline.get("vcs") or {}).get("revision", "")
+                if revision != commit:
+                    continue
+                number = pipeline.get("number") or 0
+                if best is None or number > best:
+                    best = number
+            return best
+
+        # Primera página cacheada por (slug, branch): si alcanza, cero requests.
+        if self._cache is not None:
+            cached = self._cache.get_circleci_pipelines(slug, branch, "branch")
+            if cached is not None:
+                if not cached:
+                    # Lista vacía cacheada = proyecto sin pipelines (BBIT-41):
+                    # la 404 ya se resolvió, no hay nada más atrás que buscar.
+                    return None
+                found = _scan(cached)
+                if found is not None:
+                    return found
+                if max_pages <= 1:
+                    return None
+
+        path = f"/project/{slug}/pipeline"
+        token: str | None = None
+        pages = 0
+        while pages < max_pages:
+            params: dict = {"limit": 20, "branch": branch}
+            if token:
+                params["page-token"] = token
+            try:
+                payload = self._request("GET", path, params=params)
+            except CircleCiError as exc:
+                if not str(exc).startswith("CircleCI 404 en "):
+                    raise
+                # BBIT-41: proyecto sin pipelines -> lista vacía cacheable, no un error.
+                log.info("CircleCI 404 en %s: proyecto sin pipelines -> lista vacía cacheable", path)
+                payload = None
+            items = payload.get("items", []) if payload else []
+            pages += 1
+            if pages == 1 and self._cache is not None:
+                self._cache.set_circleci_pipelines(slug, branch, "branch", items)
+            found = _scan(items)
+            if found is not None:
+                return found
+            token = payload.get("next_page_token") if payload else None
+            if not token:
+                break
+        return None
 
     def deploy_for_tag(
         self,
@@ -397,7 +489,7 @@ class CircleCiClient:
                 "deploy_for_tag: %s pipeline#%s vcs.revision=%s vs commit=%s match=%s",
                 repo, pipeline.get("number"), rev[:12], commit[:12], rev == commit,
             )
-            if rev != commit:
+            if not _matches_deploy_commit(pipeline, commit):
                 log.info(
                     "deploy_for_tag: %s tag=%s descarta pipeline vcs.revision=%s (commit=%s)",
                     repo, tag, rev[:12], commit[:12],
@@ -431,63 +523,18 @@ class CircleCiClient:
         )
         return None
 
-    def deploys_for_envs(
-        self,
-        repo: str,
-        tags: list[str],
-        commit: str,
-        prefixes: list[str],
-    ) -> dict[str, dict]:
-        """Deploys por tag (default) y por env en UNA pasada de fetch por tag.
-
-        BBIT-34: reemplaza el par ``deploys_for_tags`` + loop por-env
-        ``deploy_for_tag`` para los scans. Cada tag resuelve pipelines,
-        workflows y jobs UNA sola vez; el resultado combina:
-        - ``tags``: {tag: DeployJob | None}  -> primer pipeline con workflow
-           nombrado (mismo criterio que ``deploys_for_tags``).
-        - ``envs_by_tag``: {tag: {prefix: DeployJob | None}} -> pipeline con
-           vcs.revision == commit cuyo workflow contiene el prefijo (mismo
-           criterio que ``deploy_for_tag`` por env).
-        """
-        result: dict[str, dict] = {"tags": {t: None for t in tags}, "envs_by_tag": {}}
-        if not tags:
-            return result
-
-        def _resolve(tag: str) -> tuple[str, DeployJob | None, dict[str, DeployJob | None]]:
-            pipelines = self.pipelines(repo, tag=tag)
-            default: DeployJob | None = None
-            if pipelines:
-                for workflow in self.workflows(pipelines[0].get("id", "")):
-                    if workflow.get("name", ""):
-                        default = self._deploy_from_workflow(repo, pipelines[0], workflow)
-                        break
-            envs: dict[str, DeployJob | None] = {}
-            for pipeline in pipelines:
-                rev = (pipeline.get("vcs") or {}).get("revision", "")
-                if rev != commit:
-                    continue
-                for workflow in self.workflows(pipeline.get("id", "")):
-                    name = (workflow.get("name") or "").lower()
-                    match = next((p for p in prefixes if p.lower() in name), None)
-                    if match is not None and match not in envs:
-                        envs[match] = self._deploy_from_workflow(repo, pipeline, workflow, match)
-                break
-            return tag, default, envs
-
-        with ThreadPoolExecutor(max_workers=min(len(tags), 4)) as ex:
-            resolved = list(ex.map(_resolve, tags))
-        for tag, default, envs in resolved:
-            result["tags"][tag] = default
-            result["envs_by_tag"][tag] = envs
-        return result
-
-    def deploys_for_tags(self, repo: str, tags: list[str]) -> dict[str, DeployJob | None]:
-        """Para cada tag, el último pipeline corrido sobre ese tag.
+    def deploys_for_tags(self, repo: str, tags: list[str], commit: str) -> dict[str, DeployJob | None]:
+        """Para cada tag, el último pipeline sobre ese tag que deployó el commit.
 
         Los pipelines de tags distintos se resuelven en paralelo (acotado a
         pocos workers); ``ex.map`` preserva el orden de ``tags`` en el
-        resultado. El lock de ``_project_pipelines`` evita paginar dos veces
-        el mismo proyecto en caché fría.
+        resultado. Todos los tags leen la MISMA página 'latest' cacheada por
+        proyecto (BBIT-43): en frío solo hay 1 request a CircleCI, y el lock
+        de ``_pipelines_latest_page`` evita paginar dos veces el proyecto.
+
+        BBIT-48: usa el criterio estricto unificado (``vcs.revision == commit``,
+        igual que ``deploy_for_tag``) para que un pipeline corrido sobre otra
+        revisión no cuente como deploy del tag (provenance garantizado).
         """
         result: dict[str, DeployJob | None] = {t: None for t in tags}
         if not tags:
@@ -497,10 +544,20 @@ class CircleCiClient:
             pipelines = self.pipelines(repo, tag=tag)
             if not pipelines:
                 return None
-            pipeline = pipelines[0]
-            for workflow in self.workflows(pipeline.get("id", "")):
-                if workflow.get("name", ""):
-                    return self._deploy_from_workflow(repo, pipeline, workflow)
+            for pipeline in pipelines:
+                if not _matches_deploy_commit(pipeline, commit):
+                    log.info(
+                        "deploys_for_tags: %s tag=%s descarta pipeline#%s "
+                        "vcs.revision=%s (commit=%s)",
+                        repo, tag, pipeline.get("number"),
+                        ((pipeline.get("vcs") or {}).get("revision", "") or "")[:12],
+                        commit[:12],
+                    )
+                    continue
+                for workflow in self.workflows(pipeline.get("id", "")):
+                    if workflow.get("name", ""):
+                        return self._deploy_from_workflow(repo, pipeline, workflow)
+                return None
             return None
 
         with ThreadPoolExecutor(max_workers=min(len(tags), 4)) as ex:

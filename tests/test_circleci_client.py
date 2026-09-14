@@ -85,6 +85,79 @@ def test_pipeline_id_for_commit():
         client.close()
 
 
+def test_pipeline_id_for_commit_pagina_2(tmp_path):
+    """BBIT-50: un commit en la página 2 de un repo activo se detecta paginando."""
+    from bbit_release.cache import ReleaseCache
+
+    calls = {"c": 0}
+
+    def pipelines(request):
+        calls["c"] += 1
+        if request.url.params.get("page-token"):
+            return httpx.Response(200, json={"next_page_token": None, "items": [
+                {"id": "p4", "number": 4, "vcs": {"revision": "abc", "branch": "release"}},
+            ]})
+        return httpx.Response(200, json={"next_page_token": "tok2", "items": [
+            {"id": "p1", "number": 1, "vcs": {"revision": "zzz", "branch": "release"}},
+        ]})
+
+    cache = ReleaseCache(db_path=tmp_path / "pp.db")
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): pipelines,
+    }), cache=cache)
+    try:
+        assert client.pipeline_id_for_commit("r1", "release", "abc") == 4
+        assert calls["c"] == 2
+    finally:
+        client.close()
+        cache.close()
+
+
+def test_pipeline_id_for_commit_cap_max_pages(tmp_path):
+    """BBIT-50: max_pages=1 no barre más allá de la primera página."""
+    calls = {"c": 0}
+
+    def pipelines(request):
+        calls["c"] += 1
+        if request.url.params.get("page-token"):
+            return httpx.Response(200, json={"next_page_token": None, "items": [
+                {"id": "p4", "number": 4, "vcs": {"revision": "abc", "branch": "release"}},
+            ]})
+        return httpx.Response(200, json={"next_page_token": "tok2", "items": [
+            {"id": "p1", "number": 1, "vcs": {"revision": "zzz", "branch": "release"}},
+        ]})
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): pipelines,
+    }))
+    try:
+        assert client.pipeline_id_for_commit("r1", "release", "abc", max_pages=1) is None
+    finally:
+        client.close()
+    assert calls["c"] == 1
+
+
+def test_pipeline_id_for_commit_404_sin_pipelines_se_cachea(tmp_path):
+    """BBIT-50: la 404 de proyecto sin pipelines no lanza y se cachea vacía (BBIT-41)."""
+    calls = {"c": 0}
+
+    def not_found(request):
+        calls["c"] += 1
+        return httpx.Response(404, json={"message": "No pipelines found"})
+
+    cache = _make_cache(tmp_path)
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): not_found,
+    }), cache=cache)
+    try:
+        assert client.pipeline_id_for_commit("r1", "release", "abc") is None
+        assert client.pipeline_id_for_commit("r1", "release", "abc") is None
+    finally:
+        client.close()
+        cache.close()
+    assert calls["c"] == 1  # la 404 quedó cacheada como lista vacía
+
+
 def test_deploy_job_for_pipeline():
     def workflows(request):
         assert request.url.path == "/api/v2/pipeline/p1/workflow"
@@ -279,7 +352,7 @@ def test_deploys_for_tags():
         ("GET", "/api/v2/workflow/w/job"): jobs,
     }))
     try:
-        found = client.deploys_for_tags("r1", ["v1", "v2"])
+        found = client.deploys_for_tags("r1", ["v1", "v2"], "x")
     finally:
         client.close()
     assert found["v1"].status == "running"
@@ -387,11 +460,14 @@ def test_pipelines_cache_distinguishes_branch_and_tag(tmp_path):
 
     def pipelines(request):
         branch = request.url.params.get("branch", "")
-        calls.append(branch if branch else "<<tag>>")
+        calls.append(branch if branch else "<<tags>>")
         if branch:
             items = [{"id": "p", "number": 1, "vcs": {"revision": "abc", "branch": branch}}]
         else:
-            items = [{"id": "p", "number": 1, "vcs": {"revision": "abc", "tag": "v1.0"}}]
+            items = [
+                {"id": "p1", "number": 1, "vcs": {"revision": "abc", "tag": "v1.0"}},
+                {"id": "p2", "number": 2, "vcs": {"revision": "def", "tag": "v2.0"}},
+            ]
         return httpx.Response(200, json={"next_page_token": None, "items": items})
 
     cache = _make_cache(tmp_path)
@@ -401,20 +477,153 @@ def test_pipelines_cache_distinguishes_branch_and_tag(tmp_path):
     try:
         assert [p["id"] for p in client.pipelines("r1", branch="release")] == ["p"]
         assert [p["id"] for p in client.pipelines("r1", branch="release")] == ["p"]
-        assert calls == ["release"]  # 2do pega en el cache
-        assert [p["id"] for p in client.pipelines("r1", tag="v1.0")] == ["p"]
-        assert calls == ["release", "<<tag>>"]  # tag no colisiona con branch
-        assert [p["id"] for p in client.pipelines("r1", tag="v1.0")] == ["p"]
-        assert calls == ["release", "<<tag>>"]  # 2do tag pega en el cache
+        assert calls == ["release"]  # 2do pega en el cache (kind=branch)
+        assert [p["id"] for p in client.pipelines("r1", tag="v1.0")] == ["p1"]
+        assert calls == ["release", "<<tags>>"]
+        assert [p["id"] for p in client.pipelines("r1", tag="v2.0")] == ["p2"]
+        assert calls == ["release", "<<tags>>"]  # 2 tags comparten la página 'latest'
+        assert [p["id"] for p in client.pipelines("r1", tag="v1.0")] == ["p1"]
+        assert calls == ["release", "<<tags>>"]  # y el 2do v1.0 es hit
         rt = cache.get_rt("circleci_pipelines")
         assert rt is not None
         total = cache._fetchone(
             "SELECT COUNT(*) FROM request WHERE rt_id = ?", (rt["id"],)
         )[0]
-        assert total == 3  # branch + lista full del proyecto + tag, con hit en 2do
+        assert total == 2  # kind=branch + kind=latest (una sola fila para tags)
     finally:
         client.close()
         cache.close()
+
+
+def test_deploys_for_tags_una_sola_pagina_latest(tmp_path):
+    calls = {"c": 0}
+
+    def pipelines(request):
+        calls["c"] += 1
+        return httpx.Response(200, json={"next_page_token": None, "items": [
+            {"id": f"p{i}", "number": i, "vcs": {"revision": "abc", "tag": f"v{i}"}}
+            for i in range(1, 11)
+        ]})
+
+    def workflows(request):
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [{"id": "w", "name": "deploy", "status": "running", "created_at": "x"}],
+        })
+
+    def jobs(request):
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [{"id": "jd", "type": "build", "name": "deploy", "status": "running"}],
+        })
+
+    routes = {
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): pipelines,
+    }
+    for i in (1, 2, 3):
+        routes[("GET", f"/api/v2/pipeline/p{i}/workflow")] = workflows
+    routes[("GET", "/api/v2/workflow/w/job")] = jobs
+    cache = _make_cache(tmp_path)
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport(routes), cache=cache)
+    try:
+        found = client.deploys_for_tags("r1", ["v1", "v2", "v3"], "abc")
+        assert calls["c"] == 1  # 3 tags -> 1 sola página 'latest' consultada
+        assert set(found) == {"v1", "v2", "v3"}
+        assert all(v is not None and v.status == "running" for v in found.values())
+    finally:
+        client.close()
+        cache.close()
+
+
+def test_deploys_for_tags_descarta_revision_distinta_al_commit():
+    """BBIT-48: un pipeline del tag con vcs.revision != commit se descarta en batch."""
+    def pipelines(request):
+        return httpx.Response(200, json={"next_page_token": None, "items": [
+            {"id": "p2", "number": 12, "vcs": {"tag": "v1", "revision": "zzz"}},
+            {"id": "p1", "number": 3, "vcs": {"tag": "v1", "revision": "abc"}},
+        ]})
+
+    def workflows(request):
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [{"id": "w", "name": "deploy", "status": "running", "created_at": "x"}],
+        })
+
+    def jobs(request):
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [{"id": "jd", "type": "build", "name": "deploy", "status": "running"}],
+        })
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): pipelines,
+        ("GET", "/api/v2/pipeline/p1/workflow"): workflows,
+        ("GET", "/api/v2/workflow/w/job"): jobs,
+    }))
+    try:
+        # El pipeline más reciente (p2, rev zzz) se descarta por provenance;
+        # el deploy real es p1 (rev abc == commit).
+        found = client.deploys_for_tags("r1", ["v1", "v2"], "abc")
+    finally:
+        client.close()
+    assert found["v1"] is not None
+    assert found["v1"].pipeline_number == 3
+    assert found["v1"].job == "deploy"
+    assert found["v2"] is None
+
+
+def test_pipeline_404_devuelve_lista_vacia_y_se_cachea(tmp_path):
+    calls = {"c": 0}
+
+    def not_found(request):
+        calls["c"] += 1
+        return httpx.Response(404, json={"message": "No pipelines found"})
+
+    cache = _make_cache(tmp_path)
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): not_found,
+    }), cache=cache)
+    try:
+        assert client.pipelines("r1", branch="release") == []
+        assert calls["c"] == 1
+        assert client.pipelines("r1", branch="release") == []
+        assert calls["c"] == 1  # el 404 quedó cacheado como lista vacía
+    finally:
+        client.close()
+        cache.close()
+
+
+def test_pipeline_500_no_se_degrada_a_lista_vacia():
+    def internal_error(request):
+        return httpx.Response(500, json={"message": "boom"})
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): internal_error,
+    }))
+    try:
+        with pytest.raises(CircleCiError, match="CircleCI 500"):
+            client.pipelines("r1", branch="release")
+    finally:
+        client.close()
+
+
+def test_pipeline_404_no_se_cachea_sin_cache():
+    calls = {"c": 0}
+
+    def not_found(request):
+        calls["c"] += 1
+        return httpx.Response(404, json={"message": "No pipelines found"})
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): not_found,
+    }), cache=None)
+    try:
+        assert client.pipelines("r1", branch="release") == []
+        assert calls["c"] == 1
+        assert client.pipelines("r1", branch="release") == []
+        assert calls["c"] == 2  # sin cache se vuelve a consultar
+    finally:
+        client.close()
 
 
 def test_workflows_and_jobs_cache_hit(tmp_path):

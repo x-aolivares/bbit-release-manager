@@ -82,6 +82,11 @@ _SEED_REQUEST_TYPES = {
         f"{_BITBUCKET_BASE}/repositories/{{workspace}}/{{repo}}/refs/branches/{{branch}}",
         {"method": "GET"},
     ),
+    "branch_refs": (
+        "Bitbucket", 3600,
+        f"{_BITBUCKET_BASE}/repositories/{{workspace}}/refs/branches/{{branch}}",
+        {"method": "GET"},
+    ),
     "scan_release": (
         "Bitbucket", 1800,
         f"{_BITBUCKET_BASE}/repositories/{{workspace}}/{{repo}}/commits/{{branch}}",
@@ -90,6 +95,11 @@ _SEED_REQUEST_TYPES = {
     "scan_repo": (
         "Bitbucket", 1800,
         f"{_BITBUCKET_BASE}/repositories/{{workspace}}/{{repo}}/commits/{{branch}}",
+        {"method": "GET"},
+    ),
+    "scan_repo_tags": (
+        "CircleCi", 120,
+        f"{_CIRCLECI_BASE}/project/{{slug}}/pipeline",
         {"method": "GET"},
     ),
     "diff_ssm": (
@@ -101,6 +111,11 @@ _SEED_REQUEST_TYPES = {
         "Bitbucket", 3600,
         f"{_BITBUCKET_BASE}/repositories/{{workspace}}/{{repo}}/src/{{ref}}",
         {"method": "GET"},
+    ),
+    "snapshot_archive": (
+        "Bitbucket", 3600,
+        f"https://bitbucket.org/{{workspace}}/{{repo}}/get/{{ref}}.tar.gz",
+        {"method": "GET", "note": "árbol {path: contenido} ya parseado; keyed (slug, ref)"},
     ),
     "circleci_project": (
         "CircleCi", 3600,
@@ -166,6 +181,7 @@ class ReleaseCache:
             self._migrate_schema()
             self._drop_legacy_tables()
             self._seed_catalog()
+            self.prune()
 
     @property
     def db_path(self) -> Path:
@@ -377,6 +393,20 @@ class ReleaseCache:
                     self._conn.execute(
                         f"ALTER TABLE aws_environment ADD COLUMN {col} {ddl}"
                     )
+
+            # BBIT-43: depreca las keys de pipelines keyed por tag (kind='tag').
+            # Antes cada tag guardaba una copia idéntica de la página; ahora hay
+            # una sola página 'latest' por proyecto. Se borran las filas viejas
+            # para no arrastrar basura hasta que venza el TTL.
+            cur = self._conn.cursor()
+            try:
+                cur.execute(
+                    "DELETE FROM request "
+                    "WHERE rt_id = (SELECT rt_id FROM request_type WHERE rt_name = 'circleci_pipelines') "
+                    "AND is_id IN (SELECT is_id FROM init_sesion WHERE is_details = '{\"kind\": \"tag\"}')"
+                )
+            finally:
+                cur.close()
             self._conn.commit()
 
     def _drop_legacy_tables(self) -> None:
@@ -942,6 +972,76 @@ class ReleaseCache:
             counts.get("raw_stash", 0),
         )
 
+    def prune(
+        self,
+        *,
+        service_call_max_age_seconds: int = 7 * 86400,
+        vacuum_min_bytes: int = 1 << 20,
+    ) -> dict:
+        """Poda del SQLite: borra lo que ya venció para acotar el crecimiento.
+
+        - ``request``: filas cuyo TTL del ``request_type`` ya expiró (peso
+          muerto: ``latest_success`` no las sirve más). Las ``SUCCESS``
+          expiradas se borran; las ``PENDING`` solo con un colchón amplio
+          (10× TTL o 1 hora) para no cortar un flow en curso.
+        - ``raw_stash``: respuestas cuyo ``rs_ttl_seconds`` ya venció.
+        - ``service_call``: auditoría append-only; se poda por antigüedad
+          (default 7 días).
+        - ``VACUUM``: solo si se borró algo y la base supera el umbral.
+        """
+        now = time.time()
+        counts: dict[str, int] = {}
+        with self._lock:
+            cur = self._conn.cursor()
+            try:
+                cur.execute(
+                    """
+                    DELETE FROM request
+                    WHERE rq_created_at < ?
+                      AND rq_id IN (
+                          SELECT rq.rq_id
+                          FROM request rq
+                          JOIN request_type rt ON rt.rt_id = rq.rt_id
+                          WHERE CASE
+                              WHEN rq.rq_status = 'PENDING'
+                                THEN rq.rq_created_at + MAX(rt.rt_ttl_seconds * 10, 3600) < ?
+                              ELSE rq.rq_created_at + rt.rt_ttl_seconds < ?
+                          END
+                      )
+                    """,
+                    (now, now, now),
+                )
+                counts["request"] = cur.rowcount
+
+                cur.execute(
+                    "DELETE FROM raw_stash WHERE rs_created_at + rs_ttl_seconds <= ?",
+                    (now,),
+                )
+                counts["raw_stash"] = cur.rowcount
+
+                cur.execute(
+                    "DELETE FROM service_call WHERE sc_created_at < ?",
+                    (now - service_call_max_age_seconds,),
+                )
+                counts["service_call"] = cur.rowcount
+            finally:
+                cur.close()
+            self._conn.commit()
+        deleted = sum(counts.values())
+        try:
+            db_size = self._db_path.stat().st_size if self._db_path.exists() else 0
+        except OSError:
+            db_size = 0
+        if deleted and db_size > vacuum_min_bytes:
+            self._conn.execute("VACUUM")
+        log.info(
+            "cache prune: %d request(s), %d raw_stash(es), %d service_call(s) borrados",
+            counts.get("request", 0),
+            counts.get("raw_stash", 0),
+            counts.get("service_call", 0),
+        )
+        return counts
+
     def clear_all(self) -> dict:
         """Vacía las tablas de datos del cache, logueando cuántos registros se
         eliminaron de cada una. Devuelve el desglose por tabla."""
@@ -1050,6 +1150,18 @@ class ReleaseCache:
             _repo_details(None, None), repos,
         )
 
+    def get_branch_refs(self, workspace: str, branch: str) -> dict | None:
+        """Set ``{slug: rama_resuelta}`` de repos con la rama, keyed (workspace, branch).
+
+        Los chequeos per-repo de ``repos_with_branch`` se reutilizan mientras
+        dure el TTL: al re-consultar solo se resuelven los repos nuevos (delta),
+        no el universo completo.
+        """
+        return self._get_cached("branch_refs", workspace, branch, {})
+
+    def set_branch_refs(self, workspace: str, branch: str, data: dict) -> None:
+        self._set_cached("branch_refs", workspace, branch, {}, data)
+
     def get_scan(self, origin: str, destination: str, project_prefixes: list[str] | None, exclude: set[str] | None, deploy_prefixes: list[str] | None = None):
         return self._get_cached(
             "scan_release", origin, destination,
@@ -1076,6 +1188,18 @@ class ReleaseCache:
 
     def set_scan_repo(self, origin: str, destination: str, slug: str, payload: dict) -> None:
         self._set_cached("scan_repo", origin, destination, {"repo": slug}, payload)
+
+    def get_scan_repo_tags(self, origin: str, destination: str, slug: str, commit: str) -> dict | None:
+        """Slice vivo (tags/deploys de CircleCI) del scan de un repo,
+        keyed (origin, destination) + (repo, commit).
+
+        TTL corto (120s): un deploy nuevo se refleja sin invalidar el item
+        estático de Bitbucket (BBIT-42). Miss → re-resolver on-demand.
+        """
+        return self._get_cached("scan_repo_tags", origin, destination, {"repo": slug, "commit": commit})
+
+    def set_scan_repo_tags(self, origin: str, destination: str, slug: str, commit: str, payload: dict) -> None:
+        self._set_cached("scan_repo_tags", origin, destination, {"repo": slug, "commit": commit}, payload)
 
     def get_diff(self, origin: str, destination: str, prefixes: list[str] | None, exclude: set[str] | None, ssm_prefixes: list[str] | None = None):
         return self._get_cached(
@@ -1114,6 +1238,13 @@ class ReleaseCache:
         details = _repo_details(bypass_cache=False)
         self._set_cached("get_master_params", slug, destination, details, list(params))
 
+    def get_snapshot_archive(self, slug: str, ref: str) -> dict | None:
+        """Snapshot {path: contenido} persistido, keyed (slug, ref) (BBIT-44)."""
+        return self._get_cached("snapshot_archive", slug, ref, {})
+
+    def set_snapshot_archive(self, slug: str, ref: str, out: dict) -> None:
+        self._set_cached("snapshot_archive", slug, ref, {}, out)
+
     # -- fachadas CircleCI -------------------------------------------------------
 
     def get_circleci_project(self, slug: str) -> dict | None:
@@ -1146,19 +1277,19 @@ class ReleaseCache:
 
     # -- caché agresiva: repos por prefijo + branches ---------------------------
 
-    def get_repos_by_prefix(self, workspace: str, prefixes: list[str] | None) -> list[dict] | None:
-        """Repos del workspace filtrados por prefijos (caché 30min)."""
-        prefixes_key = ",".join(sorted(prefixes or [])) or "all"
-        return self._get_cached(
-            "get_user_repositories", workspace, prefixes_key, {}
-        )
+    def get_repos_by_prefix(self, workspace: str, prefixes: list[str] | None = None) -> list[dict] | None:
+        """Índice completo de repos del workspace, key filter-free (BBIT-46).
 
-    def set_repos_by_prefix(self, workspace: str, prefixes: list[str] | None, repos: list[dict]) -> None:
-        """Cachea lista de repos del workspace (30min TTL)."""
-        prefixes_key = ",".join(sorted(prefixes or [])) or "all"
-        self._set_cached(
-            "get_user_repositories", workspace, prefixes_key, {}, repos
-        )
+        Los prefijos se ignoran en la clave: el índice persiste TODO el
+        workspace y el filtrado por prefijo/blacklist es una vista del
+        llamador (``list_repos``/``_all_repos_cached``). Cambiar prefijos no
+        invalida el índice ni vuelve a barrer Bitbucket.
+        """
+        return self._get_cached("get_user_repositories", workspace, "all", {})
+
+    def set_repos_by_prefix(self, workspace: str, prefixes: list[str] | None = None, repos: list[dict] | None = None) -> None:
+        """Cachea el índice completo de repos del workspace (30min TTL)."""
+        self._set_cached("get_user_repositories", workspace, "all", {}, repos or [])
 
     def get_repo_branches(self, workspace: str, repo: str) -> list[dict] | None:
         """Branches de un repo (caché 10min)."""

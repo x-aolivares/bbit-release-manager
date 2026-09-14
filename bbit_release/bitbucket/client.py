@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable
 
-from ..http import get_global_rate_limiter, MAX_RETRIES, RETRY_BASE_DELAY
+from ..http import get_rate_limiter, MAX_RETRIES, RETRY_BASE_DELAY
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +188,7 @@ class BitbucketClient:
             if stash["status"] == 404:
                 return None
         last_error: Exception | None = None
-        _rate_limiter = get_global_rate_limiter()
+        _rate_limiter = get_rate_limiter("bitbucket")
         for attempt in range(1, MAX_RETRIES + 1):
             _rate_limiter.acquire()
             try:
@@ -251,21 +251,6 @@ class BitbucketClient:
         filter_names: list[str] | None = None,
         prefixes: list[str] | None = None,
     ) -> list[Repository]:
-        # CACHE L1: Si hay prefijos, intentar obtener desde caché primero
-        if self.cache and prefixes:
-            cached_repos = self.cache.get_repos_by_prefix(self.workspace, prefixes)
-            if cached_repos is not None:
-                repos = [
-                    Repository(
-                        slug=r["slug"],
-                        name=r["name"],
-                        workspace=r.get("workspace", self.workspace),
-                        default_branch=r.get("default_branch", "master"),
-                    )
-                    for r in cached_repos
-                ]
-                return repos
-        
         allowed = {n.lower() for n in (filter_names or [])}
         prefs = [p.lower() for p in (prefixes or [])]
 
@@ -277,6 +262,36 @@ class BitbucketClient:
                 return False
             return True
 
+        def _dump(repos) -> list[dict]:
+            return [
+                {
+                    "slug": r.slug,
+                    "name": r.name,
+                    "workspace": r.workspace,
+                    "default_branch": r.default_branch,
+                }
+                for r in repos
+            ]
+
+        def _build(items: list[dict]) -> list[Repository]:
+            return [
+                Repository(
+                    slug=r["slug"],
+                    name=r["name"],
+                    workspace=r.get("workspace", self.workspace),
+                    default_branch=r.get("default_branch", "master"),
+                )
+                for r in items if _keep(r["slug"])
+            ]
+
+        # CACHE L1 (BBIT-46): índice completo filter-free keyed por workspace.
+        # Prefijos/filter_names se aplican como VISTA al materializar; cambiar
+        # de prefijo no invalida el índice ni vuelve a barrer el workspace.
+        if self.cache is not None:
+            cached_index = self.cache.get_repos_by_prefix(self.workspace, None)
+            if cached_index is not None:
+                return _build(cached_index)
+
         repos: list[Repository] = []
         url: str | None = f"/repositories/{self.workspace}"
         params: dict | None = {"pagelen": 100, "role": "member"}
@@ -287,8 +302,6 @@ class BitbucketClient:
             params = None
             for item in payload.get("values", []):
                 slug = item.get("slug", "")
-                if not _keep(slug):
-                    continue
                 ws = (item.get("workspace") or {}).get("slug") or self.workspace
                 repos.append(
                     Repository(
@@ -301,21 +314,10 @@ class BitbucketClient:
             url = (payload.get("next") or "").replace(API_BASE, "")
             if not url:
                 break
-        
-        # CACHE L1: Guardar repos por prefijo si hay caché
-        if self.cache and prefixes:
-            repos_data = [
-                {
-                    "slug": r.slug,
-                    "name": r.name,
-                    "workspace": r.workspace,
-                    "default_branch": r.default_branch,
-                }
-                for r in repos
-            ]
-            self.cache.set_repos_by_prefix(self.workspace, prefixes, repos_data)
-        
-        return repos
+
+        if self.cache is not None:
+            self.cache.set_repos_by_prefix(self.workspace, None, _dump(repos))
+        return [r for r in repos if _keep(r.slug)]
 
     def has_branch(self, slug: str, branch: str) -> bool:
         resp = self._request("GET", f"/repositories/{self.workspace}/{slug}/refs/branches/{branch}")
@@ -362,10 +364,30 @@ class BitbucketClient:
         
         return names
 
+    @staticmethod
+    def _latest_branch(names: list[str]) -> str:
+        """Elige la rama 'más reciente' entre los nombres: la de mayor sufijo
+        `-V{n}` y, si no, la mayor alfabéticamente."""
+        def _ver(n: str):
+            m = re.search(r"-V(\d+)(?:\.(\d+))?$", n, re.IGNORECASE)
+            if m:
+                major = int(m.group(1))
+                minor = int(m.group(2) or 0)
+                return major * 1000 + minor
+            return -1
+
+        return max(names, key=lambda n: (_ver(n), n))
+
     def resolve_branch(self, slug: str, branch: str) -> str:
-        """Rama efectiva: la literal si existe exacta, o "" si no. Sin fallback
-        a variantes `-Vn`: si no coincide, no coincide, punto."""
-        return branch if self.has_branch(slug, branch) else ""
+        """Rama efectiva: la exacta si existe, o la más reciente que empiece con
+        el prefijo (p.ej. `release/REP-325073-V2` para `release/REP-325073`).
+        Devuelve "" si no hay ninguna."""
+        if self.has_branch(slug, branch):
+            return branch
+        names = self.list_branches(slug, prefix=branch)
+        if not names:
+            return ""
+        return self._latest_branch(names)
 
     def default_branch(self, slug: str) -> str:
         data = self._request(
@@ -385,11 +407,16 @@ class BitbucketClient:
     ) -> list[Repository]:
         """Repos (filtrados por prefijo si se pasa) que contienen la rama.
 
-        La rama se resuelve por coincidencia EXACTA: si no existe literal,
-        el repo se descarta (no hay fallback a variantes `-Vn`).
+        La rama se resuelve por prefijo: si no existe literal, cuenta como
+        presente si existe `branch` seguido de variante (p.ej.
+        `release/REP-325073-V2` para `release/REP-325073`).
 
         El chequeo de existencia es un request por repo; se corre en paralelo
-        (ThreadPoolExecutor) para no serializar llamadas a la API.
+        (ThreadPoolExecutor) para no serializar llamadas a la API.  El estado
+        chequeado se cachea por ``(workspace, branch)`` (request_type
+        ``branch_refs``) como ``{slug: rama_resuelta}`` con ``""`` para los
+        repos que NO tienen la rama: en la re-consulta solo se resuelven los
+        repos nuevos, nunca el universo completo.
 
         `repos` es opcional: si ya tenés la lista completa del workspace
         cacheada, pasala para evitar el `list_repos` paginado interno.
@@ -397,24 +424,39 @@ class BitbucketClient:
         repos = repos if repos is not None else self.list_repos(prefixes=prefixes)
         if not repos:
             return []
-        workers = min(MAX_WORKERS, len(repos) or 1)
-        matched: list[Repository] = []
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = [(repo, ex.submit(self.resolve_branch, repo.slug, branch)) for repo in repos]
-            for repo, fut in futures:
-                try:
-                    resolved = fut.result()
-                except BitbucketError:
-                    continue
-                if resolved:
-                    matched.append(Repository(
-                        slug=repo.slug,
-                        name=repo.name,
-                        workspace=repo.workspace,
-                        default_branch=getattr(repo, "default_branch", "master"),
-                        resolved_branch=resolved,
-                    ))
-        return matched
+        raw = {}
+        if self.cache:
+            hit = self.cache.get_branch_refs(self.workspace, branch)
+            if hit:
+                raw = dict(hit)
+        known = set(raw)
+        pending = [repo for repo in repos if repo.slug not in known]
+        if pending:
+            workers = min(MAX_WORKERS, len(pending) or 1)
+            resolved = {repo.slug: "" for repo in pending}
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = {repo.slug: ex.submit(self.resolve_branch, repo.slug, branch) for repo in pending}
+                for slug, fut in futures.items():
+                    try:
+                        name = fut.result()
+                    except BitbucketError:
+                        continue
+                    if name:
+                        resolved[slug] = name
+            raw.update(resolved)
+            if self.cache:
+                self.cache.set_branch_refs(self.workspace, branch, raw)
+        return [
+            Repository(
+                slug=repo.slug,
+                name=repo.name,
+                workspace=repo.workspace,
+                default_branch=getattr(repo, "default_branch", "master"),
+                resolved_branch=raw[repo.slug],
+            )
+            for repo in repos
+            if raw.get(repo.slug)
+        ]
 
     def diff(self, slug: str, from_ref: str, to_ref: str) -> DiffResult:
         """Diff entre refs como texto unificado (Cloud)."""
@@ -519,7 +561,7 @@ class BitbucketClient:
             self._stash_set("GET", api, None, 200, resp.text, ttl_seconds=1800)
         return resp.text
 
-    def snapshot(self, slug: str, ref: str) -> dict[str, str] | None:
+    def snapshot(self, slug: str, ref: str, force: bool = False) -> dict[str, str] | None:
         """Descarga en una request el árbol de un ref: {path: contenido}.
 
         Usa el tarball de `bitbucket.org/{workspace}/{slug}/get/{ref}.tar.gz`
@@ -529,9 +571,19 @@ class BitbucketClient:
         Devuelve None si el ref no existe o el contenido no es un tarball
         utilizable. Los paths salen relativos, sin el prefijo raíz
         `{workspace}-{slug}-{sha}/` del tarball.
+
+        BBIT-44: el árbol ya parseado se persiste en SQLite keyed (slug, ref)
+        con TTL 3600, así los diffs siguientes (cambiando filtros u otro
+        request) no vuelven a bajar el tarball. ``force=True`` re-descarga y
+        refresca la copia sin esperar el TTL.
         """
+        if self.cache is not None and not force:
+            cached = self.cache.get_snapshot_archive(slug, ref)
+            if cached is not None:
+                logger.info("snapshot %s %s: hit en cache (TTL 3600s)", slug, ref)
+                return cached
         url = f"https://bitbucket.org/{self.workspace}/{slug}/get/{ref}.tar.gz"
-        _rate_limiter = get_global_rate_limiter()
+        _rate_limiter = get_rate_limiter("bitbucket")
         _rate_limiter.acquire()
         try:
             resp = self._client.request(
@@ -559,6 +611,8 @@ class BitbucketClient:
         except tarfile.TarError as exc:
             logger.warning("snapshot %s %s: tarball inválido (%s)", slug, ref, exc)
             return None
+        if self.cache is not None:
+            self.cache.set_snapshot_archive(slug, ref, out)
         return out
 
     def list_files(self, slug: str, ref: str, tree: str = "") -> list[str]:
@@ -599,8 +653,9 @@ class BitbucketClient:
         """Último commit de una rama (hash completo).
 
         `resolved` es la rama efectiva ya resuelta (p.ej. del barrido de
-        `repos_with_branch`): si se pasa, se consulta directo. La rama debe
-        existir literal, sin fallback a variantes: sin coincidencia exacta, ""."""
+        `repos_with_branch`): si viene, se consulta directo y se evita
+        re-resolver (ahorra 2-3 requests cuando la rama literal no existe y
+        hay variante `-V2`). Sin `resolved`, cae en `resolve_branch`."""
         target = resolved or branch
         data = self._request(
             "GET",
@@ -609,7 +664,19 @@ class BitbucketClient:
         )
         if data and data.get("values"):
             return data["values"][0].get("hash", "")
-        return ""
+        if resolved:
+            return ""
+        resolved = self.resolve_branch(slug, branch)
+        if not resolved or resolved == branch:
+            return ""
+        data = self._request(
+            "GET",
+            f"/repositories/{self.workspace}/{slug}/commits/{resolved}",
+            params={"pagelen": 1},
+        )
+        if not data or not data.get("values"):
+            return ""
+        return data["values"][0].get("hash", "")
 
     def has_commits_ahead(self, slug: str, branch: str, base: str) -> bool:
         """¿La rama tiene al menos un commit que base aún no tiene?
