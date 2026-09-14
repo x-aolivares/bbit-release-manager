@@ -3739,3 +3739,105 @@ def test_flow_stream_replay_emits_diff_when_stored(monkeypatch):
     with client.stream("GET", "/api/flow/stream", params=params) as resp:
         data2 = "".join(resp.iter_text())
     assert "event: diff" in data2
+
+
+def test_repos_quick_sin_origin_devuelve_todos_sin_branch_state(monkeypatch):
+    """BBIT-58: sin origin+destination, repos-quick es retrocompatible:
+    devuelve todos los repos del workspace sin branch_state."""
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True), "J")
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [
+                SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master"),
+            ]
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/repos-quick").json()
+    assert body["count"] == 2
+    assert [r["slug"] for r in body["repos"]] == ["r1", "r2"]
+    assert all("branch_state" not in r for r in body["repos"])
+
+
+def test_repos_quick_con_origin_incluye_branch_state_y_marca_not_found(monkeypatch):
+    """BBIT-58: con origin+destination, repos-quick resuelve la rama y
+    devuelve branch_state por repo (found y not_found). Un repo r2 sin la
+    rama no queda disfrazado de found."""
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True), "J")
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [
+                SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="r2", name="R2", workspace="ws", default_branch="master"),
+            ]
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            # Solo r1 tiene la rama; r2 no.
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master", resolved_branch="release/x")]
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get("/api/repos-quick", params={"origin": "release/x", "destination": "master"}).json()
+    by_slug = {r["slug"]: r for r in body["repos"]}
+    assert body["count"] == 2
+    assert by_slug["r1"]["branch_state"] == "found"
+    assert by_slug["r1"]["resolved_branch"] == "release/x"
+    assert by_slug["r2"]["branch_state"] == "not_found"
+    assert by_slug["r2"]["resolved_branch"] == ""
+
+
+def test_repos_quick_con_origin_aplica_filtros_de_proyecto(monkeypatch):
+    """BBIT-58: los filtros project_prefixes/blacklist se aplican sobre el
+    branch_state resuelto (repos sin la rama y fuera del scope quedan afuera)."""
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True), "J")
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [
+                SimpleNamespace(slug="api-x", name="API X", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="api-y", name="API Y", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="web-z", name="WEB Z", workspace="ws", default_branch="master"),
+            ]
+        def repos_with_branch(self, origin, prefixes=None, repos=None):
+            return [
+                SimpleNamespace(slug="api-x", name="API X", workspace="ws", default_branch="master", resolved_branch="release/x"),
+                SimpleNamespace(slug="web-z", name="WEB Z", workspace="ws", default_branch="master", resolved_branch="release/x"),
+            ]
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    body = client.get(
+        "/api/repos-quick",
+        params={"origin": "release/x", "destination": "master", "project_prefixes": "api"},
+    ).json()
+    by_slug = {r["slug"]: r for r in body["repos"]}
+    # api-x y api-y matchean el prefijo "api"; web-z queda afuera del scope.
+    # api-x tiene la rama (found); api-y no la tiene (not_found, la descarta el front).
+    assert body["count"] == 2
+    assert by_slug["api-x"]["branch_state"] == "found"
+    assert by_slug["api-y"]["branch_state"] == "not_found"

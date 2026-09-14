@@ -236,7 +236,10 @@ export class Home implements OnInit {
 
   repos = signal<ScanRepo[]>([]);
   projects = signal<ScanProject[]>([]);
-  reposCache = signal<{slug: string, name: string, workspace: string, default_branch: string}[]>([]);
+  // BBIT-58: repos-quick resuelve branch_state (found/not_found) cuando se
+  // pasa origin+destination; el cache local filtra los sin la rama antes de
+  // pintar (displayFilteredRepos).
+  reposCache = signal<{slug: string, name: string, workspace: string, default_branch: string, resolved_branch?: string, branch_state?: string}[]>([]);
   params = signal<SsmParam[]>([]);
   removed = signal<RemovedParam[]>([]);
   scanMode = 'diff';
@@ -1219,6 +1222,8 @@ reportOpen = signal(false);
     
     this.http.get<any>('/api/repos-quick', {
       params: {
+        origin: this.origin,
+        destination: this.projectsDest(),
         project_prefixes: projectPrefixesParam,
         exclude: excludeParam,
       }
@@ -1247,6 +1252,12 @@ reportOpen = signal(false);
     const blacklist = this.blacklisted();
     
     const filtered = this.reposCache().filter((r: any) => {
+      // BBIT-58: repos sin la rama origen quedan fuera de la tabla. El campo
+      // branch_state llega de repos-quick cuando se pasa origin+destination;
+      // si no viene (retrocompat), se muestra el repo (lo decide el SSE).
+      if ('branch_state' in r && r.branch_state === 'not_found') {
+        return false;
+      }
       // Aplicar filtros de prefijo de proyecto
       if (projectPrefixesParam) {
         const prefixes = projectPrefixesParam.split(',').filter(p => p.trim());

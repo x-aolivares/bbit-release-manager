@@ -260,4 +260,56 @@ describe('Home (BBIT-56: columnas de ambiente bajo demanda)', () => {
     es.emit('done', JSON.stringify({}));
     expect(component.repos().map((r) => r.slug)).toEqual(['r1']);
   });
+
+  it('repos-quick consultado con origin+destination: la tabla solo pinta repos with branch_state found', async () => {
+    const { component, httpMock } = await mountHome();
+    component.origin = 'release/x';
+    component.reposCache.set([]);
+    component.loadRepos();
+
+    // El request de repos-quick lleva origin y destination.
+    const req = httpMock.expectOne((r) => r.url === '/api/repos-quick');
+    expect(req.request.params.get('origin')).toBe('release/x');
+    expect(req.request.params.get('destination')).toBe('master');
+
+    req.flush({
+      repos: [
+        { slug: 'r1', name: 'R1', workspace: 'ws', default_branch: 'master', branch_state: 'found', resolved_branch: 'release/x' },
+        { slug: 'r2', name: 'R2', workspace: 'ws', default_branch: 'master', branch_state: 'not_found', resolved_branch: '' },
+      ],
+      count: 2,
+    });
+
+    // displayFilteredRepos excluye repos sin la rama antes de pintar.
+    expect(component.repos().map((r) => r.slug)).toEqual(['r1']);
+
+    // La fase pesada sigue con SSE solo para los repos de la tabla.
+    const es = MockEventSource.last();
+    expect(es.url).toContain('prefixes=uat');
+    es.emit('repo', repoItem('r1', deploy('uat', 'r1')));
+    es.emit('stats', JSON.stringify({ repos: 1, with_pr: 0, prod: 0 }));
+    es.emit('done', JSON.stringify({}));
+    expect(component.repos().map((r) => r.slug)).toEqual(['r1']);
+  });
+
+  it('reposCache sin branch_state (retrocompat): todos los repos se pintan como placeholders', async () => {
+    const { component } = await mountHome();
+    component.origin = 'release/x';
+    component.reposCache.set([
+      { slug: 'r1', name: 'R1', workspace: 'ws', default_branch: 'master' },
+      { slug: 'r2', name: 'R2', workspace: 'ws', default_branch: 'master' },
+    ]);
+    component.loadRepos();
+
+    // Sin branch_state el filtro BBIT-58 no aplica (lo decide el SSE).
+    expect(component.repos().map((r) => r.slug)).toEqual(['r1', 'r2']);
+
+    const es = MockEventSource.last();
+    // r2 sin la rama llega del SSE como visible:false y se saca de la tabla.
+    es.emit('repo', JSON.stringify({ slug: 'r2', visible: false, reason: 'branch_not_found', branch_state: 'not_found' }));
+    es.emit('repo', repoItem('r1', deploy('uat', 'r1')));
+    es.emit('stats', JSON.stringify({ repos: 1, with_pr: 0, prod: 0 }));
+    es.emit('done', JSON.stringify({}));
+    expect(component.repos().map((r) => r.slug)).toEqual(['r1']);
+  });
 });
