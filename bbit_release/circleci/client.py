@@ -259,42 +259,51 @@ class CircleCiClient:
 
         BBIT-41: un proyecto sin pipelines devuelve 404; se trata como lista
         vacía y se cachea (no vuelve a golpear la API hasta expirar el TTL).
+
+        BBIT-43: las pipelines de TAGS ya no se cachean por tag (kind='tag',
+        N copias idénticas de la misma página). Se cachea UNA sola página
+        'latest' por proyecto keyed (slug, kind=latest) y cada tag filtra
+        client-side sobre esa misma página: N tags = 1 request en frío.
         """
-        params: dict = {"limit": 20}
-        key = ""
-        kind = ""
+        slug = self.project_slug(repo)
+        if tag:
+            return [
+                p for p in self._pipelines_latest_page(repo)
+                if (p.get("vcs") or {}).get("tag") == tag
+            ]
         if branch:
-            params["branch"] = branch
-            key, kind = branch, "branch"
-        elif tag:
-            key, kind = tag, "tag"
-        
-        if self._cache is not None and key:
-            cached = self._cache.get_circleci_pipelines(self.project_slug(repo), key, kind)
+            params: dict = {"limit": 20, "branch": branch}
+            if self._cache is not None:
+                cached = self._cache.get_circleci_pipelines(slug, branch, "branch")
+                if cached is not None:
+                    return cached
+            items = self._pipeline_page(f"/project/{slug}/pipeline", params)
+            if self._cache is not None:
+                self._cache.set_circleci_pipelines(slug, branch, "branch", items)
+            return items
+        return self._pipelines_latest_page(repo)
+
+    def _pipelines_latest_page(self, repo: str) -> list[dict]:
+        """La página más reciente de pipelines del proyecto, cacheada por slug.
+
+        Todos los tags filtran client-side sobre esta misma página (BBIT-43).
+        El lock evita duplicar el fetch cuando N tags entran en frío a la vez
+        (sustituye al viejo per-repo ``_pipeline_lock`` de las keys por tag).
+        """
+        slug = self.project_slug(repo)
+        if self._cache is not None:
+            cached = self._cache.get_circleci_pipelines(slug, "latest", "latest")
             if cached is not None:
                 return cached
-        
-        if tag:
-            # Para tags: una sola página de las pipelines más recientes del
-            # proyecto (no hay filtro server-side por tag), filtrada
-            # client-side. Si el tag buscado no está en esa página reciente
-            # no se encuentra — trade-off aceptado a cambio de no paginar
-            # el histórico completo del proyecto por cada tag.
-            project_pipelines = self._pipeline_page(
-                f"/project/{self.project_slug(repo)}/pipeline", {"limit": 20},
-            )
-            items = [p for p in project_pipelines
-                     if (p.get("vcs") or {}).get("tag") == tag]
-        else:
-            # Para branches: CircleCI filtra server-side por branch, así que
-            # una sola página alcanza (la última pipeline de esa rama).
-            items = self._pipeline_page(
-                f"/project/{self.project_slug(repo)}/pipeline", params,
-            )
-        
-        if self._cache is not None and key:
-            self._cache.set_circleci_pipelines(self.project_slug(repo), key, kind, items)
-        return items
+        with self._pipeline_lock:
+            if self._cache is not None:
+                cached = self._cache.get_circleci_pipelines(slug, "latest", "latest")
+                if cached is not None:
+                    return cached
+            items = self._pipeline_page(f"/project/{slug}/pipeline", {"limit": 20})
+            if self._cache is not None:
+                self._cache.set_circleci_pipelines(slug, "latest", "latest", items)
+            return items
 
     def workflows(self, pipeline_id: str) -> list[dict]:
         if self._cache is not None:
@@ -455,8 +464,9 @@ class CircleCiClient:
 
         Los pipelines de tags distintos se resuelven en paralelo (acotado a
         pocos workers); ``ex.map`` preserva el orden de ``tags`` en el
-        resultado. El lock de ``_project_pipelines`` evita paginar dos veces
-        el mismo proyecto en caché fría.
+        resultado. Todos los tags leen la MISMA página 'latest' cacheada por
+        proyecto (BBIT-43): en frío solo hay 1 request a CircleCI, y el lock
+        de ``_pipelines_latest_page`` evita paginar dos veces el proyecto.
         """
         result: dict[str, DeployJob | None] = {t: None for t in tags}
         if not tags:

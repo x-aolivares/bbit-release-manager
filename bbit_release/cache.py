@@ -388,6 +388,20 @@ class ReleaseCache:
                     self._conn.execute(
                         f"ALTER TABLE aws_environment ADD COLUMN {col} {ddl}"
                     )
+
+            # BBIT-43: depreca las keys de pipelines keyed por tag (kind='tag').
+            # Antes cada tag guardaba una copia idéntica de la página; ahora hay
+            # una sola página 'latest' por proyecto. Se borran las filas viejas
+            # para no arrastrar basura hasta que venza el TTL.
+            cur = self._conn.cursor()
+            try:
+                cur.execute(
+                    "DELETE FROM request "
+                    "WHERE rt_id = (SELECT rt_id FROM request_type WHERE rt_name = 'circleci_pipelines') "
+                    "AND is_id IN (SELECT is_id FROM init_sesion WHERE is_details = '{\"kind\": \"tag\"}')"
+                )
+            finally:
+                cur.close()
             self._conn.commit()
 
     def _drop_legacy_tables(self) -> None:

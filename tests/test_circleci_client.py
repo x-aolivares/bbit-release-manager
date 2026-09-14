@@ -387,11 +387,14 @@ def test_pipelines_cache_distinguishes_branch_and_tag(tmp_path):
 
     def pipelines(request):
         branch = request.url.params.get("branch", "")
-        calls.append(branch if branch else "<<tag>>")
+        calls.append(branch if branch else "<<tags>>")
         if branch:
             items = [{"id": "p", "number": 1, "vcs": {"revision": "abc", "branch": branch}}]
         else:
-            items = [{"id": "p", "number": 1, "vcs": {"revision": "abc", "tag": "v1.0"}}]
+            items = [
+                {"id": "p1", "number": 1, "vcs": {"revision": "abc", "tag": "v1.0"}},
+                {"id": "p2", "number": 2, "vcs": {"revision": "def", "tag": "v2.0"}},
+            ]
         return httpx.Response(200, json={"next_page_token": None, "items": items})
 
     cache = _make_cache(tmp_path)
@@ -401,17 +404,59 @@ def test_pipelines_cache_distinguishes_branch_and_tag(tmp_path):
     try:
         assert [p["id"] for p in client.pipelines("r1", branch="release")] == ["p"]
         assert [p["id"] for p in client.pipelines("r1", branch="release")] == ["p"]
-        assert calls == ["release"]  # 2do pega en el cache
-        assert [p["id"] for p in client.pipelines("r1", tag="v1.0")] == ["p"]
-        assert calls == ["release", "<<tag>>"]  # tag no colisiona con branch
-        assert [p["id"] for p in client.pipelines("r1", tag="v1.0")] == ["p"]
-        assert calls == ["release", "<<tag>>"]  # 2do tag pega en el cache
+        assert calls == ["release"]  # 2do pega en el cache (kind=branch)
+        assert [p["id"] for p in client.pipelines("r1", tag="v1.0")] == ["p1"]
+        assert calls == ["release", "<<tags>>"]
+        assert [p["id"] for p in client.pipelines("r1", tag="v2.0")] == ["p2"]
+        assert calls == ["release", "<<tags>>"]  # 2 tags comparten la página 'latest'
+        assert [p["id"] for p in client.pipelines("r1", tag="v1.0")] == ["p1"]
+        assert calls == ["release", "<<tags>>"]  # y el 2do v1.0 es hit
         rt = cache.get_rt("circleci_pipelines")
         assert rt is not None
         total = cache._fetchone(
             "SELECT COUNT(*) FROM request WHERE rt_id = ?", (rt["id"],)
         )[0]
-        assert total == 3  # branch + lista full del proyecto + tag, con hit en 2do
+        assert total == 2  # kind=branch + kind=latest (una sola fila para tags)
+    finally:
+        client.close()
+        cache.close()
+
+
+def test_deploys_for_tags_una_sola_pagina_latest(tmp_path):
+    calls = {"c": 0}
+
+    def pipelines(request):
+        calls["c"] += 1
+        return httpx.Response(200, json={"next_page_token": None, "items": [
+            {"id": f"p{i}", "number": i, "vcs": {"revision": f"r{i}", "tag": f"v{i}"}}
+            for i in range(1, 11)
+        ]})
+
+    def workflows(request):
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [{"id": "w", "name": "deploy", "status": "running", "created_at": "x"}],
+        })
+
+    def jobs(request):
+        return httpx.Response(200, json={
+            "next_page_token": None,
+            "items": [{"id": "jd", "type": "build", "name": "deploy", "status": "running"}],
+        })
+
+    routes = {
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): pipelines,
+    }
+    for i in (1, 2, 3):
+        routes[("GET", f"/api/v2/pipeline/p{i}/workflow")] = workflows
+    routes[("GET", "/api/v2/workflow/w/job")] = jobs
+    cache = _make_cache(tmp_path)
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport(routes), cache=cache)
+    try:
+        found = client.deploys_for_tags("r1", ["v1", "v2", "v3"])
+        assert calls["c"] == 1  # 3 tags -> 1 sola página 'latest' consultada
+        assert set(found) == {"v1", "v2", "v3"}
+        assert all(v is not None and v.status == "running" for v in found.values())
     finally:
         client.close()
         cache.close()
