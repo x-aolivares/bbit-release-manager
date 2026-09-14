@@ -526,6 +526,94 @@ def test_scan_returns_repos_with_pr_and_params(monkeypatch):
     assert body["scan"]["repos"][0]["tags"][0]["name"] == "v1"
 
 
+def test_scan_repo_42_slice_vivo_se_re_resuelve_sin_reescanear(monkeypatch, tmp_path):
+    from bbit_release.cache import get_cache
+    from bbit_release.circleci.client import DeployJob
+
+    calls = {"scan_commit": 0, "tags": 0, "deploy_for_tag": 0}
+    deploy_ready = {"ok": False}
+    clock = {"t": 1000.0}
+    monkeypatch.setattr("bbit_release.cache.time.time", lambda: clock["t"])
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (
+                SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True),
+                "Jane (@jane)",
+            )
+        def close(self):
+            pass
+        def repos_with_branch(self, origin, prefixes=None):
+            return [SimpleNamespace(slug="r1", name="R1", workspace="ws", default_branch="master")]
+        def commit_for_branch(self, repo, branch, resolved=""):
+            if branch == "release/x":
+                calls["scan_commit"] += 1
+            return "abc123"
+        def has_commits_ahead(self, repo, branch, base):
+            return True
+        def tags_on_commit(self, repo, commit):
+            calls["tags"] += 1
+            return [{"name": "uat-7", "date": "x"}]
+        def find_pr(self, repo, origin, destination):
+            return None
+        def branch_url(self, repo, branch):
+            return "http://atlassian/branch"
+        def diff(self, repo, destination, origin):
+            return SimpleNamespace(files=[])
+        def list_files(self, repo, ref, tree=""):
+            return []
+        def raw_file(self, repo, ref, path):
+            return None
+
+    class StubCi:
+        vcs = "bb"
+        def deploys_for_tags(self, repo, tags):
+            return {t: None for t in tags}
+        def project_id(self, repo):
+            return "proj-1"
+        def deploy_for_tag(self, repo, tag, commit, env):
+            calls["deploy_for_tag"] += 1
+            if not deploy_ready["ok"]:
+                return None
+            return DeployJob(
+                workflow="deploy-uat", pipeline_id="p1", pipeline_number=7,
+                status="success", created_at="x", url="http://ci", job="deploy",
+                approval="",
+            )
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: StubCi())
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    def _scan():
+        resp = client.get("/api/flow", params={"origin": "release/x", "destination": "master", "prefixes": "uat"})
+        return resp.json()["scan"]["repos"][0]
+
+    item1 = _scan()
+    after1 = calls["scan_commit"]
+    assert item1["commit"] == "abc123"
+    assert item1["tags"][0]["name"] == "uat-7"
+    assert calls["tags"] == 1
+    assert item1["deploys"]["uat"] is None
+
+    # Hit inmediato: ni commit ni tags se re-consultam; deploy sigue None.
+    item2 = _scan()
+    assert calls["scan_commit"] == after1
+    assert calls["tags"] == 1
+    assert item2["deploys"]["uat"] is None
+
+    # Slice de CircleCI vence (TTL 120s); el item estático (TTL 1800s) sigue
+    # vigente: tags/deploys se re-resuelven on-demand sin re-escancar Bitbucket.
+    clock["t"] = 1160.0
+    deploy_ready["ok"] = True
+    item3 = _scan()
+    assert calls["scan_commit"] == after1  # el estático no se re-escanea
+    assert calls["tags"] == 2              # el slice vencido se re-resuelve
+    assert item3["deploys"]["uat"]["status"] == "success"
+
+
 def test_scan_requires_session():
     resp = client.get("/api/flow", params={"origin": "release/x"})
     assert resp.status_code == 401

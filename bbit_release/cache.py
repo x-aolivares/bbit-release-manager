@@ -97,6 +97,11 @@ _SEED_REQUEST_TYPES = {
         f"{_BITBUCKET_BASE}/repositories/{{workspace}}/{{repo}}/commits/{{branch}}",
         {"method": "GET"},
     ),
+    "scan_repo_tags": (
+        "CircleCi", 120,
+        f"{_CIRCLECI_BASE}/project/{{slug}}/pipeline",
+        {"method": "GET"},
+    ),
     "diff_ssm": (
         "Bitbucket", 1800,
         f"{_BITBUCKET_BASE}/repositories/{{workspace}}/{{repo}}/diff/{{to}}?from={{from}}",
@@ -1164,6 +1169,18 @@ class ReleaseCache:
 
     def set_scan_repo(self, origin: str, destination: str, slug: str, payload: dict) -> None:
         self._set_cached("scan_repo", origin, destination, {"repo": slug}, payload)
+
+    def get_scan_repo_tags(self, origin: str, destination: str, slug: str, commit: str) -> dict | None:
+        """Slice vivo (tags/deploys de CircleCI) del scan de un repo,
+        keyed (origin, destination) + (repo, commit).
+
+        TTL corto (120s): un deploy nuevo se refleja sin invalidar el item
+        estático de Bitbucket (BBIT-42). Miss → re-resolver on-demand.
+        """
+        return self._get_cached("scan_repo_tags", origin, destination, {"repo": slug, "commit": commit})
+
+    def set_scan_repo_tags(self, origin: str, destination: str, slug: str, commit: str, payload: dict) -> None:
+        self._set_cached("scan_repo_tags", origin, destination, {"repo": slug, "commit": commit}, payload)
 
     def get_diff(self, origin: str, destination: str, prefixes: list[str] | None, exclude: set[str] | None, ssm_prefixes: list[str] | None = None):
         return self._get_cached(

@@ -817,6 +817,93 @@ def _safe_call(fn, default):
         return default
 
 
+def _empty_tags_slice(clean):
+    return {
+        "tags": [],
+        "deploys": {e.lower(): None for e in clean},
+        "match_tag": {e.lower(): None for e in clean},
+        "ci_project": None,
+        "ci_error": None,
+    }
+
+
+def _resolve_tags_slice(client, ci, slug, commit, clean, match_commit="", tags=None):
+    """Slice vivo de tags/deploys de CircleCI para el scan de un repo.
+
+    Independiente del item estático: se cachea por ``(slug, commit)`` con TTL
+    corto (BBIT-42) para que un deploy nuevo en CircleCI se refleje sin
+    invalidar ni re-escancar Bitbucket. Los tags vienen de Bitbucket y se
+    incluyen siempre; los deploys/asociaciones a CircleCI se resuelven solo
+    si ``ci`` está configurado. ``match_commit`` es el commit contra el que
+    se matchea ``vcs.revision`` del pipeline; ``tags=None`` fuerza a
+    re-consultar ``tags_on_commit``.
+    """
+    if tags is None:
+        try:
+            tags = client.tags_on_commit(slug, commit)
+        except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+            log.warning("scan tags %s: tags_on_commit falló: %s", slug, exc)
+            tags = []
+    tag_deploys = {}
+    ci_error = None
+    ci_project = None
+    if ci is not None:
+        names = [t["name"] for t in tags]
+        if names:
+            try:
+                tag_deploys = ci.deploys_for_tags(slug, names)
+            except CircleCiError as exc:
+                ci_error = str(exc)
+            ci_project = _safe_call(lambda: ci.project_id(slug), None)
+    tag_rows = [{"name": t["name"], "deploy": _serialize_deploy(tag_deploys.get(t["name"]))} for t in tags]
+    match_tag: dict[str, str | None] = {}
+    deploys: dict[str, dict | None] = {}
+    env_tasks: list[tuple[str, str]] = []
+    for prefix in clean:
+        env = prefix.lower()
+        found_tag = None
+        for t in tags:
+            if _tag_match(env).match(t["name"]):
+                found_tag = t["name"]
+                break
+        match_tag[env] = found_tag
+        deploys[env] = None
+        if ci is not None and found_tag and match_commit:
+            env_tasks.append((env, found_tag))
+    if env_tasks:
+        def _env_deploy(task):
+            env, found_tag = task
+            deploy = None
+            err = None
+            try:
+                deploy = ci.deploy_for_tag(slug, found_tag, match_commit, env)
+            except CircleCiError as exc:
+                err = str(exc)
+            return env, _serialize_deploy(deploy), err
+
+        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(env_tasks) or 1)) as ex:
+            results = list(ex.map(_env_deploy, env_tasks))
+        for env, deploy, err in results:
+            deploys[env] = deploy
+            if err:
+                ci_error = ci_error or err
+    return {
+        "tags": tag_rows,
+        "deploys": deploys,
+        "match_tag": match_tag,
+        "ci_project": ci_project,
+        "ci_error": ci_error,
+    }
+
+
+def _merge_tags_slice(item, slice_data, ci):
+    item["tags"] = slice_data["tags"]
+    item["deploys"] = slice_data["deploys"]
+    item["match_tag"] = slice_data["match_tag"]
+    item["ci_project"] = slice_data["ci_project"]
+    item["ci_vcs"] = ci.vcs if ci else None
+
+
 def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=None, with_tags=True):
     """Payload de un repo (etapa paralela de /scan).
 
@@ -835,6 +922,10 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
     apenas se resuelve para que el frontend pinte la fila por campo async.
     El retorno ``(item, err)`` no cambia (el item completo sigue servido por
     el evento ``repo`` final).
+
+    BBIT-42: el item cacheado (``scan_repo``) es ESTÁTICO (sin tags/deploys);
+    el slice vivo de CircleCI se resuelve y cachea por ``(slug, commit)`` con
+    TTL corto. Un deploy nuevo se refleja sin invalidar el scan completo.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     
@@ -843,19 +934,14 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
     # BBIT-36 P2: scan por repo en SQLite keyed por (origin, destination,
     # slug). Cache hit → se sirve SIN re-consultar Bitbucket/CircleCI: cambiar
     # project_prefixes/blacklist = vista (mostrar/ocultar filas), no re-escaneo.
-    # Solo se re-consulta si el request pide tags (with_tags=1) y el payload
-    # cacheado no los trae (se almacenó con with_tags=0).
+    # BBIT-42: el item cacheado es ESTÁTICO (sin tags/deploys): el slice vivo
+    # (tags/deploys de CircleCI) vive en un key propio (slug, commit) con TTL
+    # corto; si venció, se re-resuelve on-demand sin tocar el item estático.
     request_with = bool(with_tags)
     cache = get_cache()
     cached = cache.get_scan_repo(origin, destination, repo.slug)
-    if cached is not None and (not request_with or cached.get("with_tags")):
+    if cached is not None:
         item = dict(cached["item"])
-        if not request_with:
-            # Contrato with_tags=0: el item llega sin tags/deploys/match_tag.
-            item["tags"] = []
-            item["deploys"] = {e.lower(): None for e in clean}
-            item["match_tag"] = {e.lower(): None for e in clean}
-            item["ci_project"] = None
         if ctx is not None:
             # Reusa el PR/origin_ref ya resueltos para que el diff no repita
             # find_pr/commit_for_branch sobre repos cacheados (BBIT-36 P4).
@@ -864,7 +950,20 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
                 _c["pr"] = cached.get("pr_raw")
             if "origin_ref" not in _c:
                 _c["origin_ref"] = item.get("commit", "")
-        return item, cached.get("ci_error")
+        if not request_with:
+            # Contrato with_tags=0: el item llega sin tags/deploys/match_tag.
+            _merge_tags_slice(item, _empty_tags_slice(clean), ci)
+            return item, None
+        commit = item.get("commit") or ""
+        slice_data = None
+        if commit:
+            slice_data = cache.get_scan_repo_tags(origin, destination, repo.slug, commit)
+        if slice_data is None:
+            slice_data = _resolve_tags_slice(client, ci, repo.slug, commit, clean, match_commit=commit)
+            if commit:
+                cache.set_scan_repo_tags(origin, destination, repo.slug, commit, slice_data)
+        _merge_tags_slice(item, slice_data, ci)
+        return item, slice_data["ci_error"]
 
     def _emit(field, value):
         if on_field is not None:
@@ -914,16 +1013,6 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
         branch_head_fut = None
         if ci is not None and pr and pr.get("source_commit"):
             branch_head_fut = ex.submit(lambda: client.commit_for_branch(repo.slug, origin, resolved=resolved))
-        
-        # Request 6: CircleCI deploys (depende de tags)
-        ci_deploys_fut = None
-        ci_project_fut = None
-        if ci is not None and tags:
-            ci_deploys_fut = ex.submit(lambda: _safe_call(
-                lambda: ci.deploys_for_tags(repo.slug, [t["name"] for t in tags]),
-                {}
-            ))
-            ci_project_fut = ex.submit(lambda: _safe_call(lambda: ci.project_id(repo.slug), None))
     
     # FASE 2: Recopilar resultados (ya están esperados)
     if ctx is not None:
@@ -947,68 +1036,19 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
         )
         match_commit = branch_head or commit
     
-    # Procesar tags y deploys
-    ci_error = None
-    ci_project = None
-    tag_rows = []
-    tag_deploys = {}
-    
-    if ci_deploys_fut:
-        tag_deploys = ci_deploys_fut.result()
-        ci_error = None  # Si llegamos acá, no hay error
-    
-    if ci_project_fut:
-        ci_project = ci_project_fut.result()
-    
-    for t in tags:
-        tag_rows.append({"name": t["name"], "deploy": _serialize_deploy(tag_deploys.get(t["name"]))})
-    _emit("tags", tag_rows)
-
-    deploys: dict[str, dict | None] = {}
-    match_tag: dict[str, str | None] = {}
-    env_tasks: list[tuple[str, str]] = []
-    for prefix in clean:
-        env = prefix.lower()
-        found_tag = None
-        for t in tags:
-            if _tag_match(env).match(t["name"]):
-                found_tag = t["name"]
-                break
-        match_tag[env] = found_tag
-        deploys[env] = None
-        if ci is not None and with_tags and not found_tag:
-            log.info("scan: %s env=%s sin tag %s-en en commit %s", repo.slug, env, env, match_commit[:12])
-        if ci is not None and found_tag and match_commit:
-            env_tasks.append((env, found_tag))
-    
-    # Lanzar requests de deploy_for_tag en paralelo
-    def _env_deploy(task):
-        """Deploy por tag/env aislado: devuelve (env, payload, err) para
-        mergear el resultado en el hilo principal sin tocar ci_error."""
-        env, found_tag = task
-        deploy = None
-        err = None
-        log.info(
-            "scan: %s env=%s tag=%s commit=%s -> buscando deploy_for_tag",
-            repo.slug, env, found_tag, match_commit[:12],
+    # BBIT-42: el slice vivo (tags/deploys) se resuelve aparte del item
+    # estático y se cachea por (slug, commit) con el TTL corto de CircleCI.
+    slice_data = _empty_tags_slice(clean)
+    if with_tags:
+        slice_data = _resolve_tags_slice(
+            client, ci, repo.slug, commit, clean,
+            match_commit=match_commit, tags=tags,
         )
-        try:
-            deploy = ci.deploy_for_tag(repo.slug, found_tag, match_commit, env)
-        except CircleCiError as exc:
-            err = str(exc)
-        log.info("scan: %s env=%s deploy=%s", repo.slug, env, f"{deploy.status}" if deploy else "None")
-        return env, _serialize_deploy(deploy), err
-
-    if env_tasks:
-        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(env_tasks) or 1)) as ex:
-            results = list(ex.map(_env_deploy, env_tasks))
-        for env, deploy, err in results:
-            deploys[env] = deploy
-            if err:
-                ci_error = ci_error or err
-    _emit("match_tag", match_tag)
-    _emit("deploys", deploys)
-    _emit("ci_project", ci_project)
+        cache.set_scan_repo_tags(origin, destination, repo.slug, commit, slice_data)
+    _emit("tags", slice_data["tags"])
+    _emit("match_tag", slice_data["match_tag"])
+    _emit("deploys", slice_data["deploys"])
+    _emit("ci_project", slice_data["ci_project"])
     _emit("ci_vcs", ci.vcs if ci else None)
 
     item = {
@@ -1020,20 +1060,14 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
         "branch_url": client.branch_url(repo.slug, origin),
         "commit": commit,
         "no_changes": no_changes,
-        "tags": tag_rows,
         "pr": _serialize_pr(pr),
-        "deploys": deploys,
-        "match_tag": match_tag,
-        "ci_project": ci_project,
-        "ci_vcs": ci.vcs if ci else None,
     }
+    _merge_tags_slice(item, slice_data, ci)
     cache.set_scan_repo(origin, destination, repo.slug, {
-        "item": item,
-        "with_tags": request_with,
-        "ci_error": ci_error,
+        "item": {k: v for k, v in item.items() if k not in ("tags", "deploys", "match_tag", "ci_project", "ci_vcs")},
         "pr_raw": pr,
     })
-    return item, ci_error
+    return item, slice_data["ci_error"]
 
 
 def _failed_repo_item(repo, client, origin, exc):
