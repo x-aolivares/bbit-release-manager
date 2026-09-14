@@ -64,6 +64,83 @@ def test_snapshot_none_si_el_ref_no_existe():
         client.close()
 
 
+def test_snapshot_cache_hit_evita_redescarga(tmp_path):
+    import io
+    import tarfile
+
+    from bbit_release.cache import ReleaseCache
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        info = tarfile.TarInfo("ws-r1-abc/")
+        info.type = tarfile.DIRTYPE
+        info.mode = 0o755
+        tar.addfile(info, io.BytesIO(b""))
+        data = b"a: {{resolve:ssm:/config/x}}"
+        info = tarfile.TarInfo("ws-r1-abc/app.yml")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    content = buf.getvalue()
+    calls = {"c": 0}
+
+    def archive(request):
+        calls["c"] += 1
+        return httpx.Response(
+            200, content=content, headers={"Content-Type": "application/x-tar-gz"}
+        )
+
+    cache = ReleaseCache(tmp_path / "cache.db")
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/ws/r1/get/abc.tar.gz"): archive,
+    }), cache=cache)
+    try:
+        snap1 = client.snapshot("r1", "abc")
+        snap2 = client.snapshot("r1", "abc")
+        assert calls["c"] == 1  # el 2do pega en SQLite, no re-descarga
+        assert snap1 == snap2 == {"app.yml": "a: {{resolve:ssm:/config/x}}"}
+    finally:
+        client.close()
+        cache.close()
+
+
+def test_snapshot_force_redescarga(tmp_path):
+    import io
+    import tarfile
+
+    from bbit_release.cache import ReleaseCache
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        info = tarfile.TarInfo("ws-r1-abc/")
+        info.type = tarfile.DIRTYPE
+        info.mode = 0o755
+        tar.addfile(info, io.BytesIO(b""))
+        data = b"x"
+        info = tarfile.TarInfo("ws-r1-abc/f.txt")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    content = buf.getvalue()
+    calls = {"c": 0}
+
+    def archive(request):
+        calls["c"] += 1
+        return httpx.Response(
+            200, content=content, headers={"Content-Type": "application/x-tar-gz"}
+        )
+
+    cache = ReleaseCache(tmp_path / "cache.db")
+    client = BitbucketClient("ws", "tok", transport=_transport({
+        ("GET", "/ws/r1/get/abc.tar.gz"): archive,
+    }), cache=cache)
+    try:
+        client.snapshot("r1", "abc")
+        client.snapshot("r1", "abc", force=True)
+        assert calls["c"] == 2  # force saltea la caché y re-descarga
+    finally:
+        client.close()
+        cache.close()
+
+
 def test_session_ok():
     def user(request):
         return httpx.Response(200, json={"username": "jane", "display_name": "Jane"})

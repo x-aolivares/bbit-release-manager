@@ -1324,7 +1324,7 @@ def flow(
     else:
         diff_raw = _compute_diff(
             data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
-            dest_by_repo=dest_by_repo,
+            dest_by_repo=dest_by_repo, force=bool(force),
         )
 
     diff_enriched = _enrich_diff_ssm(diff_raw, cfg_diff)
@@ -1426,7 +1426,7 @@ def flow_stream(
             ctx.update({r.slug: {} for r in repos_list})
             master_fut = None
             if mode == "diff":
-                master_fut = ex.submit(_resolve_masters, data.client, repos_list, destination, ssm_prefixes, cache, ctx)
+                master_fut = ex.submit(_resolve_masters, data.client, repos_list, destination, ssm_prefixes, cache, ctx, bool(force))
 
             # BBIT-35 P4: emitir los repos sin la rama ANTES del scan, para que el
             # frontend remueva sus filas placeholder con branch_state=not_found.
@@ -1487,7 +1487,7 @@ def flow_stream(
             dest_by_repo = master_fut.result() if master_fut is not None else None
             diff_raw = _compute_diff(
                 data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
-                dest_by_repo=dest_by_repo,
+                dest_by_repo=dest_by_repo, force=bool(force),
             )
             diff_enriched = _enrich_diff_ssm(diff_raw, cfg_diff)
             yield _event("diff", diff_enriched)
@@ -1800,19 +1800,24 @@ def _ref_for(client, slug: str, branch: str) -> str:
         return branch
 
 
-def _snapshot_for(client, slug: str, ref: str, ctx: dict | None = None) -> dict[str, str] | None:
-    """Snapshot {path: contenido} con cache por (slug, ref) en ctx.
+def _snapshot_for(client, slug: str, ref: str, ctx: dict | None = None, force: bool = False) -> dict[str, str] | None:
+    """Snapshot {path: contenido} con cache por (slug, ref).
+
+    La caché de primer nivel es el ctx del request (dedupe intra-request);
+    la de segundo el SQLite keyed (slug, ref) con TTL 3600 (BBIT-44), que
+    persiste entre requests y al cambiar filtros. ``force`` saltea ambas y
+    re-descarga el tarball (BBIT-44).
 
     Si el cliente no ofrece snapshot (o el ref no existe) devuelve None
     y el flujo cae en list_files + raw_file."""
     entry = (ctx or {}).setdefault(slug, {})
     snaps = entry.setdefault("snapshots", {})
-    if ref in snaps:
+    if not force and ref in snaps:
         return snaps[ref]
     if not hasattr(client, "snapshot"):
         return None
     try:
-        snap = client.snapshot(slug, ref)
+        snap = client.snapshot(slug, ref, force=force)
     except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
         log.warning("snapshot %s %s falló: %s", slug, ref, exc)
         return None
@@ -1820,29 +1825,32 @@ def _snapshot_for(client, slug: str, ref: str, ctx: dict | None = None) -> dict[
     return snap
 
 
-def _read_all_params(client, slug: str, ref: str, prefixes, ctx: dict | None = None) -> set:
+def _read_all_params(client, slug: str, ref: str, prefixes, ctx: dict | None = None, force: bool = False) -> set:
     """Params SSM de todos los archivos de texto de un ref. Con snapshot
     es un solo tarball; sin él, list_files + raw_file por archivo."""
-    snap = _snapshot_for(client, slug, ref, ctx)
+    snap = _snapshot_for(client, slug, ref, ctx, force=force)
     if snap is not None:
         return _read_files_params(client, slug, ref, list(snap), prefixes, source=snap)
     return _read_files_params(client, slug, ref, client.list_files(slug, ref), prefixes)
 
 
-def _resolve_master(client, repo, destination: str, prefixes, cache, ctx: dict | None = None) -> set:
+def _resolve_master(client, repo, destination: str, prefixes, cache, ctx: dict | None = None, force: bool = False) -> set:
     """Master params de un repo (cache o lectura completa).
 
-    Devuelve el set de tuplas (path, arn) tal como se guarda en disco."""
-    cached_params = cache.get_master(repo.slug, destination)
-    if cached_params is not None:
-        return cached_params
+    Devuelve el set de tuplas (path, arn) tal como se guarda en disco.
+    Con ``force`` se saltea el cache de master params y se re-resuelve
+    (BBIT-44)."""
+    if not force:
+        cached_params = cache.get_master(repo.slug, destination)
+        if cached_params is not None:
+            return cached_params
     entry = (ctx or {}).setdefault(repo.slug, {})
-    dest_ref = entry.get("dest_ref") or ""
+    dest_ref = "" if force else entry.get("dest_ref") or ""
     if not dest_ref:
         dest_ref = _ref_for(client, repo.slug, destination)
         entry["dest_ref"] = dest_ref
     try:
-        params = _read_all_params(client, repo.slug, dest_ref, prefixes, ctx)
+        params = _read_all_params(client, repo.slug, dest_ref, prefixes, ctx, force=force)
     except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
         log.warning("master params %s falló: %s", repo.slug, exc)
         return set()
@@ -1851,7 +1859,7 @@ def _resolve_master(client, repo, destination: str, prefixes, cache, ctx: dict |
     return params
 
 
-def _resolve_masters(client, repos, destination: str, prefixes, cache, ctx: dict | None = None) -> dict[str, set]:
+def _resolve_masters(client, repos, destination: str, prefixes, cache, ctx: dict | None = None, force: bool = False) -> dict[str, set]:
     """Master params de todos los repos en paralelo: {slug: {paths sin ARN}}.
 
     Se usa en el overlap scan+diff: esta fase corre en paralelo con el scan
@@ -1860,7 +1868,7 @@ def _resolve_masters(client, repos, destination: str, prefixes, cache, ctx: dict
     if not repos:
         return dest_by_repo
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(repos) or 1)) as ex:
-        futures = {ex.submit(_resolve_master, client, r, destination, prefixes, cache, ctx): r.slug for r in repos}
+        futures = {ex.submit(_resolve_master, client, r, destination, prefixes, cache, ctx, force): r.slug for r in repos}
         for fut, slug in futures.items():
             dest_by_repo[slug] = {p for p, _ in fut.result()}
     return dest_by_repo
@@ -1877,6 +1885,7 @@ def _compute_diff(
     cache,
     ctx: dict | None = None,
     dest_by_repo: dict[str, set] | None = None,
+    force: bool = False,
 ) -> dict:
     """Computa el payload del diff (sin valores SSM; esos van por overlay).
 
@@ -1898,8 +1907,8 @@ def _compute_diff(
             slug = repo.slug
             try:
                 origin_ref, dest_ref = _repo_refs(client, repo, origin, destination, ctx)
-                origin_params = _read_all_params(client, slug, origin_ref, prefixes, ctx)
-                dest_params = _read_all_params(client, slug, dest_ref, prefixes, ctx)
+                origin_params = _read_all_params(client, slug, origin_ref, prefixes, ctx, force=force)
+                dest_params = _read_all_params(client, slug, dest_ref, prefixes, ctx, force=force)
             except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
                 log.warning("scan all %s falló: %s", slug, exc)
                 return slug, set(), set()
@@ -1925,7 +1934,7 @@ def _compute_diff(
         # Master params de TODOS los repos (cache o lectura completa). Si
         # el overlap ya los resolvió (dest_by_repo precomputado), se reusan.
         if not dest_by_repo:
-            dest_by_repo = _resolve_masters(client, master_repos, destination, prefixes, cache, ctx)
+            dest_by_repo = _resolve_masters(client, master_repos, destination, prefixes, cache, ctx, force=force)
 
         # Etapa A: diffs y selección de archivos con indicio SSM (solo branch repos).
         candidates: list[tuple[str, str, str, str]] = []
@@ -1946,8 +1955,8 @@ def _compute_diff(
         def _file_params(client, cand):
             slug, path, origin_ref, dest_ref = cand
             try:
-                snap_o = _snapshot_for(client, slug, origin_ref, ctx)
-                snap_d = _snapshot_for(client, slug, dest_ref, ctx)
+                snap_o = _snapshot_for(client, slug, origin_ref, ctx, force=force)
+                snap_d = _snapshot_for(client, slug, dest_ref, ctx, force=force)
                 if snap_o is not None and snap_d is not None:
                     raw_origin = snap_o.get(path)
                     raw_dest = snap_d.get(path)

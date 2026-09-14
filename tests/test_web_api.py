@@ -1320,7 +1320,7 @@ def test_diff_lee_params_del_snapshot_si_el_cliente_lo_soporta(monkeypatch):
             return None
         def commit_for_branch(self, repo, branch, resolved=""):
             return "headOrigin" if branch == "release/x" else "headDest"
-        def snapshot(self, slug, ref):
+        def snapshot(self, slug, ref, force=False):
             snapshot_calls.append(ref)
             return {
                 "config/x.yaml": (

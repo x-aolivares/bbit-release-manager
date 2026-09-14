@@ -112,6 +112,11 @@ _SEED_REQUEST_TYPES = {
         f"{_BITBUCKET_BASE}/repositories/{{workspace}}/{{repo}}/src/{{ref}}",
         {"method": "GET"},
     ),
+    "snapshot_archive": (
+        "Bitbucket", 3600,
+        f"https://bitbucket.org/{{workspace}}/{{repo}}/get/{{ref}}.tar.gz",
+        {"method": "GET", "note": "árbol {path: contenido} ya parseado; keyed (slug, ref)"},
+    ),
     "circleci_project": (
         "CircleCi", 3600,
         f"{_CIRCLECI_BASE}/project/{{slug}}",
@@ -1230,6 +1235,13 @@ class ReleaseCache:
     def set_master(self, slug: str, destination: str, params: set) -> None:
         details = _repo_details(bypass_cache=False)
         self._set_cached("get_master_params", slug, destination, details, list(params))
+
+    def get_snapshot_archive(self, slug: str, ref: str) -> dict | None:
+        """Snapshot {path: contenido} persistido, keyed (slug, ref) (BBIT-44)."""
+        return self._get_cached("snapshot_archive", slug, ref, {})
+
+    def set_snapshot_archive(self, slug: str, ref: str, out: dict) -> None:
+        self._set_cached("snapshot_archive", slug, ref, {}, out)
 
     # -- fachadas CircleCI -------------------------------------------------------
 

@@ -559,7 +559,7 @@ class BitbucketClient:
             self._stash_set("GET", api, None, 200, resp.text, ttl_seconds=1800)
         return resp.text
 
-    def snapshot(self, slug: str, ref: str) -> dict[str, str] | None:
+    def snapshot(self, slug: str, ref: str, force: bool = False) -> dict[str, str] | None:
         """Descarga en una request el árbol de un ref: {path: contenido}.
 
         Usa el tarball de `bitbucket.org/{workspace}/{slug}/get/{ref}.tar.gz`
@@ -569,7 +569,17 @@ class BitbucketClient:
         Devuelve None si el ref no existe o el contenido no es un tarball
         utilizable. Los paths salen relativos, sin el prefijo raíz
         `{workspace}-{slug}-{sha}/` del tarball.
+
+        BBIT-44: el árbol ya parseado se persiste en SQLite keyed (slug, ref)
+        con TTL 3600, así los diffs siguientes (cambiando filtros u otro
+        request) no vuelven a bajar el tarball. ``force=True`` re-descarga y
+        refresca la copia sin esperar el TTL.
         """
+        if self.cache is not None and not force:
+            cached = self.cache.get_snapshot_archive(slug, ref)
+            if cached is not None:
+                logger.info("snapshot %s %s: hit en cache (TTL 3600s)", slug, ref)
+                return cached
         url = f"https://bitbucket.org/{self.workspace}/{slug}/get/{ref}.tar.gz"
         _rate_limiter = get_global_rate_limiter()
         _rate_limiter.acquire()
@@ -599,6 +609,8 @@ class BitbucketClient:
         except tarfile.TarError as exc:
             logger.warning("snapshot %s %s: tarball inválido (%s)", slug, ref, exc)
             return None
+        if self.cache is not None:
+            self.cache.set_snapshot_archive(slug, ref, out)
         return out
 
     def list_files(self, slug: str, ref: str, tree: str = "") -> list[str]:
