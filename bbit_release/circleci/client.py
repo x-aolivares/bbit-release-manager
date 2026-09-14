@@ -397,19 +397,59 @@ class CircleCiClient:
             approval=approval.get("status", "") if approval else "",
         )
 
-    def pipeline_id_for_commit(self, repo: str, branch: str, commit: str) -> int | None:
-        """Número de pipeline más reciente que vcs.revision == commit en la rama."""
+    def pipeline_id_for_commit(
+        self, repo: str, branch: str, commit: str, max_pages: int = 5
+    ) -> int | None:
+        """Número de pipeline más reciente que vcs.revision == commit en la rama.
+
+        BBIT-50: un commit de un repo activo puede no estar en la primera
+        página (limit 20). Si no aparece en la página cacheada, se sigue
+        ``next_page_token`` en vivo hasta ``max_pages`` páginas (tope). Las
+        páginas extra del barrido NO se cachean: la cache ``circleci_pipelines``
+        de la primera página (TTL 120s) no se degrada por el barrido.
+        """
         if not commit:
             return None
-        best = None
-        for pipeline in self.pipelines(repo, branch=branch):
-            revision = (pipeline.get("vcs") or {}).get("revision", "")
-            if revision != commit:
-                continue
-            number = pipeline.get("number") or 0
-            if best is None or number > best:
-                best = number
-        return best
+        slug = self.project_slug(repo)
+
+        def _scan(items: list[dict]) -> int | None:
+            best = None
+            for pipeline in items:
+                revision = (pipeline.get("vcs") or {}).get("revision", "")
+                if revision != commit:
+                    continue
+                number = pipeline.get("number") or 0
+                if best is None or number > best:
+                    best = number
+            return best
+
+        # Primera página cacheada por (slug, branch): si alcanza, cero requests.
+        if self._cache is not None:
+            cached = self._cache.get_circleci_pipelines(slug, branch, "branch")
+            if cached is not None:
+                found = _scan(cached)
+                if found is not None or max_pages <= 1:
+                    return found
+
+        path = f"/project/{slug}/pipeline"
+        token: str | None = None
+        pages = 0
+        while pages < max_pages:
+            params: dict = {"limit": 20, "branch": branch}
+            if token:
+                params["page-token"] = token
+            payload = self._request("GET", path, params=params)
+            items = payload.get("items", [])
+            pages += 1
+            if pages == 1 and self._cache is not None:
+                self._cache.set_circleci_pipelines(slug, branch, "branch", items)
+            found = _scan(items)
+            if found is not None:
+                return found
+            token = payload.get("next_page_token")
+            if not token:
+                break
+        return None
 
     def deploy_for_tag(
         self,

@@ -85,6 +85,58 @@ def test_pipeline_id_for_commit():
         client.close()
 
 
+def test_pipeline_id_for_commit_pagina_2(tmp_path):
+    """BBIT-50: un commit en la página 2 de un repo activo se detecta paginando."""
+    from bbit_release.cache import ReleaseCache
+
+    calls = {"c": 0}
+
+    def pipelines(request):
+        calls["c"] += 1
+        if request.url.params.get("page-token"):
+            return httpx.Response(200, json={"next_page_token": None, "items": [
+                {"id": "p4", "number": 4, "vcs": {"revision": "abc", "branch": "release"}},
+            ]})
+        return httpx.Response(200, json={"next_page_token": "tok2", "items": [
+            {"id": "p1", "number": 1, "vcs": {"revision": "zzz", "branch": "release"}},
+        ]})
+
+    cache = ReleaseCache(db_path=tmp_path / "pp.db")
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): pipelines,
+    }), cache=cache)
+    try:
+        assert client.pipeline_id_for_commit("r1", "release", "abc") == 4
+        assert calls["c"] == 2
+    finally:
+        client.close()
+        cache.close()
+
+
+def test_pipeline_id_for_commit_cap_max_pages(tmp_path):
+    """BBIT-50: max_pages=1 no barre más allá de la primera página."""
+    calls = {"c": 0}
+
+    def pipelines(request):
+        calls["c"] += 1
+        if request.url.params.get("page-token"):
+            return httpx.Response(200, json={"next_page_token": None, "items": [
+                {"id": "p4", "number": 4, "vcs": {"revision": "abc", "branch": "release"}},
+            ]})
+        return httpx.Response(200, json={"next_page_token": "tok2", "items": [
+            {"id": "p1", "number": 1, "vcs": {"revision": "zzz", "branch": "release"}},
+        ]})
+
+    client = CircleCiClient("tok", vcs="bb", org="o", transport=_transport({
+        ("GET", "/api/v2/project/bb/o/r1/pipeline"): pipelines,
+    }))
+    try:
+        assert client.pipeline_id_for_commit("r1", "release", "abc", max_pages=1) is None
+    finally:
+        client.close()
+    assert calls["c"] == 1
+
+
 def test_deploy_job_for_pipeline():
     def workflows(request):
         assert request.url.path == "/api/v2/pipeline/p1/workflow"
