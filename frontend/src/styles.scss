@@ -154,6 +154,23 @@ body {
   letter-spacing: 0.3px;
 }
 
+.bb-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bb-section-header {
+  font-size: var(--bb-font-base);
+  font-weight: 700;
+  color: var(--bb-text);
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--bb-border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .bb-field {
   display: flex;
   flex-direction: column;

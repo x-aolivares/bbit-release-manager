@@ -1,13 +1,13 @@
 .bb-report-area {
   width: 100%;
-  min-height: 200px;
+  min-height: 260px;
   resize: vertical;
-  font-size: var(--bb-font-xs);
   font-family: var(--bb-mono);
-  padding: 10px 12px;
-  background: var(--bb-elevated);
+  font-size: var(--bb-font-sm);
+  line-height: 1.5;
   border: 1px solid var(--bb-border);
   border-radius: var(--bb-radius-md);
-  color: var(--bb-text);
-  box-sizing: border-box;
+  padding: 10px;
+  background: var(--bb-surface, #fafbfc);
+  color: inherit;
 }
