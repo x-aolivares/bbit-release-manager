@@ -173,6 +173,7 @@ class ReleaseCache:
         self._db_path = db_path or _DEFAULT_DB
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._in_flight: dict = {}
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
@@ -1428,6 +1429,43 @@ class ReleaseCache:
         self._set_cached("circleci_workflow_jobs", workflow_id, "", {}, items)
 
     # -- caché agresiva: repos por prefijo + branches ---------------------------
+    # BBIT-60: single-flight en proceso. Dos requests concurrentes con cache
+    # fría (repos-quick + flow_stream en el home, o el precache del login)
+    # compartían el mismo sweep paginado de Bitbucket: singleshot() colapsa
+    # las ejecuciones concurrentes de un `producer` por clave (workspace,
+    # (workspace, branch), (origin, destination)...) en UNA sola.
+
+    def singleshot(self, key: tuple, producer):
+        """Ejecuta `producer` una única vez entre llamadas concurrentes.
+
+        Los llamadores concurrentes que llegan con la misma `key` esperan el
+        resultado del primero y NO vuelven a ejecutar el producer (dedupe del
+        trabajo caro de cache fría). La entrada se remueve al terminar: el
+        resultado queda persistido en SQLite y el siguiente request le pega a
+        la cache normal. Si `producer` falla, todos los esperadores lanzan la
+        misma excepción.
+        """
+        with self._lock:
+            bag = self._in_flight.get(key)
+            if bag is None:
+                bag = {"done": threading.Event(), "result": None, "exc": None}
+                self._in_flight[key] = bag
+                creator = True
+            else:
+                creator = False
+        if creator:
+            try:
+                bag["result"] = producer()
+            except BaseException as exc:  # noqa: BLE001 — propagar a todos
+                bag["exc"] = exc
+            finally:
+                bag["done"].set()
+                with self._lock:
+                    self._in_flight.pop(key, None)
+        bag["done"].wait()
+        if bag["exc"] is not None:
+            raise bag["exc"]
+        return bag["result"]
 
     def get_repos_by_prefix(self, workspace: str, prefixes: list[str] | None = None) -> list[dict] | None:
         """Índice completo de repos del workspace, key filter-free (BBIT-46).

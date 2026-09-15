@@ -284,6 +284,21 @@ class BitbucketClient:
                 for r in items if _keep(r["slug"])
             ]
 
+        # BBIT-60: constructora sin filtros de prefijo; `_sweep` usa esta
+        # para re-chequear cache sin aplicar `_keep` (la lista compartida
+        # por singleshot debe ser la universal para que cada llamador
+        # filtre según sus propios `prefixes`/`filter_names`).
+        def _raw_build(items: list[dict]) -> list[Repository]:
+            return [
+                Repository(
+                    slug=r["slug"],
+                    name=r["name"],
+                    workspace=r.get("workspace", self.workspace),
+                    default_branch=r.get("default_branch", "master"),
+                )
+                for r in items
+            ]
+
         # CACHE L1 (BBIT-46): índice completo filter-free keyed por workspace.
         # Prefijos/filter_names se aplican como VISTA al materializar; cambiar
         # de prefijo no invalida el índice ni vuelve a barrer el workspace.
@@ -292,31 +307,42 @@ class BitbucketClient:
             if cached_index is not None:
                 return _build(cached_index)
 
-        repos: list[Repository] = []
-        url: str | None = f"/repositories/{self.workspace}"
-        params: dict | None = {"pagelen": 100, "role": "member"}
-        while url:
-            payload = self._request("GET", url, params=params)
-            if payload is None:
-                break
-            params = None
-            for item in payload.get("values", []):
-                slug = item.get("slug", "")
-                ws = (item.get("workspace") or {}).get("slug") or self.workspace
-                repos.append(
-                    Repository(
-                        slug=slug,
-                        name=item.get("name", slug),
-                        workspace=ws,
-                        default_branch=(item.get("mainbranch") or {}).get("name", "master"),
+        # BBIT-60: single-flight por workspace. Dos requests concurrentes con
+        # cache fría (repos-quick + flow en la carga del home, o el precache
+        # del login) no barren el workspace dos veces: uno ejecuta el sweep
+        # paginado y los demás comparten el resultado.
+        def _sweep():
+            if self.cache is not None:
+                fresh = self.cache.get_repos_by_prefix(self.workspace, None)
+                if fresh is not None:
+                    return _raw_build(fresh)
+            swept: list[Repository] = []
+            url: str | None = f"/repositories/{self.workspace}"
+            params: dict | None = {"pagelen": 100, "role": "member"}
+            while url:
+                payload = self._request("GET", url, params=params)
+                if payload is None:
+                    break
+                params = None
+                for item in payload.get("values", []):
+                    slug = item.get("slug", "")
+                    ws = (item.get("workspace") or {}).get("slug") or self.workspace
+                    swept.append(
+                        Repository(
+                            slug=slug,
+                            name=item.get("name", slug),
+                            workspace=ws,
+                            default_branch=(item.get("mainbranch") or {}).get("name", "master"),
+                        )
                     )
-                )
-            url = (payload.get("next") or "").replace(API_BASE, "")
-            if not url:
-                break
+                url = (payload.get("next") or "").replace(API_BASE, "")
+                if not url:
+                    break
+            if self.cache is not None:
+                self.cache.set_repos_by_prefix(self.workspace, None, _dump(swept))
+            return swept
 
-        if self.cache is not None:
-            self.cache.set_repos_by_prefix(self.workspace, None, _dump(repos))
+        repos = self.cache.singleshot(("list_repos", self.workspace), _sweep) if self.cache is not None else _sweep()
         return [r for r in repos if _keep(r.slug)]
 
     def has_branch(self, slug: str, branch: str) -> bool:
@@ -427,15 +453,21 @@ class BitbucketClient:
         raw = {}
         if self.cache:
             hit = self.cache.get_branch_refs(self.workspace, branch)
-            if hit:
-                raw = dict(hit)
-        known = set(raw)
-        pending = [repo for repo in repos if repo.slug not in known]
-        if pending:
-            workers = min(MAX_WORKERS, len(pending) or 1)
-            resolved = {repo.slug: "" for repo in pending}
+            raw = dict(hit) if hit else {}
+            pending = [repo for repo in repos if repo.slug not in raw]
+            if pending:
+                # BBIT-60: single-flight por (workspace, branch): dos requests
+                # concurrentes (repos-quick + flow) no resuelven la misma rama
+                # dos veces; el segundo espera y comparte el mapping resuelto.
+                raw = self.cache.singleshot(
+                    ("branch_refs", self.workspace, branch),
+                    lambda: self._resolve_branch_refs(branch),
+                )
+        else:
+            resolved = {repo.slug: "" for repo in repos}
+            workers = min(MAX_WORKERS, len(repos) or 1)
             with ThreadPoolExecutor(max_workers=workers) as ex:
-                futures = {repo.slug: ex.submit(self.resolve_branch, repo.slug, branch) for repo in pending}
+                futures = {repo.slug: ex.submit(self.resolve_branch, repo.slug, branch) for repo in repos}
                 for slug, fut in futures.items():
                     try:
                         name = fut.result()
@@ -443,20 +475,51 @@ class BitbucketClient:
                         continue
                     if name:
                         resolved[slug] = name
-            raw.update(resolved)
-            if self.cache:
-                self.cache.set_branch_refs(self.workspace, branch, raw)
+            raw = resolved
         return [
             Repository(
                 slug=repo.slug,
                 name=repo.name,
                 workspace=repo.workspace,
                 default_branch=getattr(repo, "default_branch", "master"),
-                resolved_branch=raw[repo.slug],
+                resolved_branch=raw.get(repo.slug, ""),
             )
             for repo in repos
             if raw.get(repo.slug)
         ]
+
+    def _resolve_branch_refs(self, branch: str) -> dict:
+        """Resuelve el estado de la rama `branch` de TODO el workspace.
+
+        Corredor del single-flight de `repos_with_branch`: re-chequea la cache
+        y resuelve solo los repos sin estado conocido (en paralelo), persistiendo
+        el mapping {slug: rama_resuelta} por (workspace, branch). Devuelve el
+        mapping completo; el filtrado del llamador va después.
+        """
+        raw = {}
+        if self.cache is not None:
+            hit = self.cache.get_branch_refs(self.workspace, branch)
+            raw = dict(hit) if hit else {}
+        base = self.list_repos(prefixes=None)
+        if not base:
+            return raw
+        resolved = {repo.slug: raw.get(repo.slug, "") for repo in base}
+        pending = [repo for repo in base if repo.slug not in raw]
+        if not pending:
+            return raw
+        workers = min(MAX_WORKERS, len(pending) or 1)
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {repo.slug: ex.submit(self.resolve_branch, repo.slug, branch) for repo in pending}
+            for slug, fut in futures.items():
+                try:
+                    name = fut.result()
+                except BitbucketError:
+                    continue
+                if name:
+                    resolved[slug] = name
+        if self.cache is not None:
+            self.cache.set_branch_refs(self.workspace, branch, resolved)
+        return resolved
 
     def diff(self, slug: str, from_ref: str, to_ref: str) -> DiffResult:
         """Diff entre refs como texto unificado (Cloud)."""

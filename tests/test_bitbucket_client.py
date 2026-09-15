@@ -1,5 +1,7 @@
 import httpx
 import pytest
+import threading
+import time
 
 from bbit_release.bitbucket.client import (
     BitbucketAuthError,
@@ -201,6 +203,108 @@ def test_repos_with_branch():
         client.close()
     assert [r.slug for r in found] == ["a"]
     assert found[0].resolved_branch == "release"
+
+
+def test_singleshot_dedupe_producer_concurrente(tmp_path):
+    """BBIT-60: singleshot() ejecuta el producer UNA sola vez entre llamadas
+    concurrentes con la misma clave; los esperadores comparten el resultado."""
+    from bbit_release.cache import ReleaseCache
+
+    cache = ReleaseCache(db_path=tmp_path / "sf.db")
+    calls = {"n": 0}
+    release = threading.Event()
+    in_producer = threading.Event()
+    results: list = []
+
+    def prod():
+        calls["n"] += 1
+        in_producer.set()
+        assert release.wait(5), "timeout esperando release"
+        return "result"
+
+    def worker():
+        results.append(cache.singleshot(("k",), prod))
+
+    t1 = threading.Thread(target=worker)
+    t2 = threading.Thread(target=worker)
+    t1.start()
+    assert in_producer.wait(5), "el producer no arrancó"
+    t2.start()  # entra mientras t1 sigue produciendo
+    time.sleep(0.1)
+    assert t2.is_alive()  # t2 está esperando, no duplicó el producer
+    release.set()
+    t1.join(5)
+    t2.join(5)
+    assert not t1.is_alive() and not t2.is_alive()
+    assert calls["n"] == 1
+    assert sorted(results) == ["result", "result"]
+    cache.close()
+
+
+def test_singleshot_propaga_errores_y_limpia_la_entrada(tmp_path):
+    from bbit_release.cache import ReleaseCache
+
+    cache = ReleaseCache(db_path=tmp_path / "sf_err.db")
+
+    def prod():
+        raise RuntimeError("boom")
+
+    def worker():
+        try:
+            cache.singleshot(("k",), prod)
+            return None
+        except RuntimeError:
+            return "raised"
+
+    # El error del producer se propaga al llamador...
+    with pytest.raises(RuntimeError):
+        cache.singleshot(("k",), prod)
+    # ...y la entrada queda limpia: un nuevo llamado vuelve a intentar.
+    assert worker() == "raised"
+    cache.close()
+
+
+def test_list_repos_single_flight_evita_doble_sweep_concurrente(tmp_path):
+    """BBIT-60: dos list_repos concurrentes con cache fría barren el workspace
+    UNA sola vez (sin duplicar páginas de la API)."""
+    from bbit_release.cache import ReleaseCache
+
+    hits = {"repos": 0}
+    in_sweep = threading.Event()
+    release = threading.Event()
+
+    def repos_list(request):
+        hits["repos"] += 1
+        in_sweep.set()
+        assert release.wait(5), "timeout esperando release del sweep"
+        return httpx.Response(200, json={"values": [
+            {"slug": "r1", "name": "R1", "workspace": {"slug": "ws"}},
+        ]})
+
+    cache = ReleaseCache(db_path=tmp_path / "sf_list.db")
+    client = BitbucketClient("ws", "tok", cache=cache, transport=_transport({
+        ("GET", "/2.0/repositories/ws"): repos_list,
+    }))
+    out: list = []
+
+    def call():
+        try:
+            out.append([r.slug for r in client.list_repos(prefixes=None)])
+        except Exception as exc:  # noqa: BLE001
+            out.append(exc)
+
+    t1 = threading.Thread(target=call)
+    t2 = threading.Thread(target=call)
+    t1.start()
+    assert in_sweep.wait(5), "el sweep no arrancó"
+    t2.start()  # segundo list_repos concurrente; debe compartir el sweep
+    release.set()
+    t1.join()
+    t2.join()
+    assert hits["repos"] == 1, f"sweeps ejecutados: {hits['repos']}"
+    assert out == [["r1"], ["r1"]]
+    client.close()
+    cache.close()
 
 
 def test_list_repos_two_prefixes_one_workspace_scan(tmp_path):
