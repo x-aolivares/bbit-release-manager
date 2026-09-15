@@ -5,16 +5,17 @@
 
 .bb-params-filters {
   flex-wrap: wrap;
-  gap: 6px;
 }
 
 .bb-params-hint {
   margin: 0 0 10px;
-  max-width: 640px;
 }
 
 .bb-param-cell {
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 @media (max-width: 860px) {
