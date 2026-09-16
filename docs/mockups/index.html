@@ -18,10 +18,10 @@
 
     <div class="page">
 
-        <div class="mock-note">
+        <!-- <div class="mock-note">
             Buscador universal: prefijo + blacklist (los únicos filtros). "Buscar" trae los <b id="wsTotal2">900</b> del
             workspace y aplica los filtros como vista → la tabla muestra SOLO los que coinciden.
-        </div>
+        </div> -->
 
         <!-- ===================== BUSCADOR ===================== -->
         <div class="bb-panel" id="searchPanel">
@@ -37,8 +37,8 @@
                 </div>
                 <button class="bb-btn-primary" id="btnSearch">Buscar repositorios</button>
             </div>
-            <div class="summary"><span id="wsTotal3">900</span> repositorios en el workspace → <b id="matchCount">0</b>
-                con coincidencia (prefijos + blacklist)</div>
+            <!-- <div class="summary"><span id="wsTotal3">900</span> repositorios en el workspace → <b id="matchCount">0</b>
+                con coincidencia (prefijos + blacklist)</div> -->
         </div>
 
         <!-- ===================== TABLA DE REPOS FILTRADOS ===================== -->
@@ -61,8 +61,34 @@
                 <button class="bb-btn-secondary" id="btnBranch">Ver rama en estos repos</button>
             </div>
 
-            <div class="bb-table bb-table--repos" style="--bb-cols: 1.4fr 1.6fr 1.2fr;">
+            <!-- barra de filtros de la tabla: texto (slug/nombre) + chips de tags -->
+            <div class="bb-filter-bar">
+                <div class="bb-field" style="max-width:320px;flex:none;">
+                    <label for="tableSearch">Buscar en la lista</label>
+                    <input class="bb-input" id="tableSearch" placeholder="slug o nombre…"
+                        style="font-size:var(--bb-font-sm);">
+                </div>
+                <div class="bb-field">
+                    <label>Tags de flujo</label>
+                    <div class="bb-chips" id="tagFilterChips"></div>
+                </div>
+            </div>
+
+            <!-- barra contextual: visible con 1+ seleccionados -->
+            <div class="bb-selection-bar" id="selectionBar" style="display:none;">
+                <input type="checkbox" id="checkAll" style="width:15px;height:15px;accent-color:#fff;cursor:pointer;"
+                    title="Seleccionar/deseleccionar todo lo filtrado">
+                <b id="selCount">0</b> seleccionados
+                <span class="bb-selection-spacer"></span>
+                <button class="bb-btn-secondary" id="btnClear" style="padding:0 10px;">Limpiar</button>
+                <button class="bb-btn-primary" id="btnActions"
+                    style="background:#fff;color:var(--bb-blue);border:none;">Acciones ▾</button>
+            </div>
+
+            <div class="bb-table bb-table--repos" style="--bb-cols: 2rem 1.3fr 1.6fr 1.2fr;">
                 <div class="bb-repos-head">
+                    <span class="bb-check-cell"><input type="checkbox" id="checkAllHead"
+                            title="Seleccionar página"></span>
                     <span>Repositorio</span>
                     <span>Pull Request</span>
                     <span>Ver más</span>
@@ -96,6 +122,20 @@
             <div id="detailBody"></div>
         </div>
 
+        <!-- ===================== MODAL: ACCIONES MASIVAS ===================== -->
+        <div class="bb-modal-overlay" id="actionsModal" style="display:none;">
+            <div class="bb-modal">
+                <div class="bb-modal-head">
+                    <span class="bb-modal-title">Acciones masivas</span>
+                    <button class="bb-modal-x" id="modalClose" title="Cerrar">✕</button>
+                </div>
+                <div class="bb-modal-body">
+                    <div class="muted">Repos seleccionados: <b id="modalCount" style="color:var(--bb-text);">0</b></div>
+                    <div class="bb-modal-body" id="modalOptions" style="padding:0;"></div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <!-- Capa fetch simulada: reemplaza un cliente HTTP real. DEBE cargar antes que data/*.js (los endpoints se registran contra BB.api). -->
@@ -127,6 +167,7 @@
             states: {},          // slug -> pending | checking | found | not_found
             removed: new Set(),
             creating: new Set(), // PR en curso
+            selected: new Set(), // slugs seleccionados (acciones masivas)
             page: 1,
             pageSize: 10,
             flowBySlug: {},      // pr + tags por repo (del flow)
@@ -135,6 +176,10 @@
             selectedRegions: new Set(["qa", "uat", "stgp", "prod"]),
             generating: new Set(),
             excelTimer: null,
+            search: "",          // texto de búsqueda en la tabla (slug/name)
+            tagFilters: new Set(), // tags activos (chips)
+            prefixes: [...BB.config.default_filters.project_prefixes],
+            blacklist: [...BB.config.default_filters.exclude],
         };
 
         const api = (method, path, query) => BB.api.fetch(method, path, query);
@@ -145,11 +190,34 @@
                 .slice().sort((a, b) => a.slug.localeCompare(b.slug));
         }
 
+        // Filtros de la tabla (vista sobre lo ya filtrado): texto (slug/name) + tags.
+        function filteredRepos() {
+            const q = state.search.trim().toLowerCase();
+            return visibleRepos().filter(r => {
+                if (q && !r.slug.toLowerCase().includes(q) && !(r.name || "").toLowerCase().includes(q)) {
+                    return false;
+                }
+                if (state.tagFilters.size && !(r.tags || []).some(t => state.tagFilters.has(t))) {
+                    return false;
+                }
+                return true;
+            });
+        }
+
         function paginatedRepos() {
-            const all = visibleRepos();
+            const all = filteredRepos();
             const pages = Math.max(1, Math.ceil(all.length / state.pageSize));
             if (state.page > pages) state.page = pages;
             return { rows: all.slice((state.page - 1) * state.pageSize, state.page * state.pageSize), pages, total: all.length };
+        }
+
+        // Chips de tags disponibles + estado activo.
+        function renderTagChips() {
+            const allTags = new Set();
+            visibleRepos().forEach(r => (r.tags || []).forEach(t => allTags.add(t)));
+            $("tagFilterChips").innerHTML = [...allTags].sort().map(t =>
+                `<button class="bb-filter-chip ${state.tagFilters.has(t) ? "bb-filter-chip--active" : ""}" data-tag-filter="${esc(t)}">${esc(t)}</button>`
+            ).join("");
         }
 
         // ---------- rendereo de la tabla ----------
@@ -175,33 +243,55 @@
         function branchBadge(repo) {
             const st = state.states[repo.slug];
             if (st === "checking") return '<span class="bb-deploy-badge bb-deploy--pending"><span class="bb-spinner-inline"></span>Revisando…</span>';
-            if (st === "found") return '<span class="bb-deploy-badge bb-deploy--ok">✓ Encontrada</span>';
-            return '<span class="muted">—</span>';
+            // not_found se remueve de la lista; lo que queda ya tiene la rama (implícito).
+            return "";
         }
 
         function renderRows() {
             const { rows } = paginatedRepos();
             $("rows").innerHTML = rows.map(repo => `
-                <div class="bb-repos-row">
+                <div class="bb-repos-row ${state.selected.has(repo.slug) ? "bb-repos-row--selected" : ""}">
+                    <span class="bb-check-cell">
+                        <input type="checkbox" class="row-check" data-slug="${esc(repo.slug)}"
+                            ${state.selected.has(repo.slug) ? "checked" : ""}>
+                    </span>
                     <span>
                         <a class="bb-link" href="#" data-action="open-detail" data-slug="${esc(repo.slug)}">${esc(repo.slug)}</a>
-                        <div class="muted" style="margin-top:4px;">${branchBadge(repo)}</div>
+                        ${state.states[repo.slug] === "checking"
+                    ? `<div class="muted" style="margin-top:4px;">${branchBadge(repo)}</div>` : ""}
                     </span>
                     <span>${prCell(repo)}</span>
                     <span>
                         <button class="bb-btn-secondary bb-btn-sm" data-action="open-detail" data-slug="${esc(repo.slug)}">Ver más ›</button>
                     </span>
                 </div>`).join("");
+            renderSelection();
+        }
+
+        // ---------- selección masiva ----------
+        function visibleSlugs() {
+            return filteredRepos().map(r => r.slug);
+        }
+
+        function renderSelection() {
+            const all = visibleSlugs();
+            const pageSlugs = paginatedRepos().rows.map(r => r.slug);
+            const n = state.selected.size;
+            $("selectionBar").style.display = n > 0 ? "flex" : "none";
+            $("selCount").textContent = n;
+            $("checkAll").checked = n > 0 && all.length > 0 && all.every(s => state.selected.has(s));
+            $("checkAllHead").checked = pageSlugs.length > 0 && pageSlugs.every(s => state.selected.has(s));
         }
 
         function renderCounts() {
-            const all = visibleRepos();
+            const all = filteredRepos();
             const found = all.filter(r => state.states[r.slug] === "found").length;
             const pages = Math.max(1, Math.ceil(all.length / state.pageSize));
             if (state.page > pages) state.page = pages;
             const from = all.length ? (state.page - 1) * state.pageSize + 1 : 0;
             const to = Math.min(state.page * state.pageSize, all.length);
-            $("pagInfo").textContent = `Mostrando ${from}–${to} de ${all.length} repositorios · ${state.removed.size} removidos por no tener la rama`;
+            const filtrado = state.search || state.tagFilters.size ? ` (filtrado sobre ${visibleRepos().length})` : "";
+            $("pagInfo").textContent = `Mostrando ${from}–${to} de ${all.length} repositorios${filtrado} · ${state.removed.size} removidos por no tener la rama`;
             $("pageLabel").textContent = `${state.page} / ${pages}`;
             $("prevPage").disabled = state.page <= 1;
             $("nextPage").disabled = state.page >= pages;
@@ -212,8 +302,8 @@
             const res = await api("GET", "/api/repos-quick", {
                 origin: $("originBranch").value.trim(),
                 destination: $("targetBranch").value.trim(),
-                project_prefixes: BB.config.default_filters.project_prefixes.join(","),
-                exclude: BB.config.default_filters.exclude.join(","),
+                project_prefixes: state.prefixes.join(",") || BB.config.default_filters.project_prefixes.join(","),
+                exclude: state.blacklist.join(","),
             });
             const flow = await api("GET", "/api/flow", { origin: "release/REP-325073", destination: "master", with_diff: true, with_tags: true });
             state.repos = res.repos;
@@ -222,6 +312,10 @@
             state.states = {};
             state.removed.clear();
             res.repos.forEach(r => { state.states[r.slug] = "pending"; });
+            state.search = "";
+            state.tagFilters.clear();
+            $("tableSearch").value = "";
+            renderTagChips();
             $("tablePanel").style.display = "flex";
             $("branchSummary").style.display = "none";
             $("btnBranch").disabled = false;
@@ -237,14 +331,17 @@
             state.removed.clear();
             $("branchSummary").style.display = "inline-block";
             state.repos.forEach(r => { state.states[r.slug] = "checking"; });
-            renderRows(); renderCounts();
+            renderRows(); renderCounts(); renderTagChips();
 
             state.repos.forEach((repo, i) => {
                 setTimeout(() => {
                     const found = repo.branch_state === "found";
                     state.states[repo.slug] = found ? "found" : "not_found";
-                    if (!found) state.removed.add(repo.slug);
-                    renderRows(); renderCounts();
+                    if (!found) {
+                        state.removed.add(repo.slug);
+                        state.selected.delete(repo.slug);
+                    }
+                    renderRows(); renderCounts(); renderTagChips();
                     if (state.repos.every(r => state.states[r.slug] !== "checking")) {
                         $("btnBranch").disabled = false;
                         $("btnBranch").textContent = "Reconsultar rama";
@@ -274,6 +371,24 @@
             state.page = 1;
             renderRows(); renderCounts();
         });
+
+        // ---------- filtros de la tabla ----------
+        $("tableSearch").addEventListener("input", (e) => {
+            state.search = e.target.value;
+            state.page = 1;
+            renderRows(); renderCounts();
+        });
+
+        $("tagFilterChips").addEventListener("click", (ev) => {
+            const chip = ev.target.closest("[data-tag-filter]");
+            if (!chip) return;
+            const t = chip.dataset.tagFilter;
+            if (state.tagFilters.has(t)) state.tagFilters.delete(t);
+            else state.tagFilters.add(t);
+            state.page = 1;
+            renderTagChips();
+            renderRows(); renderCounts();
+        });
         $("prevPage").addEventListener("click", () => {
             if (state.page <= 1) return;
             state.page--;
@@ -289,6 +404,150 @@
             if (!el) return;
             if (el.dataset.action === "create-pr") createPr(el.dataset.slug);
             if (el.dataset.action === "open-detail") openDetail(el.dataset.slug);
+        });
+
+        // ---------- selección masiva: eventos ----------
+        function toggleSlug(slug, on) {
+            if (on) state.selected.add(slug);
+            else state.selected.delete(slug);
+            renderRows();
+        }
+
+        $("rows").addEventListener("change", (ev) => {
+            const cb = ev.target.closest(".row-check");
+            if (!cb) return;
+            toggleSlug(cb.dataset.slug, cb.checked);
+        });
+
+        $("checkAllHead").addEventListener("change", (ev) => {
+            const pageSlugs = paginatedRepos().rows.map(r => r.slug);
+            if (ev.target.checked) pageSlugs.forEach(s => state.selected.add(s));
+            else pageSlugs.forEach(s => state.selected.delete(s));
+            renderRows();
+        });
+
+        $("checkAll").addEventListener("change", (ev) => {
+            const slugs = visibleSlugs();
+            if (ev.target.checked) slugs.forEach(s => state.selected.add(s));
+            else slugs.forEach(s => state.selected.delete(s));
+            $("checkAllHead").checked = ev.target.checked;
+            renderRows();
+        });
+
+        $("btnClear").addEventListener("click", () => {
+            state.selected.clear();
+            renderRows();
+        });
+
+        // ---------- modal de acciones masivas ----------
+        function openActionsModal() {
+            const sel = [...state.selected];
+            const repos = sel.map(s => state.repos.find(r => r.slug === s)).filter(Boolean);
+            $("modalCount").textContent = repos.length;
+            const readyPr = repos.filter(r => state.states[r.slug] === "found").length;
+            const withFlow = repos.filter(r => (r.tags || []).length > 0).length;
+
+            const opt = (title, desc, count, hint, action) => `
+                <div class="bb-modal-option" data-action="${action}">
+                    <div>
+                        <div class="bb-option-title">${title}</div>
+                        <div class="bb-option-desc">${desc}${hint ? ` — <b>${hint}</b>` : ""}</div>
+                    </div>
+                    <div class="bb-option-count">${count}</div>
+                </div>`;
+
+            $("modalOptions").innerHTML =
+                opt("Crear PRs", "Para los repos con rama resuelta, PR de la rama origen → destino.",
+                    `${readyPr}/${repos.length} aptos`,
+                    readyPr >= repos.length ? "" : `${repos.length - readyPr} sin rama resuelta`, "mass-pr") +
+                opt("Crear tags Circle (deploy)", "Genera el tag de deploy (uat/stgp) para los repos seleccionados.",
+                    `${readyPr}/${repos.length} aptos`, "", "mass-tags-deploy") +
+                opt("Crear tag de repo (flujo)", "Etiqueta repos con su flujo: fargate, step-function, workflow, batch.",
+                    `${withFlow}/${repos.length} con tags`, "", "mass-tag-flow") +
+                '<div class="muted" style="padding:2px 4px;">SSM (params por región) — más adelante.</div>';
+
+            $("actionsModal").style.display = "flex";
+        }
+
+        function closeActionsModal() {
+            $("actionsModal").style.display = "none";
+        }
+        $("btnActions").addEventListener("click", openActionsModal);
+        $("modalClose").addEventListener("click", closeActionsModal);
+        $("actionsModal").addEventListener("click", (ev) => {
+            if (ev.target === $("actionsModal")) closeActionsModal();
+        });
+
+        $("modalOptions").addEventListener("click", async (ev) => {
+            const opt = ev.target.closest("[data-action]");
+            if (!opt) return;
+            const slugs = [...state.selected];
+            const origin = $("originBranch").value.trim();
+            const dest = $("targetBranch").value.trim() || "master";
+
+            if (opt.dataset.action === "mass-tag-flow") {
+                // Sub-paso: elegir qué tag de flujo aplicar a los seleccionados.
+                const tags = new Set();
+                slugs.forEach(s => {
+                    const r = state.repos.find(x => x.slug === s);
+                    (r?.tags || []).forEach(t => tags.add(t));
+                });
+                if (tags.size === 0) { closeActionsModal(); return; }
+                $("modalOptions").innerHTML =
+                    '<div class="muted" style="padding:2px 4px;">¿Qué tag de flujo se aplica a los seleccionados?</div>' +
+                    [...tags].map(t => `
+                        <div class="bb-tag-chip" data-tag="${esc(t)}">
+                            <input type="checkbox" data-tag-check="${esc(t)}" ${state.repos.filter(r => slugs.includes(r.slug) && r.tags.includes(t)).length ? "checked" : ""}>
+                            ${esc(t)}
+                        </div>`).join("") +
+                    '<div class="bb-row-top" style="margin-top:4px;">' +
+                    '<button class="bb-btn-primary" data-action="apply-tags">Aplicar</button>' +
+                    '<button class="bb-btn-secondary" data-action="back-tags">‹ Volver</button>' +
+                    '</div>';
+                return;
+            }
+
+            if (opt.dataset.action === "apply-tags") {
+                const chosen = [...document.querySelectorAll("[data-tag-check]")]
+                    .filter(cb => cb.checked)
+                    .map(cb => cb.dataset.tagCheck);
+                slugs.forEach(s => {
+                    const r = state.repos.find(x => x.slug === s);
+                    if (r) r.tags = chosen;
+                });
+                closeActionsModal();
+                return;
+            }
+            if (opt.dataset.action === "back-tags") {
+                openActionsModal();
+                return;
+            }
+
+            if (opt.dataset.action === "mass-pr") {
+                for (const slug of slugs) {
+                    if (state.states[slug] !== "found") continue;
+                    if (state.flowBySlug[slug]?.pr?.url) continue;
+                    await createPr(slug);
+                }
+                closeActionsModal();
+            }
+            if (opt.dataset.action === "mass-tags-deploy") {
+                for (const slug of slugs) {
+                    if (state.states[slug] !== "found") continue;
+                    for (const env of ["uat", "stgp"]) {
+                        const key = slug + "|tag:" + env;
+                        if (state.generating.has(key) || state.flowBySlug[slug]?.tags?.[env]) continue;
+                        state.generating.add(key);
+                        const res = await api("POST", "/api/tags", {
+                            repo: slug, origin, destination: dest, prefixes: [env],
+                        });
+                        if (!state.flowBySlug[slug]) state.flowBySlug[slug] = { slug, pr: null, tags: {} };
+                        state.flowBySlug[slug].tags[env] = res.tags[env];
+                        state.generating.delete(key);
+                    }
+                }
+                closeActionsModal();
+            }
         });
 
         // ---------- detalle ----------
@@ -494,10 +753,47 @@
         $("wsTotal").textContent = BB.config.total_repos;
         $("wsTotal2").textContent = BB.config.total_repos;
         $("wsTotal3").textContent = BB.config.total_repos;
-        $("prefixChips").innerHTML = BB.config.default_filters.project_prefixes
-            .map(p => `<span class="bb-chip-pill bb-mono">${p}</span>`).join("");
-        $("blacklistChips").innerHTML = BB.config.default_filters.exclude
-            .map(p => `<span class="bb-chip-pill bb-chip-pill--danger bb-mono">${p}</span>`).join("");
+
+        // Chips editables de prefijos y blacklist.
+        function renderFilterChips(containerId, items, kind) {
+            const danger = kind === "blacklist" ? " bb-chip-pill--danger" : "";
+            $(containerId).innerHTML =
+                items.map((p, i) => `
+                    <span class="bb-chip-pill${danger} bb-mono">
+                        ${esc(p)}
+                        <button class="bb-chip-x" data-remove-chip="${kind}" data-index="${i}" title="Quitar">✕</button>
+                    </span>`).join("") +
+                `<button class="bb-chip-add" data-add-chip="${kind}">＋ Agregar</button>`;
+        }
+
+        renderFilterChips("prefixChips", state.prefixes, "prefix");
+        renderFilterChips("blacklistChips", state.blacklist, "blacklist");
+
+        $("prefixChips").addEventListener("click", onChipsClick("prefix"));
+        $("blacklistChips").addEventListener("click", onChipsClick("blacklist"));
+
+        function onChipsClick(kind) {
+            return (ev) => {
+                const remove = ev.target.closest("[data-remove-chip]");
+                if (remove) {
+                    const arr = kind === "prefix" ? state.prefixes : state.blacklist;
+                    arr.splice(Number(remove.dataset.index), 1);
+                    renderFilterChips(kind === "prefix" ? "prefixChips" : "blacklistChips", arr, kind);
+                    return;
+                }
+                const add = ev.target.closest("[data-add-chip]");
+                if (!add) return;
+                const val = window.prompt(kind === "prefix"
+                    ? "Nuevo prefijo de proyecto (ej: bbit-orders-):"
+                    : "Slug a excluir (ej: bbit-trnxd-backend-qa):");
+                const v = (val || "").trim();
+                if (!v) return;
+                const arr = kind === "prefix" ? state.prefixes : state.blacklist;
+                if (arr.includes(v)) { window.alert("Ya existe en la lista."); return; }
+                arr.push(v);
+                renderFilterChips(kind === "prefix" ? "prefixChips" : "blacklistChips", arr, kind);
+            };
+        }
     </script>
 </body>
 

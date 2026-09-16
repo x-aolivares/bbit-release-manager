@@ -386,3 +386,205 @@ button.bb-link {
     font-size: var(--bb-font-sm);
     color: var(--bb-text-secondary);
 }
+
+/* ---------- selección masiva ---------- */
+.bb-filter-bar {
+    display: flex;
+    gap: 16px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+}
+
+.bb-filter-bar .bb-field {
+    flex: 1;
+}
+
+.bb-filter-bar .bb-field:first-child {
+    flex: 0 0 320px;
+}
+
+.bb-filter-chip {
+    border: 1px solid var(--bb-border);
+    border-radius: var(--bb-radius-pill);
+    padding: 5px 12px;
+    font-size: var(--bb-font-sm);
+    background: var(--bb-elevated);
+    color: var(--bb-text);
+    cursor: pointer;
+    text-transform: lowercase;
+    font-weight: 600;
+}
+
+.bb-filter-chip:hover {
+    border-color: var(--bb-blue);
+}
+
+.bb-filter-chip--active {
+    background: var(--bb-blue);
+    border-color: var(--bb-blue);
+    color: #fff;
+}
+
+.bb-selection-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--bb-blue);
+    color: #fff;
+    border-radius: var(--bb-radius-md);
+    padding: 8px 14px;
+    font-size: var(--bb-font-base);
+}
+
+.bb-selection-bar b {
+    font-weight: 800;
+}
+
+.bb-selection-bar .bb-btn-secondary {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.4);
+}
+
+.bb-selection-bar .bb-selection-spacer {
+    flex: 1;
+}
+
+.bb-check-cell {
+    width: 18px;
+    display: inline-flex;
+    align-items: center;
+}
+
+.bb-check-cell input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    cursor: pointer;
+    accent-color: var(--bb-blue);
+}
+
+.bb-repos-row--selected {
+    background: #e9f2ff;
+}
+
+/* ---------- modal ---------- */
+.bb-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(9, 30, 66, 0.45);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 64px 16px;
+    z-index: 1000;
+    overflow-y: auto;
+}
+
+.bb-modal {
+    background: var(--bb-bg);
+    border-radius: var(--bb-radius-md);
+    width: 100%;
+    max-width: 560px;
+    box-shadow: 0 12px 32px rgba(9, 30, 66, 0.3);
+}
+
+.bb-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--bb-border);
+}
+
+.bb-modal-title {
+    font-weight: 800;
+    font-size: var(--bb-font-md);
+}
+
+.bb-modal-x {
+    border: none;
+    background: transparent;
+    color: var(--bb-text-secondary);
+    font-size: var(--bb-font-md);
+    cursor: pointer;
+    padding: 4px 8px;
+    line-height: 1;
+}
+
+.bb-modal-x:hover {
+    color: var(--bb-danger);
+}
+
+.bb-modal-body {
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.bb-modal-body .muted {
+    font-size: var(--bb-font-sm);
+}
+
+.bb-modal-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--bb-border);
+    border-radius: var(--bb-radius-md);
+    cursor: pointer;
+    background: var(--bb-elevated);
+}
+
+.bb-modal-option:hover {
+    border-color: var(--bb-blue);
+}
+
+.bb-modal-option:disabled,
+.bb-modal-option.disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.bb-modal-option .bb-option-title {
+    font-weight: 700;
+}
+
+.bb-modal-option .bb-option-desc {
+    font-size: var(--bb-font-sm);
+    color: var(--bb-text-secondary);
+}
+
+.bb-modal-option .bb-option-count {
+    margin-left: auto;
+    text-align: right;
+    font-size: var(--bb-font-sm);
+    white-space: nowrap;
+}
+
+.bb-modal-foot {
+    padding: 12px 18px;
+    border-top: 1px solid var(--bb-border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.bb-tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--bb-border);
+    border-radius: var(--bb-radius-pill);
+    padding: 3px 10px;
+    font-size: var(--bb-font-sm);
+    background: var(--bb-surface);
+    cursor: pointer;
+    text-transform: lowercase;
+}
+
+.bb-tag-chip input[type="checkbox"] {
+    accent-color: var(--bb-blue);
+    cursor: pointer;
+}

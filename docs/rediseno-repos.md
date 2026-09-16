@@ -2,7 +2,7 @@
 
 > **Estado**: borrador (antes de issue/PR). Este archivo es el plano vivo del
 > cambio y se actualiza a medida que afinamos el diseño.
-> **Mock**: `docs/mockups/index.html` — un solo HTML editable (estructura + lógica inline). Los datos viven en `docs/mockups/data/*.js` como endpoints simulados (la app real consulta esos mismos paths) y `js/api.js` es la capa fetch.
+> **Mock**: `docs/mockups/index.html` — un solo HTML editable (estructura + lógica inline). Los datos viven en `docs/mockups/data/*.js` como endpoints simulados (la app real consulta esos mismos paths) y `js/api.js` es la capa fetch. Los repos llevan `tags` de flujo (fargate, step-function, workflow, batch) en minúsculas; selección masiva por checkbox + barra contextual "Acciones" que abre un modal con las acciones disponibles (PRs, tags circle, tag de flujo; SSM queda para más tarde).
 
 ## Cambio de paradigma
 
@@ -15,7 +15,9 @@ pesada.
 **Target (etapa 1)** — separar "qué repos quiero ver" de "qué info les pido":
 
 1. **El buscador es el ÚNICO lugar con filtros**: prefijos de proyecto y
-   blacklist. Nada más ahí.
+   blacklist. Nada más ahí. Chips editables: sacar con ✕ y agregar con
+   "＋ Agregar" (los defaults se cargan desde `config` y el estado editable
+   es el que se manda al buscar).
 2. **"Buscar" trae el universo completo del workspace** (los "todos todos
    todos"): `list_repos` paginado sobre el índice filter-free (BBIT-46), sin
    prefijos/blacklist en la clave.
