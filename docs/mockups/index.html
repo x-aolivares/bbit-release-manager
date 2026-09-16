@@ -62,8 +62,8 @@
                     <input type="checkbox" id="toggleBranch" style="width:15px;height:15px;accent-color:var(--bb-blue);cursor:pointer;">
                     Procesar salida
                 </label>
-                <input class="bb-input bb-mono" id="originBranch" placeholder="Rama origen" value="release/REP-325073" style="display:none;max-width:260px;">
-                <input class="bb-input bb-mono" id="targetBranch" placeholder="Rama Destino" value="master" style="display:none;max-width:260px;">
+                <input class="bb-input " id="originBranch" placeholder="Rama origen" value="release/REP-325073" style="display:none;max-width:200px;">
+                <input class="bb-input " id="targetBranch" placeholder="Rama Destino" value="master" style="display:none;max-width:200px;">
                 <div class="summary" id="branchSummary" style="display:none;">
                     <b id="statTotal">–</b> repos · <b style="color:var(--bb-success);" id="statFound">–</b> con la rama
                     · <b style="color:var(--bb-danger);" id="statMissing">–</b> sin la rama
@@ -332,6 +332,14 @@
             $("originBranch").style.display = vis;
             $("targetBranch").style.display = vis;
             $("btnBranch").style.display = vis;
+            $("branchSummary").style.display = "none";
+            if (!ev.target.checked) {
+                state.removed.clear();
+                state.repos.forEach(r => { state.states[r.slug] = "pending"; });
+                renderRows(); renderCounts(); renderTagChips();
+                $("btnBranch").disabled = false;
+                $("btnBranch").textContent = "Ver rama en estos repos";
+            }
         });
 
         $("btnBranch").addEventListener("click", () => {
