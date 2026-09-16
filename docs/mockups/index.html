@@ -82,10 +82,11 @@
                     style="background:#fff;color:var(--bb-blue);border:none;">Acciones ▾</button>
             </div>
 
-            <div class="bb-table bb-table--repos" style="--bb-cols: 2rem 1.3fr 1.6fr 1.2fr;">
+            <div class="bb-table bb-table--repos" style="--bb-cols: 2.2rem 2rem 1.3fr 1.6fr 1.2fr;">
                 <div class="bb-repos-head">
                     <span class="bb-check-cell"><input type="checkbox" id="checkAllHead"
                             title="Seleccionar página"></span>
+                    <span>#</span>
                     <span>Repositorio</span>
                     <span>Pull Request</span>
                     <span>Procesamiento</span>
@@ -250,13 +251,16 @@
         }
 
         function renderRows() {
-            const { rows } = paginatedRepos();
-            $("rows").innerHTML = rows.map(repo => `
+            const { rows, total } = paginatedRepos();
+            const pad = Math.max(1, String(total).length);
+            const offset = (state.page - 1) * state.pageSize;
+            $("rows").innerHTML = rows.map((repo, i) => `
                 <div class="bb-repos-row ${state.selected.has(repo.slug) ? "bb-repos-row--selected" : ""}">
                     <span class="bb-check-cell">
                         <input type="checkbox" class="row-check" data-slug="${esc(repo.slug)}"
                             ${state.selected.has(repo.slug) ? "checked" : ""}>
                     </span>
+                    <span class="bb-mono muted" style="font-size:12px;">${String(offset + i + 1).padStart(pad, "0")}</span>
                     <span>
                         <a class="bb-link" href="#" data-action="open-detail" data-slug="${esc(repo.slug)}">${esc(repo.slug)}</a>
                         ${state.states[repo.slug] === "checking"
