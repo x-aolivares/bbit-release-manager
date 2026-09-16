@@ -491,24 +491,56 @@
             const dest = $("targetBranch").value.trim() || "master";
 
             if (opt.dataset.action === "mass-tag-flow") {
-                // Sub-paso: elegir qué tag de flujo aplicar a los seleccionados.
-                const tags = new Set();
+                // Sub-paso: tags existentes + input para crear nuevo.
+                const existingTags = new Set();
                 slugs.forEach(s => {
                     const r = state.repos.find(x => x.slug === s);
-                    (r?.tags || []).forEach(t => tags.add(t));
+                    (r?.tags || []).forEach(t => existingTags.add(t));
                 });
-                if (tags.size === 0) { closeActionsModal(); return; }
+                const allTags = [...existingTags].sort();
+                const makeCheck = (t, checked) => `
+                    <div class="bb-tag-chip" data-tag="${esc(t)}">
+                        <input type="checkbox" data-tag-check="${esc(t)}" ${checked ? "checked" : ""}>
+                        ${esc(t)}
+                    </div>`;
                 $("modalOptions").innerHTML =
-                    '<div class="muted" style="padding:2px 4px;">¿Qué tag de flujo se aplica a los seleccionados?</div>' +
-                    [...tags].map(t => `
-                        <div class="bb-tag-chip" data-tag="${esc(t)}">
-                            <input type="checkbox" data-tag-check="${esc(t)}" ${state.repos.filter(r => slugs.includes(r.slug) && r.tags.includes(t)).length ? "checked" : ""}>
-                            ${esc(t)}
-                        </div>`).join("") +
-                    '<div class="bb-row-top" style="margin-top:4px;">' +
+                    '<div class="muted" style="padding:2px 4px;">Tags existentes entre los seleccionados. Podés crear uno nuevo.</div>' +
+                    (allTags.length
+                        ? allTags.map(t => {
+                            const allHave = slugs.every(s => (state.repos.find(x => x.slug === s)?.tags || []).includes(t));
+                            return makeCheck(t, allHave);
+                        }).join("")
+                        : '<div class="muted" style="padding:2px 4px;font-size:12px;">Ningún repo tiene tags de flujo aún.</div>') +
+                    '<div class="bb-row-top" style="margin-top:6px;gap:6px;align-items:center;">' +
+                        '<input class="bb-input" id="newTagInput" placeholder="Nuevo tag (ej: lambdas)" style="max-width:200px;font-size:12px;">' +
+                        '<button class="bb-btn-secondary" data-action="add-new-tag" style="font-size:12px;padding:4px 10px;">+ Agregar</button>' +
+                    '</div>' +
+                    '<div id="newTagError" style="color:var(--bb-danger);font-size:12px;margin-top:2px;"></div>' +
+                    '<div class="bb-row-top" style="margin-top:6px;">' +
                     '<button class="bb-btn-primary" data-action="apply-tags">Aplicar</button>' +
                     '<button class="bb-btn-secondary" data-action="back-tags">‹ Volver</button>' +
                     '</div>';
+                return;
+            }
+
+            if (opt.dataset.action === "add-new-tag") {
+                const input = $("newTagInput");
+                const val = (input?.value || "").trim().toLowerCase();
+                const err = $("newTagError");
+                if (!val) { if (err) err.textContent = "Ingresá un nombre."; return; }
+                if (val.length < 2) { if (err) err.textContent = "Muy corto (mín. 2 chars)."; return; }
+                if (!/^[a-z0-9][a-z0-9_-]*$/.test(val)) { if (err) err.textContent = "Solo minúsculas, números, guiones o guión bajo."; return; }
+                if (document.querySelector(`[data-tag-check="${val}"]`)) { if (err) err.textContent = "Ese tag ya está en la lista."; return; }
+                // Agregar como nuevo checkbox al final
+                const container = $("modalOptions");
+                const btnRow = container.querySelector('[data-action="apply-tags"]')?.closest('.bb-row-top');
+                const newChip = document.createElement("div");
+                newChip.className = "bb-tag-chip";
+                newChip.dataset.tag = val;
+                newChip.innerHTML = `<input type="checkbox" data-tag-check="${esc(val)}" checked> ${esc(val)}`;
+                container.insertBefore(newChip, btnRow);
+                input.value = "";
+                if (err) err.textContent = "";
                 return;
             }
 
@@ -516,10 +548,18 @@
                 const chosen = [...document.querySelectorAll("[data-tag-check]")]
                     .filter(cb => cb.checked)
                     .map(cb => cb.dataset.tagCheck);
+                const logs = [];
                 slugs.forEach(s => {
                     const r = state.repos.find(x => x.slug === s);
-                    if (r) r.tags = chosen;
+                    if (!r) return;
+                    const prev = [...(r.tags || [])];
+                    const merged = [...new Set([...prev, ...chosen])];
+                    const added = merged.filter(t => !prev.includes(t));
+                    const skipped = chosen.filter(t => prev.includes(t));
+                    r.tags = merged;
+                    logs.push(`${s}: +${added.length} ${added.join(",") || "(nada nuevo)"} | duplicados omitidos: ${skipped.length}`);
                 });
+                console.log("[MOCK] upsert tags:", logs);
                 closeActionsModal();
                 return;
             }
