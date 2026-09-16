@@ -482,9 +482,20 @@
         });
 
         // ---------- filtros de la tabla ----------
+        // Al filtrar por texto o tags, la selección se limita a lo que queda
+        // visible: los repos fuera del filtro se des-seleccionan solos.
+        function pruneSelection() {
+            const visible = new Set(visibleSlugs());
+            for (const s of [...state.selected]) {
+                if (!visible.has(s)) state.selected.delete(s);
+            }
+            renderSelection();
+        }
+
         $("tableSearch").addEventListener("input", (e) => {
             state.search = e.target.value;
             state.page = 1;
+            pruneSelection();
             renderRows(); renderCounts();
         });
 
@@ -495,6 +506,7 @@
             if (state.tagFilters.has(t)) state.tagFilters.delete(t);
             else state.tagFilters.add(t);
             state.page = 1;
+            pruneSelection();
             renderTagChips();
             renderRows(); renderCounts();
         });
@@ -537,8 +549,13 @@
 
         $("checkAll").addEventListener("change", (ev) => {
             const slugs = visibleSlugs();
-            if (ev.target.checked) slugs.forEach(s => state.selected.add(s));
-            else slugs.forEach(s => state.selected.delete(s));
+            if (ev.target.checked) {
+                // select-all opera sobre lo visible actual (filtro aplicado):
+                // reemplaza la selección, no suma a la anterior.
+                state.selected = new Set(slugs);
+            } else {
+                slugs.forEach(s => state.selected.delete(s));
+            }
             $("checkAllHead").checked = ev.target.checked;
             renderRows();
         });
