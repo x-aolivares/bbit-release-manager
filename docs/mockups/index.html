@@ -62,21 +62,13 @@
                     <input type="checkbox" id="toggleBranch" style="width:15px;height:15px;accent-color:var(--bb-blue);cursor:pointer;">
                     Procesar salida
                 </label>
-                <div id="branchSection" style="display:none;align-items:flex-end;gap:12px;flex-wrap:wrap;">
-                    <div class="bb-field" style="max-width:420px;">
-                        <label>Rama origen</label>
-                        <input class="bb-input bb-mono" id="originBranch" value="release/REP-325073">
-                    </div>
-                    <div class="bb-field" style="max-width:420px;">
-                        <label>Rama Destino</label>
-                        <input class="bb-input bb-mono" id="targetBranch" value="master">
-                    </div>
-                    <div class="summary" id="branchSummary" style="display:none;">
-                        <b id="statTotal">–</b> repos · <b style="color:var(--bb-success);" id="statFound">–</b> con la rama
-                        · <b style="color:var(--bb-danger);" id="statMissing">–</b> sin la rama
-                    </div>
-                    <button class="bb-btn-secondary" id="btnBranch">Ver rama en estos repos</button>
+                <input class="bb-input bb-mono" id="originBranch" placeholder="Rama origen" value="release/REP-325073" style="display:none;">
+                <input class="bb-input bb-mono" id="targetBranch" placeholder="Rama Destino" value="master" style="display:none;">
+                <div class="summary" id="branchSummary" style="display:none;">
+                    <b id="statTotal">–</b> repos · <b style="color:var(--bb-success);" id="statFound">–</b> con la rama
+                    · <b style="color:var(--bb-danger);" id="statMissing">–</b> sin la rama
                 </div>
+                <button class="bb-btn-secondary" id="btnBranch" style="display:none;">Ver rama en estos repos</button>
             </div>
 
             <!-- barra contextual: visible con 1+ seleccionados -->
@@ -336,7 +328,10 @@
         });
 
         $("toggleBranch").addEventListener("change", (ev) => {
-            $("branchSection").style.display = ev.target.checked ? "flex" : "none";
+            const vis = ev.target.checked ? "block" : "none";
+            $("originBranch").style.display = vis;
+            $("targetBranch").style.display = vis;
+            $("btnBranch").style.display = vis;
         });
 
         $("btnBranch").addEventListener("click", () => {
