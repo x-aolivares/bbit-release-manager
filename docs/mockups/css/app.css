@@ -224,7 +224,8 @@ body {
 }
 
 .bb-btn-primary,
-.bb-btn-secondary {
+.bb-btn-secondary,
+.bb-btn-danger {
     font-size: var(--bb-font-base);
     font-weight: 600;
     border-radius: var(--bb-radius-md);
@@ -241,7 +242,8 @@ body {
 }
 
 .bb-btn-primary:disabled,
-.bb-btn-secondary:disabled {
+.bb-btn-secondary:disabled,
+.bb-btn-danger:disabled {
     opacity: 0.6;
     cursor: default;
 }
@@ -250,6 +252,12 @@ body {
     background: var(--bb-elevated);
     color: var(--bb-blue);
     border-color: var(--bb-blue);
+}
+
+.bb-btn-danger {
+    background: var(--bb-elevated);
+    color: var(--bb-danger);
+    border-color: var(--bb-danger);
 }
 
 .bb-btn-sm {

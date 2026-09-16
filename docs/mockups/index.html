@@ -652,6 +652,7 @@
                     '<div id="newTagError" style="color:var(--bb-danger);font-size:12px;"></div>' +
                     '<div class="bb-row-top" style="gap:8px;">' +
                     '<button class="bb-btn-primary" data-action="apply-tags">Aplicar</button>' +
+                    '<button class="bb-btn-danger" data-action="clear-tags">Limpiar tags</button>' +
                     '<button class="bb-btn-secondary" data-action="back-tags">‹ Volver</button>' +
                     '</div>';
                 return;
@@ -699,6 +700,18 @@
             }
             if (opt.dataset.action === "back-tags") {
                 openActionsModal();
+                return;
+            }
+            if (opt.dataset.action === "clear-tags") {
+                slugs.forEach(s => {
+                    const r = state.repos.find(x => x.slug === s);
+                    if (!r) return;
+                    const cleared = (r.tags || []).length;
+                    r.tags = [];
+                    state.flowBySlug[s] && delete state.flowBySlug[s].tags;
+                    if (cleared) console.log("[MOCK] clear tags:", `${s}: -${cleared}`);
+                });
+                closeActionsModal();
                 return;
             }
 
