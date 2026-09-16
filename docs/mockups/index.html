@@ -91,7 +91,7 @@
                             title="Seleccionar página"></span>
                     <span>Repositorio</span>
                     <span>Pull Request</span>
-                    <span>Ver más</span>
+                    <span>Procesamiento</span>
                 </div>
                 <div id="rows"></div>
             </div>
@@ -156,12 +156,17 @@
         // LÓGICA DEL MOCK (todo lo demás se edita directo en el HTML).
         // La data no se toca acá: viene de data/*.js vía BB.api.fetch().
         // =====================================================================
+        window.onerror = (msg, src, line, col, err) => {
+            document.title = "JS ERROR: " + msg + " L" + line;
+            console.error("[MOCK ERROR]", msg, "line:", line, err);
+        };
         const $ = (id) => document.getElementById(id);
         const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({
             "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
         }[c]));
 
         // ---------- estado ----------
+        console.log("[MOCK] script inline starting, BB.config:", typeof BB.config);
         const state = {
             repos: [],
             states: {},          // slug -> pending | checking | found | not_found
@@ -751,7 +756,6 @@
 
         // ---------- init ----------
         $("wsTotal").textContent = BB.config.total_repos;
-        $("wsTotal2").textContent = BB.config.total_repos;
 
         // Chips editables de prefijos y blacklist.
         function renderFilterChips(containerId, items, kind) {
@@ -770,6 +774,7 @@
 
         $("prefixChips").addEventListener("click", onChipsClick("prefix"));
         $("blacklistChips").addEventListener("click", onChipsClick("blacklist"));
+        console.log("[MOCK] init OK — prefixes:", state.prefixes, "blacklist:", state.blacklist);
 
         function onChipsClick(kind) {
             return (ev) => {
