@@ -11,5 +11,6 @@ web/dist/
 build/
 *.egg-info/
 data/
+!docs/mockups/data/
 .atl/
 .idea

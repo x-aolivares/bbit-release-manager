@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BBit — Rediseño repos (mock)</title>
+    <link rel="stylesheet" href="./css/app.css">
+</head>
+
+<body>
+
+    <div class="topbar">
+        <div class="topbar-brand">BBit</div>
+        <div class="topbar-meta">acme-workspace · <b id="wsTotal">–</b> repositorios</div>
+        <div class="topbar-meta" style="margin-left:auto;">mock del rediseño — etapa 1</div>
+    </div>
+
+    <div class="page">
+
+        <div class="mock-note">
+            Buscador universal: prefijo + blacklist (los únicos filtros). "Buscar" trae los <b id="wsTotal2">900</b> del
+            workspace y aplica los filtros como vista → la tabla muestra SOLO los que coinciden.
+        </div>
+
+        <!-- ===================== BUSCADOR ===================== -->
+        <div class="bb-panel" id="searchPanel">
+            <div class="bb-section-header">Buscador de repositorios</div>
+            <div class="bb-row-top">
+                <div class="bb-field">
+                    <label>Prefijos de proyecto</label>
+                    <div class="bb-chips" id="prefixChips"></div>
+                </div>
+                <div class="bb-field">
+                    <label>Blacklist (excluir)</label>
+                    <div class="bb-chips" id="blacklistChips"></div>
+                </div>
+                <button class="bb-btn-primary" id="btnSearch">Buscar repositorios</button>
+            </div>
+            <div class="summary"><span id="wsTotal3">900</span> repositorios en el workspace → <b id="matchCount">0</b>
+                con coincidencia (prefijos + blacklist)</div>
+        </div>
+
+        <!-- ===================== TABLA DE REPOS FILTRADOS ===================== -->
+        <div class="bb-panel" id="tablePanel" style="display:none;">
+            <div class="bb-section-header">Repositorios filtrados</div>
+
+            <div class="bb-row-top">
+                <div class="bb-field" style="max-width:420px;">
+                    <label>Rama origen</label>
+                    <input class="bb-input bb-mono" id="originBranch" value="release/REP-325073">
+                </div>
+                <div class="bb-field" style="max-width:420px;">
+                    <label>Rama Destino</label>
+                    <input class="bb-input bb-mono" id="targetBranch" value="master">
+                </div>
+                <div class="summary" id="branchSummary" style="display:none;">
+                    <b id="statTotal">–</b> repos · <b style="color:var(--bb-success);" id="statFound">–</b> con la rama
+                    · <b style="color:var(--bb-danger);" id="statMissing">–</b> sin la rama
+                </div>
+                <button class="bb-btn-secondary" id="btnBranch">Ver rama en estos repos</button>
+            </div>
+
+            <div class="bb-table bb-table--repos" style="--bb-cols: 1.4fr 1.6fr 1.2fr;">
+                <div class="bb-repos-head">
+                    <span>Repositorio</span>
+                    <span>Pull Request</span>
+                    <span>Ver más</span>
+                </div>
+                <div id="rows"></div>
+            </div>
+
+            <div class="table-foot"
+                style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+                <span id="pagInfo">Mostrando 0 repositorios</span>
+                <span style="display:flex;align-items:center;gap:8px;">
+                    <label style="font-weight:700;color:var(--bb-text-secondary);" for="pageSize">Filas:</label>
+                    <select id="pageSize" class="bb-mono" style="height:26px;">
+                        <option value="10">10</option>
+                        <option value="20">20</option>
+                        <option value="50">50</option>
+                    </select>
+                    <button class="bb-btn-secondary bb-btn-sm" id="prevPage">‹ Anterior</button>
+                    <span id="pageLabel" class="bb-mono" style="min-width:52px;text-align:center;">1 / 1</span>
+                    <button class="bb-btn-secondary bb-btn-sm" id="nextPage">Siguiente ›</button>
+                </span>
+            </div>
+        </div>
+
+        <!-- ===================== DETALLE DEL REPOSITORIO ===================== -->
+        <div class="bb-panel" id="detailPanel" style="display:none;">
+            <div class="bb-row-top">
+                <button class="bb-btn-secondary bb-btn-sm" id="btnBack">‹ Volver a la lista</button>
+                <div id="detailMeta"></div>
+            </div>
+            <div id="detailBody"></div>
+        </div>
+
+    </div>
+
+    <!-- Capa fetch simulada: reemplaza un cliente HTTP real. DEBE cargar antes que data/*.js (los endpoints se registran contra BB.api). -->
+    <script src="./js/api.js"></script>
+
+    <!-- DATA = ENDPOINTS (la app real consulta estos mismos paths). -->
+    <script src="./data/config.js"></script>
+    <script src="./data/repos-quick.js"></script>
+    <script src="./data/flow.js"></script>
+    <script src="./data/pr.js"></script>
+    <script src="./data/prs-update-titles.js"></script>
+    <script src="./data/tags.js"></script>
+    <script src="./data/ssm-environments.js"></script>
+    <script src="./data/ssm-values.js"></script>
+
+    <script>
+        // =====================================================================
+        // LÓGICA DEL MOCK (todo lo demás se edita directo en el HTML).
+        // La data no se toca acá: viene de data/*.js vía BB.api.fetch().
+        // =====================================================================
+        const $ = (id) => document.getElementById(id);
+        const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({
+            "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+        }[c]));
+
+        // ---------- estado ----------
+        const state = {
+            repos: [],
+            states: {},          // slug -> pending | checking | found | not_found
+            removed: new Set(),
+            creating: new Set(), // PR en curso
+            page: 1,
+            pageSize: 10,
+            flowBySlug: {},      // pr + tags por repo (del flow)
+            paramsBySlug: {},    // params SSM por repo
+            regions: ["qa", "uat", "stgp", "prod"],
+            selectedRegions: new Set(["qa", "uat", "stgp", "prod"]),
+            generating: new Set(),
+            excelTimer: null,
+        };
+
+        const api = (method, path, query) => BB.api.fetch(method, path, query);
+
+        // ---------- utilidades de listado ----------
+        function visibleRepos() {
+            return state.repos.filter(r => !state.removed.has(r.slug))
+                .slice().sort((a, b) => a.slug.localeCompare(b.slug));
+        }
+
+        function paginatedRepos() {
+            const all = visibleRepos();
+            const pages = Math.max(1, Math.ceil(all.length / state.pageSize));
+            if (state.page > pages) state.page = pages;
+            return { rows: all.slice((state.page - 1) * state.pageSize, state.page * state.pageSize), pages, total: all.length };
+        }
+
+        // ---------- rendereo de la tabla ----------
+        function prCell(repo) {
+            const creating = state.creating.has(repo.slug);
+            const pr = state.flowBySlug[repo.slug]?.pr;
+            if (creating) {
+                return '<span class="bb-deploy-badge bb-deploy--pending"><span class="bb-spinner-inline"></span>Creando PR…</span>';
+            }
+            if (pr && pr.url) {
+                return `<a class="bb-link" href="${esc(pr.url)}" target="_blank">${esc(pr.title)}</a>`;
+            }
+            // Sin la rama resuelta todavía no se puede generar el PR: aún no sabemos si existe.
+            if (state.states[repo.slug] !== "found") {
+                return '<span class="muted">—</span>';
+            }
+            const origin = $("originBranch").value.trim();
+            const dest = $("targetBranch").value.trim() || "master";
+            const apiHint = `/api/pr?repo=${repo.slug}&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(dest)}&title=${encodeURIComponent(`Release: ${origin} → ${dest}`)}`;
+            return `<button class="bb-link" data-action="create-pr" data-slug="${repo.slug}" title="POST ${apiHint}">Crear PR</button>`;
+        }
+
+        function branchBadge(repo) {
+            const st = state.states[repo.slug];
+            if (st === "checking") return '<span class="bb-deploy-badge bb-deploy--pending"><span class="bb-spinner-inline"></span>Revisando…</span>';
+            if (st === "found") return '<span class="bb-deploy-badge bb-deploy--ok">✓ Encontrada</span>';
+            return '<span class="muted">—</span>';
+        }
+
+        function renderRows() {
+            const { rows } = paginatedRepos();
+            $("rows").innerHTML = rows.map(repo => `
+                <div class="bb-repos-row">
+                    <span>
+                        <a class="bb-link" href="#" data-action="open-detail" data-slug="${esc(repo.slug)}">${esc(repo.slug)}</a>
+                        <div class="muted" style="margin-top:4px;">${branchBadge(repo)}</div>
+                    </span>
+                    <span>${prCell(repo)}</span>
+                    <span>
+                        <button class="bb-btn-secondary bb-btn-sm" data-action="open-detail" data-slug="${esc(repo.slug)}">Ver más ›</button>
+                    </span>
+                </div>`).join("");
+        }
+
+        function renderCounts() {
+            const all = visibleRepos();
+            const found = all.filter(r => state.states[r.slug] === "found").length;
+            const pages = Math.max(1, Math.ceil(all.length / state.pageSize));
+            if (state.page > pages) state.page = pages;
+            const from = all.length ? (state.page - 1) * state.pageSize + 1 : 0;
+            const to = Math.min(state.page * state.pageSize, all.length);
+            $("pagInfo").textContent = `Mostrando ${from}–${to} de ${all.length} repositorios · ${state.removed.size} removidos por no tener la rama`;
+            $("pageLabel").textContent = `${state.page} / ${pages}`;
+            $("prevPage").disabled = state.page <= 1;
+            $("nextPage").disabled = state.page >= pages;
+        }
+
+        // ---------- acciones: listado ----------
+        $("btnSearch").addEventListener("click", async () => {
+            const res = await api("GET", "/api/repos-quick", {
+                origin: $("originBranch").value.trim(),
+                destination: $("targetBranch").value.trim(),
+                project_prefixes: BB.config.default_filters.project_prefixes.join(","),
+                exclude: BB.config.default_filters.exclude.join(","),
+            });
+            const flow = await api("GET", "/api/flow", { origin: "release/REP-325073", destination: "master", with_diff: true, with_tags: true });
+            state.repos = res.repos;
+            state.flowBySlug = {};
+            for (const r of flow.repos) state.flowBySlug[r.slug] = r;
+            state.states = {};
+            state.removed.clear();
+            res.repos.forEach(r => { state.states[r.slug] = "pending"; });
+            $("tablePanel").style.display = "flex";
+            $("branchSummary").style.display = "none";
+            $("btnBranch").disabled = false;
+            $("btnBranch").textContent = "Ver rama en estos repos";
+            renderRows();
+            renderCounts();
+            window.scrollTo({ top: $("tablePanel").offsetTop - 20, behavior: "smooth" });
+        });
+
+        $("btnBranch").addEventListener("click", () => {
+            if ($("btnBranch").disabled) return;
+            $("btnBranch").disabled = true;
+            state.removed.clear();
+            $("branchSummary").style.display = "inline-block";
+            state.repos.forEach(r => { state.states[r.slug] = "checking"; });
+            renderRows(); renderCounts();
+
+            state.repos.forEach((repo, i) => {
+                setTimeout(() => {
+                    const found = repo.branch_state === "found";
+                    state.states[repo.slug] = found ? "found" : "not_found";
+                    if (!found) state.removed.add(repo.slug);
+                    renderRows(); renderCounts();
+                    if (state.repos.every(r => state.states[r.slug] !== "checking")) {
+                        $("btnBranch").disabled = false;
+                        $("btnBranch").textContent = "Reconsultar rama";
+                    }
+                }, 300 + i * 120);
+            });
+        });
+
+        async function createPr(slug) {
+            if (state.creating.has(slug)) return;
+            state.creating.add(slug);
+            renderRows();
+            const origin = $("originBranch").value.trim();
+            const dest = $("targetBranch").value.trim() || "master";
+            const res = await api("POST", "/api/pr", {
+                repo: slug, origin, destination: dest,
+                title: `Release: ${origin} → ${dest}`,
+            });
+            if (!state.flowBySlug[slug]) state.flowBySlug[slug] = { slug, pr: null, tags: {} };
+            state.flowBySlug[slug].pr = res.pr;
+            state.creating.delete(slug);
+            renderRows();
+        }
+
+        $("pageSize").addEventListener("change", (e) => {
+            state.pageSize = Number(e.target.value);
+            state.page = 1;
+            renderRows(); renderCounts();
+        });
+        $("prevPage").addEventListener("click", () => {
+            if (state.page <= 1) return;
+            state.page--;
+            renderRows(); renderCounts();
+        });
+        $("nextPage").addEventListener("click", () => {
+            state.page++;
+            renderRows(); renderCounts();
+        });
+
+        $("rows").addEventListener("click", (ev) => {
+            const el = ev.target.closest("[data-action]");
+            if (!el) return;
+            if (el.dataset.action === "create-pr") createPr(el.dataset.slug);
+            if (el.dataset.action === "open-detail") openDetail(el.dataset.slug);
+        });
+
+        // ---------- detalle ----------
+        async function openDetail(slug) {
+            const [flow, ssm, envs] = await Promise.all([
+                api("GET", "/api/flow", { origin: "release/REP-325073", destination: "master", with_diff: true, with_tags: true }),
+                api("GET", "/api/ssm/values", { repo: slug }),
+                api("GET", "/api/ssm/environments"),
+            ]);
+            const repo = state.repos.find(r => r.slug === slug) || {};
+            state.selectedRegions = new Set(envs.environments.map(e => e.code));
+            state.regions = envs.environments.map(e => e.code);
+            state.flowBySlug[slug] = flow.repos.find(r => r.slug === slug) || { slug, pr: null, tags: {} };
+            state.paramsBySlug[slug] = ssm.params;
+
+            state.detailSlug = slug;
+            $("searchPanel").style.display = "none";
+            $("tablePanel").style.display = "none";
+            $("detailPanel").style.display = "flex";
+            renderDetail();
+            window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+
+        function closeDetail() {
+            $("detailPanel").style.display = "none";
+            $("searchPanel").style.display = "flex";
+            $("tablePanel").style.display = "flex";
+            window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+        $("btnBack").addEventListener("click", closeDetail);
+
+        function renderDetail() {
+            const slug = state.detailSlug;
+            const d = state.flowBySlug[slug];
+            const repo = state.repos.find(r => r.slug === slug) || {};
+            const params = state.paramsBySlug[slug] || [];
+
+            $("detailMeta").innerHTML = `
+                <div style="font-weight:800;font-size:var(--bb-font-md);">${esc(slug)}</div>
+                <div class="muted">${esc(repo.project || "")} · acme-workspace · rama resuelta: <span class="bb-mono">${esc(repo.resolved_branch || "—")}</span>
+                    <a class="bb-link" href="https://bitbucket.org/acme-workspace/${esc(slug)}/browse" target="_blank">ver repo ↗</a>
+                </div>`;
+
+            const updating = state.generating.has(slug + "|pr");
+
+            // --- PR ---
+            let prBlock;
+            if (d.pr && d.pr.id) {
+                prBlock = `
+                    <div class="bb-row-top">
+                        <a class="bb-link" href="${esc(d.pr.url)}" target="_blank">PR #${d.pr.id} — ${esc(d.pr.title)}</a>
+                    </div>
+                    <div class="bb-row-top">
+                        <input class="bb-input bb-mono" id="prTitleInput" value="${esc(d.pr.title)}" style="max-width:480px;">
+                        <button class="bb-btn-secondary" data-action="update-pr" ${updating ? "disabled" : ""}>
+                            ${updating ? '<span class="bb-spinner-inline"></span>Actualizando…' : "Actualizar título"}
+                        </button>
+                    </div>`;
+            } else {
+                const origin = $("originBranch").value.trim();
+                const dest = $("targetBranch").value.trim() || "master";
+                prBlock = `
+                    <div class="bb-row-top">
+                        <button class="bb-btn-secondary" data-action="create-pr-detail">Crear PR</button>
+                        <span class="muted">Sin PR hacia ${esc(dest)} todavía</span>
+                        <span class="muted">POST /api/pr?repo=${esc(slug)}&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(dest)}</span>
+                    </div>`;
+            }
+
+            // --- tags deploy ---
+            const envs = BB.config.deploy_envs;
+            const tagRows = envs.map(env => {
+                const tag = d.tags && d.tags[env];
+                const gen = state.generating.has(slug + "|tag:" + env);
+                let cell;
+                if (gen) cell = '<span class="bb-deploy-badge bb-deploy--pending"><span class="bb-spinner-inline"></span>Generando…</span>';
+                else if (tag) cell = `<span class="bb-chip-pill bb-mono">${esc(tag)}</span>`;
+                else cell = `<button class="bb-btn-secondary bb-btn-sm" data-action="generate-tag" data-env="${env}">Generar ${env}-tag</button>`;
+                return `<div class="bb-repos-row"><span>${env}</span><span>${cell}</span></div>`;
+            }).join("");
+
+            // --- params SSM + regiones ---
+            const cols = state.regions.filter(r => state.selectedRegions.has(r));
+            const regionChecks = state.regions
+                .map(r => `<label class="bb-chip" style="cursor:pointer;"><input type="checkbox" data-region="${r}" style="margin-right:4px;" ${state.selectedRegions.has(r) ? "checked" : ""}>${r}</label>`)
+                .join("");
+            const paramsHead = `<span>Parámetro</span><span>Tipo</span>${cols.map(r => `<span class="bb-mono">${r}</span>`).join("")}<span>AWS</span>`;
+            const paramsRows = params.map(p => {
+                const vals = cols.map(r => {
+                    const v = p.values && p.values[r];
+                    return v ? `<span class="bb-mono">${esc(v)}</span>` : '<span class="muted">—</span>';
+                }).join("");
+                const aws = p.aws_status === "missing"
+                    ? '<span class="bb-deploy-badge bb-deploy--danger">missing</span>'
+                    : '<span class="bb-deploy-badge bb-deploy--ok">ok</span>';
+                return `<div class="bb-repos-row"><span class="bb-mono">${esc(p.name)}</span><span>${esc(p.type)}</span>${vals}<span>${aws}</span></div>`;
+            }).join("");
+            const paramsTable = `
+                <div class="bb-row-top">${regionChecks}</div>
+                <div class="bb-table bb-table--repos" style="--bb-cols: 2fr 1fr ${cols.map(() => "1.2fr").join(" ")} 0.8fr;">
+                    <div class="bb-repos-head">${paramsHead}</div>${paramsRows}
+                </div>`;
+
+            const excelBlock = `
+                <div class="bb-row-top">
+                    <button class="bb-btn-primary" data-action="excel">Generar Excel (consultar todo)</button>
+                    <span class="muted">Consulta TODOS los repos del workspace (~${BB.config.total_repos}) — puede tardar varios minutos.</span>
+                </div>
+                <div id="excelProgress" style="display:none;">
+                    <div style="height:8px;background:var(--bb-border);border-radius:4px;overflow:hidden;">
+                        <div id="excelBar" style="height:100%;width:0%;background:var(--bb-success);"></div>
+                    </div>
+                    <span class="muted" id="excelStatus"></span>
+                </div>`;
+
+            const section = (title, body) => `
+                <div class="bb-section">
+                    <div class="bb-section-header">${title}</div>
+                    ${body}
+                </div>`;
+
+            $("detailBody").innerHTML =
+                section("Pull Request", prBlock) +
+                section("Tags para CircleCI (deploy)",
+                    `<div class="bb-table bb-table--repos" style="--bb-cols: 8rem 1fr;"><div class="bb-repos-head"><span>Ambiente</span><span>Tag</span></div>${tagRows}</div>`) +
+                section("Parámetros SSM del repositorio", paramsTable) +
+                section("Generar Excel", excelBlock);
+        }
+
+        $("detailBody").addEventListener("click", async (ev) => {
+            const el = ev.target.closest("[data-action]");
+            if (!el) return;
+            const action = el.dataset.action;
+            const slug = state.detailSlug;
+
+            if (action === "create-pr-detail") {
+                const origin = $("originBranch").value.trim();
+                const dest = $("targetBranch").value.trim() || "master";
+                const res = await api("POST", "/api/pr", {
+                    repo: slug, origin, destination: dest,
+                    title: `Release: ${origin} → ${dest}`,
+                });
+                state.flowBySlug[slug].pr = res.pr;
+                const repo = state.repos.find(r => r.slug === slug);
+                if (repo) repo.details = { pr_info: res.pr };
+                renderDetail();
+            }
+
+            if (action === "update-pr") {
+                const title = ($("prTitleInput") && $("prTitleInput").value.trim());
+                if (!title) return;
+                state.generating.add(slug + "|pr");
+                renderDetail();
+                const res = await api("POST", "/api/prs/update-titles", {
+                    repos: [slug], origin: "release/REP-325073", destination: "master", title,
+                });
+                const row = res.repos[0];
+                if (row) state.flowBySlug[slug].pr = { id: row.id, title: row.title, url: row.url };
+                state.generating.delete(slug + "|pr");
+                renderDetail();
+            }
+
+            if (action === "generate-tag") {
+                const env = el.dataset.env;
+                const key = slug + "|tag:" + env;
+                if (state.generating.has(key)) return;
+                state.generating.add(key);
+                renderDetail();
+                const res = await api("POST", "/api/tags", {
+                    repo: slug, origin: "release/REP-325073", destination: "master", prefixes: [env],
+                });
+                state.flowBySlug[slug].tags[env] = res.tags[env];
+                state.generating.delete(key);
+                renderDetail();
+            }
+
+            if (action === "excel") {
+                const btn = ev.target.closest("[data-action='excel']");
+                if (btn.disabled) return;
+                btn.disabled = true;
+                $("excelProgress").style.display = "block";
+                let pct = 0;
+                clearInterval(state.excelTimer);
+                state.excelTimer = setInterval(() => {
+                    pct = Math.min(100, pct + 3);
+                    $("excelBar").style.width = pct + "%";
+                    $("excelStatus").textContent =
+                        pct >= 100 ? "Excel listo: ssm-params-workspace-2026-09-15.xlsx" : `Consulta completa del workspace… ${pct}%`;
+                    if (pct >= 100) clearInterval(state.excelTimer);
+                }, 250);
+            }
+        });
+
+        $("detailBody").addEventListener("change", (ev) => {
+            const cb = ev.target.closest("[data-region]");
+            if (!cb) return;
+            if (cb.checked) state.selectedRegions.add(cb.dataset.region);
+            else state.selectedRegions.delete(cb.dataset.region);
+            renderDetail();
+        });
+
+        // ---------- init ----------
+        $("wsTotal").textContent = BB.config.total_repos;
+        $("wsTotal2").textContent = BB.config.total_repos;
+        $("wsTotal3").textContent = BB.config.total_repos;
+        $("prefixChips").innerHTML = BB.config.default_filters.project_prefixes
+            .map(p => `<span class="bb-chip-pill bb-mono">${p}</span>`).join("");
+        $("blacklistChips").innerHTML = BB.config.default_filters.exclude
+            .map(p => `<span class="bb-chip-pill bb-chip-pill--danger bb-mono">${p}</span>`).join("");
+    </script>
+</body>
+
+</html>
