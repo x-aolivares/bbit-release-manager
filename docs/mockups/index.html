@@ -44,8 +44,28 @@
         <!-- ===================== TABLA DE REPOS FILTRADOS ===================== -->
         <div class="bb-panel" id="tablePanel" style="display:none;">
             <div class="bb-section-header">Repositorios filtrados</div>
+            <!-- barra de filtros de la tabla: texto (slug/nombre) + chips de tags -->
+            <div class="bb-filter-bar">
+                <div class="bb-field" style="max-width:320px;flex:none;">
+                    <label for="tableSearch">Buscar en la lista</label>
+                    <input class="bb-input" id="tableSearch" placeholder="slug o nombre…"
+                        style="font-size:var(--bb-font-sm);">
+                </div>
+                <div class="bb-field">
+                    <label>Tags de flujo</label>
+                    <div class="bb-chips" id="tagFilterChips"></div>
+                </div>
+            </div>
 
-            <div class="bb-row-top">
+            <div class="bb-row-top" style="margin-bottom:4px;">
+                <label
+                    style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:var(--bb-font-sm);font-weight:600;">
+                    <input type="checkbox" id="toggleBranch"
+                        style="width:15px;height:15px;accent-color:var(--bb-blue);cursor:pointer;">
+                    Procesar salida
+                </label>
+            </div>
+            <div class="bb-row-top" id="branchSection" style="display:none;">
                 <div class="bb-field" style="max-width:420px;">
                     <label>Rama origen</label>
                     <input class="bb-input bb-mono" id="originBranch" value="release/REP-325073">
@@ -59,19 +79,6 @@
                     · <b style="color:var(--bb-danger);" id="statMissing">–</b> sin la rama
                 </div>
                 <button class="bb-btn-secondary" id="btnBranch">Ver rama en estos repos</button>
-            </div>
-
-            <!-- barra de filtros de la tabla: texto (slug/nombre) + chips de tags -->
-            <div class="bb-filter-bar">
-                <div class="bb-field" style="max-width:320px;flex:none;">
-                    <label for="tableSearch">Buscar en la lista</label>
-                    <input class="bb-input" id="tableSearch" placeholder="slug o nombre…"
-                        style="font-size:var(--bb-font-sm);">
-                </div>
-                <div class="bb-field">
-                    <label>Tags de flujo</label>
-                    <div class="bb-chips" id="tagFilterChips"></div>
-                </div>
             </div>
 
             <!-- barra contextual: visible con 1+ seleccionados -->
@@ -330,6 +337,10 @@
             window.scrollTo({ top: $("tablePanel").offsetTop - 20, behavior: "smooth" });
         });
 
+        $("toggleBranch").addEventListener("change", (ev) => {
+            $("branchSection").style.display = ev.target.checked ? "flex" : "none";
+        });
+
         $("btnBranch").addEventListener("click", () => {
             if ($("btnBranch").disabled) return;
             $("btnBranch").disabled = true;
@@ -512,8 +523,8 @@
                         }).join("")
                         : '<div class="muted" style="padding:2px 4px;font-size:12px;">Ningún repo tiene tags de flujo aún.</div>') +
                     '<div class="bb-row-top" style="margin-top:6px;gap:6px;align-items:center;">' +
-                        '<input class="bb-input" id="newTagInput" placeholder="Nuevo tag (ej: lambdas)" style="max-width:200px;font-size:12px;">' +
-                        '<button class="bb-btn-secondary" data-action="add-new-tag" style="font-size:12px;padding:4px 10px;">+ Agregar</button>' +
+                    '<input class="bb-input" id="newTagInput" placeholder="Nuevo tag (ej: lambdas)" style="max-width:200px;font-size:12px;">' +
+                    '<button class="bb-btn-secondary" data-action="add-new-tag" style="font-size:12px;padding:4px 10px;">+ Agregar</button>' +
                     '</div>' +
                     '<div id="newTagError" style="color:var(--bb-danger);font-size:12px;margin-top:2px;"></div>' +
                     '<div class="bb-row-top" style="margin-top:6px;">' +
