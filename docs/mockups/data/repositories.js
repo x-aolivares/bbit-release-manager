@@ -17,6 +17,7 @@ window.BB = window.BB || {};
 BB.__repo_store = BB.__repo_store || {
   TTL_MS: 24 * 60 * 60 * 1000,
   prs: {}, // key "slug|origin|destination" -> { pr, created_at }
+  repoTags: {}, // slug -> [tags de flujo, minúsculas]. viven en r_details real.
 
   _key(slug, origin, destination) {
     return slug + "|" + origin + "|" + destination;
@@ -42,7 +43,38 @@ BB.__repo_store = BB.__repo_store || {
       created_at: Date.now(),
     };
   },
+
+  // Tags de flujo por repo (tabla `repositories.r_details` en la app real).
+  getRepoTags(slug) {
+    return JSON.parse(JSON.stringify(this.repoTags[slug] || []));
+  },
+
+  // Asigna la lista COMPLETA de tags del repo (UPSERT/REEMPLAZO total).
+  setRepoTags(slug, tags) {
+    const clean = (tags || []).map((t) => String(t).toLowerCase());
+    if (clean.length) this.repoTags[slug] = JSON.parse(JSON.stringify(clean));
+    else delete this.repoTags[slug];
+  },
 };
+
+// Seed de tags de flujo (estado inicial de la "BD"). Es la fuente de verdad que
+// usa GET /api/repos-quick: limpiar/aplicar tags escribe acá vía setRepoTags.
+BB.__repo_store.setRepoTags("bbit-trnxd-orders-api", ["fargate", "batch"]);
+BB.__repo_store.setRepoTags("bbit-trnxd-orders-web", ["fargate"]);
+BB.__repo_store.setRepoTags("bbit-trnxd-orders-batch", ["batch"]);
+BB.__repo_store.setRepoTags("bbit-trnxd-orders-ingest", ["step-function"]);
+BB.__repo_store.setRepoTags("bbit-trnxd-orders-reporting", ["batch"]);
+BB.__repo_store.setRepoTags("bbit-accts-catalog-search", ["fargate"]);
+BB.__repo_store.setRepoTags("bbit-accts-catalog-ingest", ["step-function"]);
+BB.__repo_store.setRepoTags("bbit-accts-catalog-admin", ["fargate"]);
+BB.__repo_store.setRepoTags("bbit-accts-catalog-images", ["workflow"]);
+BB.__repo_store.setRepoTags("bbit-accts-payments-core", ["fargate"]);
+BB.__repo_store.setRepoTags("bbit-accts-payments-gateway", ["fargate", "workflow"]);
+BB.__repo_store.setRepoTags("bbit-accts-payments-refunds", ["step-function"]);
+BB.__repo_store.setRepoTags("bbit-accts-shipping-tracker", ["fargate"]);
+BB.__repo_store.setRepoTags("bbit-accts-identity-auth", ["workflow"]);
+BB.__repo_store.setRepoTags("bbit-accts-notifications", ["step-function", "fargate"]);
+BB.__repo_store.setRepoTags("bbit-trnxd-backend-db-scripts", ["batch"]);
 
 // Seed de demostración: dos repos ya tienen PR para release/REP-325073 → master,
 // así la primera carga los muestra sin ir a Bitbucket (cacheado, TTL fresco).

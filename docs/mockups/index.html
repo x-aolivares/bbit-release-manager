@@ -691,11 +691,15 @@
                     const merged = [...new Set([...prev, ...chosen])];
                     const added = merged.filter(t => !prev.includes(t));
                     const skipped = chosen.filter(t => prev.includes(t));
-                    r.tags = merged;
+                    // Escribir en la "BD" (BB.__repo_store → r_details) y reflejarlo
+                    // en el estado: así un GET /api/repos-quick posterior lo devuelve.
+                    BB.__repo_store.setRepoTags(s, merged);
+                    state.repos[state.repos.indexOf(r)].tags = BB.__repo_store.getRepoTags(s);
                     logs.push(`${s}: +${added.length} ${added.join(",") || "(nada nuevo)"} | duplicados omitidos: ${skipped.length}`);
                 });
                 console.log("[MOCK] upsert tags:", logs);
                 closeActionsModal();
+                renderRows();
                 return;
             }
             if (opt.dataset.action === "back-tags") {
@@ -707,10 +711,13 @@
                     const r = state.repos.find(x => x.slug === s);
                     if (!r) return;
                     const cleared = (r.tags || []).length;
-                    r.tags = [];
+                    // DELETE real en el almacén: vacía r_details.tags del repo.
+                    BB.__repo_store.setRepoTags(s, []);
+                    state.repos[state.repos.indexOf(r)].tags = BB.__repo_store.getRepoTags(s);
                     state.flowBySlug[s] && delete state.flowBySlug[s].tags;
                     if (cleared) console.log("[MOCK] clear tags:", `${s}: -${cleared}`);
                 });
+                renderRows();
                 closeActionsModal();
                 return;
             }
