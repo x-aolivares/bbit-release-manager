@@ -82,13 +82,13 @@
                     style="background:#fff;color:var(--bb-blue);border:none;">Acciones ▾</button>
             </div>
 
-            <div class="bb-table bb-table--repos" style="--bb-cols: 2.2rem 2rem 1.3fr 1.6fr 1.2fr;">
-                <div class="bb-repos-head">
+            <div class="bb-table bb-table--repos" id="reposTable" style="--bb-cols: 2.2rem 2rem 1.3fr 1.6fr 1.2fr;">
+                <div class="bb-repos-head" id="reposHead">
                     <span class="bb-check-cell"><input type="checkbox" id="checkAllHead"
                             title="Seleccionar página"></span>
                     <span>#</span>
                     <span>Repositorio</span>
-                    <span>Pull Request</span>
+                    <span id="prHeadCol">Pull Request</span>
                     <span>Procesamiento</span>
                 </div>
                 <div id="rows"></div>
@@ -104,8 +104,8 @@
                         <option value="20">20</option>
                         <option value="50">50</option>
                     </select>
-                    <button class="bb-btn-secondary bb-btn-sm" id="prevPage">‹ Anterior</button>
                     <span id="pageLabel" class="bb-mono" style="min-width:52px;text-align:center;">1 / 1</span>
+                    <button class="bb-btn-secondary bb-btn-sm" id="prevPage">‹ Anterior</button>
                     <button class="bb-btn-secondary bb-btn-sm" id="nextPage">Siguiente ›</button>
                 </span>
             </div>
@@ -134,6 +134,30 @@
             </div>
         </div>
 
+        <!-- ===================== MODAL: CREAR PR INDIVIDUAL ===================== -->
+        <div class="bb-modal-overlay" id="prModal" style="display:none;">
+            <div class="bb-modal">
+                <div class="bb-modal-head">
+                    <span class="bb-modal-title">Crear Pull Request</span>
+                    <button class="bb-modal-x" id="prModalClose" title="Cerrar">✕</button>
+                </div>
+                <div class="bb-modal-body">
+                    <div id="prModalRepo"></div>
+                    <div class="muted bb-mono" id="prModalRoute" style="margin-top:4px;font-size:12px;"></div>
+                    <div style="margin-top:14px;">
+                        <label class="muted" for="prTitleInput">Título del PR</label>
+                        <div class="bb-row-top" style="margin-top:6px;">
+                            <input class="bb-input bb-mono" id="prTitleInput" style="max-width:480px;flex:1;" value="">
+                        </div>
+                    </div>
+                    <div class="bb-row-top" style="margin-top:16px;justify-content:flex-end;">
+                        <button class="bb-btn-secondary" id="prModalCancel">Cancelar</button>
+                        <button class="bb-btn-primary" id="prModalConfirm">Crear PR</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <!-- Capa fetch simulada: reemplaza un cliente HTTP real. DEBE cargar antes que data/*.js (los endpoints se registran contra BB.api). -->
@@ -141,6 +165,7 @@
 
     <!-- DATA = ENDPOINTS (la app real consulta estos mismos paths). -->
     <script src="./data/config.js"></script>
+    <script src="./data/repositories.js"></script>
     <script src="./data/repos-quick.js"></script>
     <script src="./data/flow.js"></script>
     <script src="./data/pr.js"></script>
@@ -230,12 +255,14 @@
             if (creating) {
                 return '<span class="bb-deploy-badge bb-deploy--pending"><span class="bb-spinner-inline"></span>Creando PR…</span>';
             }
-            if (pr && pr.url) {
-                return `<a class="bb-link" href="${esc(pr.url)}" target="_blank">${esc(pr.title)}</a>`;
-            }
-            // Sin la rama resuelta todavía no se puede generar el PR: aún no sabemos si existe.
+            // La columna PR solo aplica con "Procesar salida" y recién tiene
+            // sentido cuando la rama se verificó ("Ver rama en estos repos").
+            // Antes de eso el estado es pending/checking → no se muestra PR.
             if (state.states[repo.slug] !== "found") {
                 return '<span class="muted">—</span>';
+            }
+            if (pr && pr.url) {
+                return `<a class="bb-link" href="${esc(pr.url)}" target="_blank">${esc(pr.title)}</a>`;
             }
             const origin = $("originBranch").value.trim();
             const dest = $("targetBranch").value.trim() || "master";
@@ -250,10 +277,21 @@
             return "";
         }
 
+        // La columna "Pull Request" es exclusiva de "Procesar salida": sin el
+        // checkbox no existe (ni header ni celdas), y el grid pasa a 4 columnas.
+        function syncPrColumn() {
+            const active = $("toggleBranch").checked;
+            $("prHeadCol").style.display = active ? "" : "none";
+            $("reposTable").style.setProperty("--bb-cols",
+                active ? "2.2rem 2rem 1.3fr 1.6fr 1.2fr" : "2.2rem 2rem 1.3fr 1.2fr");
+        }
+
         function renderRows() {
             const { rows, total } = paginatedRepos();
             const pad = Math.max(1, String(total).length);
             const offset = (state.page - 1) * state.pageSize;
+            const prActive = $("toggleBranch").checked;
+            syncPrColumn();
             $("rows").innerHTML = rows.map((repo, i) => `
                 <div class="bb-repos-row ${state.selected.has(repo.slug) ? "bb-repos-row--selected" : ""}">
                     <span class="bb-check-cell">
@@ -266,7 +304,7 @@
                         ${state.states[repo.slug] === "checking"
                     ? `<div class="muted" style="margin-top:4px;">${branchBadge(repo)}</div>` : ""}
                     </span>
-                    <span>${prCell(repo)}</span>
+                    <span style="display:${prActive ? "" : "none"}">${prCell(repo)}</span>
                     <span>
                         <button class="bb-btn-secondary bb-btn-sm" data-action="open-detail" data-slug="${esc(repo.slug)}">Ver más ›</button>
                     </span>
@@ -315,6 +353,14 @@
             state.repos = res.repos;
             state.flowBySlug = {};
             for (const r of flow.repos) state.flowBySlug[r.slug] = r;
+            // PR cacheado que devuelve repos-quick (tabla `repositories`, TTL 24h):
+            // se muestra ya existente en la primera consulta, sin ir a Bitbucket.
+            for (const r of res.repos) {
+                if (r.pr) {
+                    if (!state.flowBySlug[r.slug]) state.flowBySlug[r.slug] = { slug: r.slug, pr: null, tags: {} };
+                    state.flowBySlug[r.slug].pr = r.pr;
+                }
+            }
             state.states = {};
             state.removed.clear();
             res.repos.forEach(r => { state.states[r.slug] = "pending"; });
@@ -337,13 +383,15 @@
             $("targetBranch").style.display = vis;
             $("btnBranch").style.display = vis;
             $("branchSummary").style.display = "none";
+            syncPrColumn();
+            renderRows();
             if (!ev.target.checked) {
                 state.removed.clear();
                 state.repos.forEach(r => { state.states[r.slug] = "pending"; });
                 $("statTotal").textContent = "–";
                 $("statFound").textContent = "–";
                 $("statMissing").textContent = "–";
-                renderRows(); renderCounts(); renderTagChips();
+                renderCounts(); renderTagChips();
                 $("btnBranch").disabled = false;
                 $("btnBranch").textContent = "Ver rama en estos repos";
             }
@@ -383,7 +431,7 @@
             });
         });
 
-        async function createPr(slug) {
+        async function createPr(slug, title) {
             if (state.creating.has(slug)) return;
             state.creating.add(slug);
             renderRows();
@@ -391,13 +439,41 @@
             const dest = $("targetBranch").value.trim() || "master";
             const res = await api("POST", "/api/pr", {
                 repo: slug, origin, destination: dest,
-                title: `Release: ${origin} → ${dest}`,
+                title: title || `Release: ${origin} → ${dest}`,
             });
             if (!state.flowBySlug[slug]) state.flowBySlug[slug] = { slug, pr: null, tags: {} };
             state.flowBySlug[slug].pr = res.pr;
             state.creating.delete(slug);
             renderRows();
+            const repo = state.repos.find(r => r.slug === slug);
+            if (repo) repo.pr = res.pr;
+            if (state.detailSlug === slug) renderDetail();
         }
+
+        // ---------- modal: crear PR individual ----------
+        let prModalSlug = null;
+        function openPrModal(slug) {
+            const origin = $("originBranch").value.trim();
+            const dest = $("targetBranch").value.trim() || "master";
+            prModalSlug = slug;
+            $("prModalRepo").innerHTML = `<b>${esc(slug)}</b>`;
+            $("prModalRoute").textContent = `POST /api/pr?repo=${slug}&origin=${origin}&destination=${dest}`;
+            $("prTitleInput").value = `Release: ${origin} → ${dest}`;
+            $("prModal").style.display = "flex";
+        }
+        function closePrModal() {
+            $("prModal").style.display = "none";
+            prModalSlug = null;
+        }
+        $("prModalClose").addEventListener("click", closePrModal);
+        $("prModalCancel").addEventListener("click", closePrModal);
+        $("prModalConfirm").addEventListener("click", () => {
+            const slug = prModalSlug;
+            if (!slug) return;
+            const title = $("prTitleInput").value.trim();
+            closePrModal();
+            createPr(slug, title);
+        });
 
         $("pageSize").addEventListener("change", (e) => {
             state.pageSize = Number(e.target.value);
@@ -435,7 +511,7 @@
         $("rows").addEventListener("click", (ev) => {
             const el = ev.target.closest("[data-action]");
             if (!el) return;
-            if (el.dataset.action === "create-pr") createPr(el.dataset.slug);
+            if (el.dataset.action === "create-pr") openPrModal(el.dataset.slug);
             if (el.dataset.action === "open-detail") openDetail(el.dataset.slug);
         });
 
@@ -757,16 +833,7 @@
             const slug = state.detailSlug;
 
             if (action === "create-pr-detail") {
-                const origin = $("originBranch").value.trim();
-                const dest = $("targetBranch").value.trim() || "master";
-                const res = await api("POST", "/api/pr", {
-                    repo: slug, origin, destination: dest,
-                    title: `Release: ${origin} → ${dest}`,
-                });
-                state.flowBySlug[slug].pr = res.pr;
-                const repo = state.repos.find(r => r.slug === slug);
-                if (repo) repo.details = { pr_info: res.pr };
-                renderDetail();
+                openPrModal(slug);
             }
 
             if (action === "update-pr") {

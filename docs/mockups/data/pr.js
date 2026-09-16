@@ -16,15 +16,24 @@ BB.api.on("POST", "/api/pr", function (query) {
   const title = query.title || "Release: " + origin + " → " + destination;
 
   const id = 100 + slug.length * 7;
+  const pr = {
+    id,
+    title,
+    url: "https://bitbucket.org/acme-workspace/" + slug + "/pull-requests/" + id,
+    state: "OPEN",
+  };
+
+  // Persistir en la tabla `repositories` (mock): el PR queda cacheado para
+  // "slug + origin→dest" con TTL 24h, así la próxima consulta de repos lo
+  // devuelve sin volver a contactar a Bitbucket.
+  if (BB.__repo_store) BB.__repo_store.setPr(slug, origin, destination, pr);
+
   return {
     slug,
     origin,
     destination,
-    pr: {
-      id,
-      title,
-      url: "https://bitbucket.org/acme-workspace/" + slug + "/pull-requests/" + id,
-      state: "OPEN",
-    },
+    pr,
+    cached: true,
+    cached_ttl_hours: BB.__repo_store ? BB.__repo_store.TTL_MS / 3600000 : 24,
   };
 });

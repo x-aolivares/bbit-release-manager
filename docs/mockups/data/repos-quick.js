@@ -30,9 +30,9 @@ const __repos_repo_table = [
   { slug: "bbit-accts-payments-gateway", name: "Payments Gateway", branch_state: "found", tags: ["fargate", "workflow"] },
   { slug: "bbit-accts-payments-refunds", name: "Payments Refunds", branch_state: "not_found", tags: ["step-function"] },
   { slug: "bbit-accts-shipping-tracker", name: "Shipping Tracker", branch_state: "found", tags: ["fargate"] },
-  // { slug: "bbit-accts-identity-auth", name: "Identity Auth", branch_state: "found", tags: ["workflow"] },
-  // { slug: "bbit-accts-notifications", name: "Notifications", branch_state: "found", tags: ["step-function", "fargate"] },
-  // { slug: "bbit-trnxd-backend-db-scripts", name: "Backend DB Scripts", branch_state: "found", tags: ["batch"] },
+  { slug: "bbit-accts-identity-auth", name: "Identity Auth", branch_state: "found", tags: ["workflow"] },
+  { slug: "bbit-accts-notifications", name: "Notifications", branch_state: "found", tags: ["step-function", "fargate"] },
+  { slug: "bbit-trnxd-backend-db-scripts", name: "Backend DB Scripts", branch_state: "found", tags: ["batch"] },
 ];
 
 BB.api.on("GET", "/api/repos-quick", function (query) {
@@ -50,15 +50,24 @@ BB.api.on("GET", "/api/repos-quick", function (query) {
   const repos = __repos_repo_table
     .filter((r) => !exclude.includes(r.slug))
     .filter((r) => !prefixes.length || prefixes.some((p) => r.slug.startsWith(p)))
-    .map((r) => ({
-      slug: r.slug,
-      name: r.name,
-      workspace: BB.config.workspace,
-      default_branch: "master",
-      resolved_branch: r.branch_state === "found" ? origin : "",
-      branch_state: origin && destination ? r.branch_state : "found",
-      tags: (r.tags || []).map((t) => t.toLowerCase()),
-    }));
+    .map((r) => {
+      const base = {
+        slug: r.slug,
+        name: r.name,
+        workspace: BB.config.workspace,
+        default_branch: "master",
+        resolved_branch: r.branch_state === "found" ? origin : "",
+        branch_state: origin && destination ? r.branch_state : "found",
+        tags: (r.tags || []).map((t) => t.toLowerCase()),
+      };
+      // PR cacheado en `repositories` para esta combinación de ramas (TTL 24h):
+      // la primera consulta lo devuelve sin llamar a Bitbucket. Si expiró o no
+      // existe, `pr` queda null y el front vuelve a ofrecer "Crear PR".
+      base.pr = (BB.__repo_store && origin && destination)
+        ? BB.__repo_store.getPr(r.slug, origin, destination)
+        : null;
+      return base;
+    });
 
   return { repos, count: repos.length };
 });
