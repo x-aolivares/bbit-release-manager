@@ -62,8 +62,8 @@
                     <input type="checkbox" id="toggleBranch" style="width:15px;height:15px;accent-color:var(--bb-blue);cursor:pointer;">
                     Procesar salida
                 </label>
-                <input class="bb-input bb-mono" id="originBranch" placeholder="Rama origen" value="release/REP-325073" style="display:none;">
-                <input class="bb-input bb-mono" id="targetBranch" placeholder="Rama Destino" value="master" style="display:none;">
+                <input class="bb-input bb-mono" id="originBranch" placeholder="Rama origen" value="release/REP-325073" style="display:none;max-width:260px;">
+                <input class="bb-input bb-mono" id="targetBranch" placeholder="Rama Destino" value="master" style="display:none;max-width:260px;">
                 <div class="summary" id="branchSummary" style="display:none;">
                     <b id="statTotal">–</b> repos · <b style="color:var(--bb-success);" id="statFound">–</b> con la rama
                     · <b style="color:var(--bb-danger);" id="statMissing">–</b> sin la rama
@@ -328,7 +328,7 @@
         });
 
         $("toggleBranch").addEventListener("change", (ev) => {
-            const vis = ev.target.checked ? "block" : "none";
+            const vis = ev.target.checked ? "inline-block" : "none";
             $("originBranch").style.display = vis;
             $("targetBranch").style.display = vis;
             $("btnBranch").style.display = vis;
