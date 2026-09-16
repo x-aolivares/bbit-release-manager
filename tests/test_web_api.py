@@ -3841,3 +3841,87 @@ def test_repos_quick_con_origin_aplica_filtros_de_proyecto(monkeypatch):
     assert body["count"] == 2
     assert by_slug["api-x"]["branch_state"] == "found"
     assert by_slug["api-y"]["branch_state"] == "not_found"
+
+
+def test_repos_quick_incluye_tags_de_flujo_persistidos(monkeypatch):
+    """BBIT-66: repos-quick devuelve los tags de flujo leídos de
+    repositories.r_details (persistencia real, no mock)."""
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True), "J")
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return [
+                SimpleNamespace(slug="orders-api", name="Orders API", workspace="ws", default_branch="master"),
+                SimpleNamespace(slug="orders-web", name="Orders Web", workspace="ws", default_branch="master"),
+            ]
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    # Persistir tags via endpoint antes de consultar repos-quick.
+    up = client.patch("/api/flow-tags", params={"repos": "orders-api,orders-web", "tags": "Fargate, fargate ,Batch"}).json()
+    assert up["ok"] is True
+    assert up["repos"]["orders-api"] == ["batch", "fargate"]
+    assert up["repos"]["orders-web"] == ["batch", "fargate"]
+
+    body = client.get("/api/repos-quick").json()
+    by_slug = {r["slug"]: r for r in body["repos"]}
+    assert by_slug["orders-api"]["tags"] == ["batch", "fargate"]
+    assert by_slug["orders-web"]["tags"] == ["batch", "fargate"]
+
+
+def test_flow_tags_upsert_merge_y_clear_persistido(monkeypatch):
+    """BBIT-66: PATCH mergea sobre los existentes y DELETE vacía,
+    ambos escribiendo en repositories.r_details."""
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True), "J")
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return []
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    up1 = client.patch("/api/flow-tags", params={"repos": "orders-api", "tags": "fargate"}).json()
+    assert up1["repos"]["orders-api"] == ["fargate"]
+    up2 = client.patch("/api/flow-tags", params={"repos": "orders-api", "tags": "batch, fargate"}).json()
+    assert up2["repos"]["orders-api"] == ["batch", "fargate"]
+
+    clr = client.delete("/api/flow-tags", params={"repos": "orders-api"}).json()
+    assert clr["ok"] is True
+    assert clr["repos"]["orders-api"] == []
+
+    # Re-consultado via cache: quedó persistido vacío.
+    from bbit_release.cache import get_cache
+    assert get_cache().get_repository_flow_tags("ws", "orders-api") == []
+
+
+def test_flow_tags_requiere_session(monkeypatch):
+    """BBIT-66: PATCH/DELETE de flow-tags exigen sesión activa."""
+    resp = client.patch("/api/flow-tags", params={"repos": "r1", "tags": "fargate"})
+    assert resp.status_code in (401, 403)
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True), "J")
+        def close(self):
+            pass
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+    resp = client.patch("/api/flow-tags", params={"repos": "", "tags": "fargate"})
+    assert resp.status_code == 400

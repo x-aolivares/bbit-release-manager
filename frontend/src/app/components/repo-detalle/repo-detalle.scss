@@ -1,0 +1,30 @@
+.bb-detalle-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bb-detalle-slug {
+  font-weight: 800;
+  font-size: var(--bb-font-md);
+}
+
+.bb-region-checks {
+  flex-wrap: wrap;
+}
+
+.bb-region-check {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+
+  input[type="checkbox"] {
+    margin-right: 4px;
+  }
+}
+
+.bb-detalle-tags,
+.bb-detalle-params {
+  background: var(--bb-elevated);
+}

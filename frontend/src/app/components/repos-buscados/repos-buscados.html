@@ -1,0 +1,136 @@
+<div class="bb-panel">
+  <div class="bb-section-header">Repositorios filtrados</div>
+
+  <!-- barra de filtros: texto (slug/nombre) + chips de tags -->
+  <div class="bb-filter-bar">
+    <div class="bb-field" style="max-width:320px;flex:none;">
+      <label for="tbBuscar">Buscar en la lista</label>
+      <input class="bb-input" id="tbBuscar" [ngModel]="search()"
+             (ngModelChange)="onSearch($event)" placeholder="slug o nombre…"
+             style="font-size:var(--bb-font-sm);">
+    </div>
+    <div class="bb-field">
+      <label>Tags de flujo</label>
+      <div class="bb-chips">
+        @for (t of availableTags(); track t) {
+        <button class="bb-filter-chip"
+                [class.bb-filter-chip--active]="activeTags().has(t)"
+                (click)="toggleTagFilter(t)">{{ t }}</button>
+        }
+        @if (availableTags().length === 0) {
+        <span class="bb-muted" style="font-size:var(--bb-font-sm);">Sin tags de flujo todavía</span>
+        }
+      </div>
+    </div>
+  </div>
+
+  <!-- procesar salida: ramas opcionales + estado por repo -->
+  <div class="bb-row-top bb-branch-row">
+    <label class="bb-branch-toggle">
+      <input type="checkbox" [checked]="procesarSalida()"
+             (change)="toggleBranch.emit($any($event.target).checked)">
+      Procesar salida
+    </label>
+    @if (procesarSalida()) {
+    <input class="bb-input bb-mono" [ngModel]="origin()"
+           (ngModelChange)="originChange.emit($event)"
+           placeholder="Rama origen"
+           style="max-width:200px;">
+    <input class="bb-input bb-mono" [ngModel]="destination()"
+           (ngModelChange)="destinationChange.emit($event)"
+           placeholder="Rama Destino"
+           style="max-width:200px;">
+    <span class="bb-summary">
+      <b>{{ totalEncontrados() }}</b> repos · <b class="bb-found">{{ conRama() }}</b> con la rama
+      · <b class="bb-missing">{{ sinRama() }}</b> sin la rama
+    </span>
+    <button class="bb-btn-secondary bb-btn-sm" (click)="verRama.emit()"
+            [disabled]="verificando() || totalEncontrados() === 0">{{ verRamaLabel() }}</button>
+    }
+  </div>
+
+  <!-- barra contextual: visible con 1+ seleccionados -->
+  @if (seleccionSlugs().length > 0) {
+  <div class="bb-selection-bar">
+    <input type="checkbox" [checked]="todosFiltradosSeleccionados()"
+           (change)="onToggleTodo($any($event.target).checked)"
+           title="Seleccionar/deseleccionar todo lo filtrado">
+    <b>{{ seleccionSlugs().length }}</b> seleccionados
+    <span class="bb-selection-spacer"></span>
+    <button class="bb-btn-secondary bb-selection-action" (click)="onLimpiarSelection()">Limpiar</button>
+    <button class="bb-btn-primary bb-selection-main" (click)="acciones.emit(seleccionSlugs())">Acciones ▾</button>
+  </div>
+  }
+
+  <!-- tabla -->
+  <div class="bb-table bb-table--repos bb-table--repos-buscados"
+       [style.--bb-cols]="procesarSalida() ? '2.2rem 2rem 1.3fr 1.6fr 1.2fr' : '2.2rem 2rem 1.3fr 1.2fr'">
+    <div class="bb-repos-head">
+      <span class="bb-check-cell">
+        <input type="checkbox" [checked]="paginaSeleccionada()"
+               (change)="onTogglePagina($any($event.target).checked)"
+               title="Seleccionar página">
+      </span>
+      <span>#</span>
+      <span>Repositorio</span>
+      @if (procesarSalida()) {
+      <span>Pull Request</span>
+      }
+      <span>Procesamiento</span>
+    </div>
+    @for (repo of paginatedRows(); track repo.slug; let i = $index) {
+    <div class="bb-repos-row"
+         [class.bb-repos-row--selected]="seleccionSlugs().includes(repo.slug)">
+      <span class="bb-check-cell">
+        <input type="checkbox" [checked]="seleccionSlugs().includes(repo.slug)"
+               (change)="onToggleRepo(repo.slug, $any($event.target).checked)"
+               class="bb-row-check">
+      </span>
+      <span class="bb-mono bb-muted">{{ offset() + i + 1 }}</span>
+      <span>
+        <a class="bb-link" href="javascript:void(0)" (click)="abrirDetalle.emit(repo.slug)">{{ repo.slug }}</a>
+        @if (states()[repo.slug] === 'checking') {
+        <div class="bb-muted bb-repo-checking">
+          <span class="bb-deploy-badge bb-deploy--pending">
+            <span class="bb-spinner-inline"></span>Revisando…
+          </span>
+        </div>
+        }
+      </span>
+      @if (procesarSalida()) {
+      <span>
+        @if (estaCreando(repo.slug)) {
+        <span class="bb-deploy-badge bb-deploy--pending"><span class="bb-spinner-inline"></span>Creando PR…</span>
+        } @else if (prTieneUrl(repo)) {
+        <a class="bb-link" [href]="repo.pr!.url!" target="_blank">{{ repo.pr!.title }}</a>
+        } @else if (ramaResuelta(repo)) {
+        <button class="bb-link" (click)="crearPr.emit(repo.slug)">Crear PR</button>
+        } @else {
+        <span class="bb-muted">—</span>
+        }
+      </span>
+      }
+      <span>
+        <button class="bb-btn-secondary bb-btn-sm" (click)="abrirDetalle.emit(repo.slug)">Ver más ›</button>
+      </span>
+    </div>
+    }
+  </div>
+
+  <!-- pie de tabla: paginación -->
+  <div class="table-foot bb-table-foot">
+    <span>{{ paginfo() }}</span>
+    <span class="bb-pagination">
+      <label for="tbPageSize" class="bb-page-size-label">Filas:</label>
+      <select id="tbPageSize" [ngModel]="pageSize()" (ngModelChange)="onPageSize($event)"
+              class="bb-mono bb-page-size">
+        <option [ngValue]="10">10</option>
+        <option [ngValue]="20">20</option>
+        <option [ngValue]="50">50</option>
+      </select>
+      <span class="bb-mono bb-page-label" style="min-width:52px;text-align:center;">{{ page() }} / {{ pages() }}</span>
+      <button class="bb-btn-secondary bb-btn-sm" (click)="prevPage()" [disabled]="page() <= 1">‹ Anterior</button>
+      <button class="bb-btn-secondary bb-btn-sm" (click)="nextPage()" [disabled]="page() >= pages()">Siguiente ›</button>
+    </span>
+  </div>
+</div>

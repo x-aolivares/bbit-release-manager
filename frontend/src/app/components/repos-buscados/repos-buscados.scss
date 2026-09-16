@@ -1,0 +1,63 @@
+.bb-branch-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: var(--bb-font-sm);
+  font-weight: 600;
+  padding-bottom: 6px;
+
+  input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--bb-blue);
+    cursor: pointer;
+  }
+}
+
+.bb-branch-row {
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.bb-summary {
+  font-size: var(--bb-font-sm);
+  color: var(--bb-text-secondary);
+  padding: 8px 12px;
+  background: var(--bb-elevated);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-border-radius);
+}
+
+.bb-summary b {
+  color: var(--bb-text);
+}
+
+.bb-found {
+  color: var(--bb-success);
+}
+
+.bb-missing {
+  color: var(--bb-danger);
+}
+
+.bb-repo-checking {
+  margin-top: 4px;
+}
+
+.bb-pagination {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bb-page-size-label {
+  font-weight: 700;
+  color: var(--bb-text-secondary);
+}
+
+.bb-page-size {
+  height: 26px;
+}

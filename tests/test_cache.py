@@ -1004,3 +1004,68 @@ def test_ssm_values_clear_per_client_and_all(tmp_path):
     assert cache._fetchone("SELECT COUNT(*) FROM ssm_value", ())[0] == 1
     assert cache.clear_ssm_values() == 1
     assert cache._fetchone("SELECT COUNT(*) FROM ssm_value", ())[0] == 0
+
+
+# -- tabla repositories (persistencia r_details) ----------------------------
+
+def test_repository_none_cuando_no_existe(tmp_path):
+    cache = _make_cache(tmp_path)
+    assert cache.get_repository("ws", "orders-api") is None
+    assert cache.get_repository_flow_tags("ws", "orders-api") == []
+
+
+def test_repository_upsert_crea_y_merge_details(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.upsert_repository("ws", "orders-api", url="https://x/orders-api", details={"tags": ["fargate"]})
+    repo = cache.get_repository("ws", "orders-api")
+    assert repo["r_slug"] == "orders-api"
+    assert repo["r_workspace"] == "ws"
+    assert repo["r_url"] == "https://x/orders-api"
+    assert repo["r_details"]["tags"] == ["fargate"]
+
+    # merge sin pisar lo existente
+    cache.upsert_repository("ws", "orders-api", details={"other": 42})
+    repo = cache.get_repository("ws", "orders-api")
+    assert repo["r_details"]["tags"] == ["fargate"]
+    assert repo["r_details"]["other"] == 42
+
+
+def test_repository_flow_tags_normaliza_minusculas_y_deduplica(tmp_path):
+    cache = _make_cache(tmp_path)
+    got = cache.set_repository_flow_tags("ws", "orders-api", ["Fargate", " fargate ", "Batch", " step-function "])
+    assert got == ["batch", "fargate", "step-function"]
+    assert cache.get_repository_flow_tags("ws", "orders-api") == ["batch", "fargate", "step-function"]
+
+
+def test_repository_flow_tags_clear(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_repository_flow_tags("ws", "orders-api", ["fargate", "batch"])
+    assert cache.get_repository_flow_tags("ws", "orders-api") == ["batch", "fargate"]
+    cache.set_repository_flow_tags("ws", "orders-api", [])
+    assert cache.get_repository_flow_tags("ws", "orders-api") == []
+
+
+def test_repository_flow_tags_ignore_none_strings(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_repository_flow_tags("ws", "r1", ["ok", None, 123])
+    assert cache.get_repository_flow_tags("ws", "r1") == ["ok"]
+
+
+def test_list_repositories_solo_del_workspace(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_repository_flow_tags("ws-a", "r1", ["fargate"])
+    cache.set_repository_flow_tags("ws-b", "r1", ["batch"])
+    rows = cache.list_repositories("ws-a")
+    assert [r["r_slug"] for r in rows] == ["r1"]
+    assert rows[0]["r_workspace"] == "ws-a"
+    assert rows[0]["r_details"]["tags"] == ["fargate"]
+
+
+def test_repository_persists_after_reopen(tmp_path):
+    path = tmp_path / "test.db"
+    c1 = ReleaseCache(db_path=path)
+    c1.set_repository_flow_tags("ws", "orders-api", ["fargate", "batch"])
+    c1.close()
+    c2 = ReleaseCache(db_path=path)
+    assert c2.get_repository_flow_tags("ws", "orders-api") == ["batch", "fargate"]
+    c2.close()

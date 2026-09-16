@@ -320,6 +320,16 @@ class ReleaseCache:
                 ae_updated_at REAL NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_ae_name ON aws_environment (ae_name);
+
+            CREATE TABLE IF NOT EXISTS repositories (
+                r_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                r_slug TEXT NOT NULL,
+                r_workspace TEXT NOT NULL,
+                r_url TEXT NOT NULL DEFAULT '',
+                r_details TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS uuidx_repositories_workspace_slug
+                ON repositories (r_workspace, r_slug);
             """
         )
         self._conn.commit()
@@ -1498,6 +1508,96 @@ class ReleaseCache:
         self.invalidate(f"{workspace}/{repo}", "", {
             "request_type": "get_branch_repositories"
         })
+
+    # -- tabla repositories (persistencia, no cache) ----------------------------
+
+    def get_repository(self, workspace: str, slug: str) -> dict | None:
+        """Fila de ``repositories`` del repo, o ``None`` si no existe aún.
+
+        ``r_details`` es JSON canónico: ``{"tags": [...]}`` con los tags de
+        flujo (minúsculas) y cualquier metadata persistente del repo.
+        """
+        row = self._fetchone(
+            "SELECT r_id, r_slug, r_workspace, r_url, r_details "
+            "FROM repositories WHERE r_workspace = ? AND r_slug = ?",
+            (workspace, slug),
+        )
+        if row is None:
+            return None
+        r_id, r_slug, r_workspace, r_url, r_details = row
+        try:
+            details = json.loads(r_details)
+        except (TypeError, ValueError):
+            details = {}
+        return {
+            "r_id": r_id,
+            "r_slug": r_slug,
+            "r_workspace": r_workspace,
+            "r_url": r_url,
+            "r_details": details,
+        }
+
+    def list_repositories(self, workspace: str) -> list[dict]:
+        """Todas las filas de ``repositories`` del workspace."""
+        rows = self._fetchall(
+            "SELECT r_id, r_slug, r_workspace, r_url, r_details "
+            "FROM repositories WHERE r_workspace = ?",
+            (workspace,),
+        )
+        out = []
+        for r_id, r_slug, r_ws, r_url, r_details in rows:
+            try:
+                details = json.loads(r_details)
+            except (TypeError, ValueError):
+                details = {}
+            out.append({
+                "r_id": r_id,
+                "r_slug": r_slug,
+                "r_workspace": r_ws,
+                "r_url": r_url,
+                "r_details": details,
+            })
+        return out
+
+    def upsert_repository(self, workspace: str, slug: str, url: str = "", details: dict | None = None) -> None:
+        """Crea o actualiza la fila del repo (merge de ``r_details`` sobre lo existente)."""
+        existing = self.get_repository(workspace, slug)
+        merged = {**(existing["r_details"] if existing else {}), **(details or {})}
+        if existing is None:
+            self._execute(
+                "INSERT INTO repositories (r_slug, r_workspace, r_url, r_details) "
+                "VALUES (?, ?, ?, ?)"
+                "ON CONFLICT(r_workspace, r_slug) DO UPDATE SET "
+                " r_url = excluded.r_url, r_details = excluded.r_details",
+                (slug, workspace, url, json.dumps(merged)),
+            )
+        else:
+            self._execute(
+                "UPDATE repositories SET r_url = ?, r_details = ? "
+                "WHERE r_workspace = ? AND r_slug = ?",
+                (url or existing["r_url"], json.dumps(merged), workspace, slug),
+            )
+
+    def get_repository_flow_tags(self, workspace: str, slug: str) -> list[str]:
+        """Tags de flujo del repo (lectura directa de ``r_details.tags``)."""
+        repo = self.get_repository(workspace, slug)
+        if repo is None:
+            return []
+        tags = repo["r_details"].get("tags") or []
+        return [t for t in tags if isinstance(t, str)]
+
+    def set_repository_flow_tags(self, workspace: str, slug: str, tags: list[str], url: str = "") -> list[str]:
+        """Guarda los tags de flujo del repo (normalizados a minúsculas).
+
+        Devuelve la lista persistida: minúsculas, sin duplicados ni vacíos.
+        """
+        clean = sorted({
+            t.strip().lower()
+            for t in (tags or [])
+            if isinstance(t, str) and t.strip()
+        })
+        self.upsert_repository(workspace, slug, url=url, details={"tags": clean})
+        return clean
 
     # -- valores SSM (per cliente + decrypt) ------------------------------------
 

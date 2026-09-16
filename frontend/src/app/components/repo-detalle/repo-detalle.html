@@ -1,0 +1,120 @@
+<div class="bb-panel bb-detalle-panel">
+  <div class="bb-row-top">
+    <button class="bb-btn-secondary bb-btn-sm" (click)="back.emit()">‹ Volver a la lista</button>
+    <div class="bb-detalle-meta">
+      <div class="bb-detalle-slug">{{ repo()?.slug }}</div>
+      <div class="bb-muted">
+        {{ repo()?.project || '' }} · {{ repo()?.workspace }} · rama resuelta:
+        <span class="bb-mono">{{ repo()?.resolved_branch || '—' }}</span>
+        <a class="bb-link"
+           [href]="'https://bitbucket.org/' + repo()?.workspace + '/' + repo()?.slug + '/browse'"
+           target="_blank">ver repo ↗</a>
+      </div>
+    </div>
+  </div>
+
+  @if (repo(); as r) {
+  <div class="bb-section">
+    <div class="bb-section-header">Pull Request</div>
+    @if (r.pr?.url) {
+    <div class="bb-row-top">
+      <a class="bb-link" [href]="r.pr!.url!" target="_blank">
+        PR #{{ r.pr!.id }} — {{ r.pr!.title }}
+      </a>
+    </div>
+    <div class="bb-row-top">
+      <input class="bb-input bb-mono" id="detPrTitle" [ngModel]="newPrTitle()"
+             (ngModelChange)="newPrTitle.set($event)"
+             style="max-width:480px;">
+      <button class="bb-btn-secondary" (click)="actualizarPr.emit(newPrTitle())"
+              [disabled]="updating() || !newPrTitle().trim()">
+        @if (updating()) {
+        <span class="bb-spinner-inline"></span>Actualizando…
+        } @else {
+        Actualizar título
+        }
+      </button>
+    </div>
+    } @else {
+    <div class="bb-row-top">
+      <button class="bb-btn-secondary" (click)="crearPr.emit()">Crear PR</button>
+      <span class="bb-muted">Sin PR hacia {{ destination() }} todavía</span>
+    </div>
+    }
+  </div>
+
+  <div class="bb-section">
+    <div class="bb-section-header">Tags para CircleCI (deploy)</div>
+    <div class="bb-table bb-table--repos bb-detalle-tags"
+         style="--bb-cols: 8rem 1fr;">
+      <div class="bb-repos-head"><span>Ambiente</span><span>Tag</span></div>
+      @for (env of deployEnv(); track env) {
+      <div class="bb-repos-row">
+        <span>{{ env }}</span>
+        <span>
+          @if (generando(env)) {
+          <span class="bb-deploy-badge bb-deploy--pending">
+            <span class="bb-spinner-inline"></span>Generando…
+          </span>
+          } @else if (tagFor(env); as t) {
+          <span class="bb-chip-pill bb-mono">{{ t }}</span>
+          } @else {
+          <button class="bb-btn-secondary bb-btn-sm" (click)="generateTag.emit(env)">
+            Generar {{ env }}-tag
+          </button>
+          }
+        </span>
+      </div>
+      }
+    </div>
+  </div>
+
+  <div class="bb-section">
+    <div class="bb-section-header">Parámetros SSM del repositorio</div>
+    <div class="bb-row-top bb-region-checks">
+      @for (region of regions(); track region) {
+      <label class="bb-chip bb-region-check">
+        <input type="checkbox" [checked]="regionChecked(region)"
+               (change)="toggleRegion(region)">{{ region }}
+      </label>
+      }
+    </div>
+    @if (visibleRegions().length > 0) {
+    <div class="bb-table bb-table--repos bb-detalle-params"
+         [style.--bb-cols]="'2fr 1fr' + ' 1.2fr'.repeat(visibleRegions().length) + ' 0.8fr'">
+      <div class="bb-repos-head">
+        <span>Parámetro</span><span>Tipo</span>
+        @for (region of visibleRegions(); track region) {
+        <span class="bb-mono">{{ region }}</span>
+        }
+        <span>AWS</span>
+      </div>
+      @for (p of r.params; track p.name) {
+      <div class="bb-repos-row">
+        <span class="bb-mono">{{ p.name }}</span>
+        <span>{{ p.type }}</span>
+        @for (region of visibleRegions(); track region) {
+        <span>
+          @if (paramValue(p, region); as v) {
+          <span class="bb-mono">{{ v }}</span>
+          } @else {
+          <span class="bb-muted">—</span>
+          }
+        </span>
+        }
+        <span>
+          @if (p.aws_status === 'missing') {
+          <span class="bb-deploy-badge bb-deploy--danger">missing</span>
+          } @else {
+          <span class="bb-deploy-badge bb-deploy--ok">ok</span>
+          }
+        </span>
+      </div>
+      }
+    </div>
+    } @else {
+    <span class="bb-muted">Sin regiones seleccionadas.</span>
+    }
+  </div>
+  }
+</div>

@@ -1,0 +1,88 @@
+@if (open()) {
+<div class="bb-modal-overlay" (click)="close.emit()">
+  <div class="bb-modal" (click)="$event.stopPropagation()">
+    <div class="bb-modal-head">
+      <span class="bb-modal-title">Acciones masivas</span>
+      <button class="bb-modal-x" (click)="close.emit()" title="Cerrar">✕</button>
+    </div>
+    <div class="bb-modal-body">
+      @if (!pasoFlow()) {
+      <div class="bb-muted">
+        Repos seleccionados: <b class="bb-modal-count">{{ totalSelected() }}</b>
+      </div>
+      <div class="bb-modal-opciones">
+        <button class="bb-modal-option" (click)="massPr.emit()">
+          <span>
+            <span class="bb-option-title">Crear PRs</span>
+            <span class="bb-option-desc">
+              Para los repos con rama resuelta, PR de la rama origen → destino.
+              @if (readyPr() < totalSelected()) { — <b>{{ totalSelected() - readyPr() }} sin rama resuelta</b> }
+            </span>
+          </span>
+          <span class="bb-option-count">{{ readyPr() }}/{{ totalSelected() }} aptos</span>
+        </button>
+        <button class="bb-modal-option" (click)="massTagsDeploy.emit({ slugs: selected().map(r => r.slug), prefixes: ['uat', 'stgp'] })">
+          <span>
+            <span class="bb-option-title">Crear tags Circle (deploy)</span>
+            <span class="bb-option-desc">Genera el tag de deploy (uat/stgp) para los repos seleccionados.</span>
+          </span>
+          <span class="bb-option-count">{{ readyPr() }}/{{ totalSelected() }} aptos</span>
+        </button>
+        <button class="bb-modal-option" (click)="pasoFlow.set(true); abrir()">
+          <span>
+            <span class="bb-option-title">Crear tag de repo (flujo)</span>
+            <span class="bb-option-desc">Etiqueta repos con su flujo: fargate, step-function, workflow, batch.</span>
+          </span>
+          <span class="bb-option-count">{{ selected().filter(r => (r.tags || []).length > 0).length }}/{{ totalSelected() }} con tags</span>
+        </button>
+        <div class="bb-muted bb-ssm-note">
+          SSM (params por región) — más adelante.
+        </div>
+      </div>
+      } @else {
+      <div class="bb-section-header">Crear tag de repo (flujo)</div>
+      <div class="bb-row-top">
+        <div class="bb-field">
+          <label>Tags de flujo</label>
+          <div class="bb-chips">
+            @if (existingTags().length) {
+            @for (t of existingTags(); track t) {
+            <label [class]="chipClass(t)">
+              <input type="checkbox" [checked]="isChecked(t)"
+                     (change)="toggleTag(t, $any($event.target).checked)">
+              {{ t }}
+            </label>
+            }
+            } @else {
+            <span class="bb-muted">Ningún repo tiene tags de flujo aún.</span>
+            }
+          </div>
+        </div>
+      </div>
+      <div class="bb-row-top">
+        <div class="bb-field" style="flex:none;">
+          <label for="accNuevoTag">Nuevo tag</label>
+          <div class="bb-row-top bb-nuevo-tag-row">
+            <input class="bb-input" id="accNuevoTag" [ngModel]="newTag()"
+                   (ngModelChange)="newTag.set($event)"
+                   placeholder="ej: lambdas"
+                   (keyup.enter)="agregarNuevoTag()"
+                   style="max-width:200px;font-size:12px;">
+            <button class="bb-btn-secondary bb-btn-sm" (click)="agregarNuevoTag()">+ Agregar</button>
+          </div>
+        </div>
+      </div>
+      @if (!sinError) {
+      <div class="bb-tag-error">{{ newTagError() }}</div>
+      }
+      <div class="bb-row-top bb-flow-actions">
+        <button class="bb-btn-primary" (click)="aplicarFlow()"
+                [disabled]="selectedTags().size === 0">Aplicar</button>
+        <button class="bb-btn-danger" (click)="limpiarFlow()">Limpiar tags</button>
+        <button class="bb-btn-secondary" (click)="pasoFlow.set(false)">‹ Volver</button>
+      </div>
+      }
+    </div>
+  </div>
+</div>
+}

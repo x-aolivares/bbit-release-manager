@@ -1,0 +1,23 @@
+@if (open()) {
+<div class="bb-modal-overlay" (click)="close.emit()">
+  <div class="bb-modal bb-modal--pr" (click)="$event.stopPropagation()">
+    <div class="bb-modal-head">
+      <span class="bb-modal-title">Crear Pull Request</span>
+      <button class="bb-modal-x" (click)="close.emit()" title="Cerrar">✕</button>
+    </div>
+    <div class="bb-modal-body">
+      <div><b class="bb-mono">{{ slug() }}</b></div>
+      <div class="bb-muted bb-mono bb-modal-route">{{ route }}</div>
+      <div class="bb-pr-title">
+        <label class="bb-muted" for="prTitleInput">Título del PR</label>
+        <input class="bb-input bb-mono" id="prTitleInput" [ngModel]="title()"
+               (ngModelChange)="title.set($event)" style="max-width:480px;flex:1;"/>
+      </div>
+      <div class="bb-row-top bb-modal-acciones">
+        <button class="bb-btn-secondary" (click)="close.emit()">Cancelar</button>
+        <button class="bb-btn-primary" (click)="confirmar()">Crear PR</button>
+      </div>
+    </div>
+  </div>
+</div>
+}

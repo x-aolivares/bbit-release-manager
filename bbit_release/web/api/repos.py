@@ -1324,6 +1324,23 @@ def repos_quick(
     blocked = _exclude_repos(cfg, exclude)
     include_branch = bool(origin.strip()) and bool(destination.strip())
 
+    # Tags de flujo persistidos en `repositories.r_details` (BBIT-66): un solo
+    # barrido de la tabla del workspace y lookup por slug.
+    cache = get_cache()
+    flow_tags_by_slug = {
+        row["r_slug"]: row["r_details"].get("tags") or []
+        for row in cache.list_repositories(data.client.workspace)
+    }
+
+    def _with_tags(r) -> dict:
+        return {
+            "slug": r.slug,
+            "name": r.name,
+            "workspace": r.workspace,
+            "default_branch": r.default_branch,
+            "tags": flow_tags_by_slug.get(r.slug, []),
+        }
+
     if include_branch:
         # BBIT-58: pasar por _branch_repos_cached para resolver branch_state
         # (found/not_found) con cache por (origin, destination).
@@ -1333,14 +1350,9 @@ def repos_quick(
         )
         return {
             "repos": [
-                {
-                    "slug": r.slug,
-                    "name": r.name,
-                    "workspace": r.workspace,
-                    "default_branch": r.default_branch,
-                    "resolved_branch": getattr(r, "resolved_branch", ""),
-                    "branch_state": getattr(r, "branch_state", "found"),
-                }
+                {**_with_tags(r),
+                 "resolved_branch": getattr(r, "resolved_branch", ""),
+                 "branch_state": getattr(r, "branch_state", "found")}
                 for r in repos
             ],
             "count": len(repos),
@@ -1351,19 +1363,60 @@ def repos_quick(
     # Solo list_repos() que devuelve todos los repos del workspace.
     all_repos = _all_repos_cached(data.client, proj, blocked) or data.client.list_repos(prefixes=proj)
     repos = _apply_filters(all_repos, proj, blocked)
-    
+
     return {
-        "repos": [
-            {
-                "slug": r.slug,
-                "name": r.name,
-                "workspace": r.workspace,
-                "default_branch": r.default_branch,
-            }
-            for r in repos
-        ],
+        "repos": [_with_tags(r) for r in repos],
         "count": len(repos),
     }
+
+
+@router.patch("/flow-tags")
+def flow_tags_upsert(repos: str, tags: str = ""):
+    """Persiste tags de flujo en varios repos (merge sobre los existentes).
+
+    ``repos`` son slugs separados por coma; ``tags`` una lista separada por
+    comas. Se normaliza a minúsculas y sin duplicados antes de guardar en
+    ``repositories.r_details.tags``. Responde con el estado final por repo
+    para que el front refresque su estado.
+
+    Ej. ``PATCH /api/flow-tags?repos=a,b&tags=fargate,batch``
+    """
+    data = _require_session()
+    cache = get_cache()
+    slugs = [s.strip() for s in repos.split(",") if s.strip()]
+    if not slugs:
+        raise HTTPException(status_code=400, detail="repos es obligatorio")
+    adding = sorted({
+        t.strip().lower()
+        for t in tags.split(",")
+        if t.strip()
+    })
+    workspace = data.client.workspace
+    result: dict[str, list[str]] = {}
+    for slug in slugs:
+        current = cache.get_repository_flow_tags(workspace, slug)
+        merged = sorted(set(current) | set(adding))
+        result[slug] = cache.set_repository_flow_tags(workspace, slug, merged)
+    return {"ok": True, "repos": result}
+
+
+@router.delete("/flow-tags")
+def flow_tags_clear(repos: str):
+    """Vacía los tags de flujo de varios repos (persistencia real).
+
+    ``repos`` son slugs separados por coma. Responde con el estado vacío
+    persistido por repo.
+    """
+    data = _require_session()
+    cache = get_cache()
+    slugs = [s.strip() for s in repos.split(",") if s.strip()]
+    if not slugs:
+        raise HTTPException(status_code=400, detail="repos es obligatorio")
+    workspace = data.client.workspace
+    result: dict[str, list[str]] = {}
+    for slug in slugs:
+        result[slug] = cache.set_repository_flow_tags(workspace, slug, [])
+    return {"ok": True, "repos": result}
 
 
 @router.get("/flow")
@@ -1849,18 +1902,24 @@ def create_missing_prs(origin: str, destination: str = "master", title: str = ""
 
 
 @router.post("/prs/update-titles")
-def update_pr_titles(origin: str, destination: str = "master", title: str = "", project_prefixes: str = "", exclude: str = ""):
-    """Actualiza el título de todos los PRs existentes al mismo valor."""
+def update_pr_titles(origin: str, destination: str = "master", title: str = "", project_prefixes: str = "", exclude: str = "", repos: str = ""):
+    """Actualiza el título de todos los PRs existentes al mismo valor.
+
+    Con ``repos=a,b`` se actualizan únicamente esos repositorios.
+    """
     data = _require_session()
     cfg = Config()
     target = _pr_title(origin, destination, title)
     proj = _project_prefixes(cfg, project_prefixes)
     blocked = _exclude_repos(cfg, exclude)
+    only = {r.strip() for r in repos.split(",") if r.strip()} if repos.strip() else set()
     updated: list[str] = []
     skipped: list[str] = []
     failed: list[dict] = []
     for repo in _apply_filters(_branch_repos_cached(data.client, origin, destination, proj, blocked), proj, blocked):
         slug = repo.slug
+        if only and slug not in only:
+            continue
         try:
             pr = data.client.find_pr(slug, origin, destination)
             if not pr:

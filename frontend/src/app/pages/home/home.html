@@ -14,7 +14,7 @@
     <!-- Mobile sidebar mask -->
     <div class="bb-sidebar-mask" [class.bb-sidebar-mask--visible]="sidebarOpen()" (click)="sidebarOpen.set(false)"></div>
 
-    <!-- Sidebar (solo con sesión activa: el historial no debe verse en el login) -->
+    <!-- Sidebar -->
     @if (connected()) {
     <app-session-sidebar
       class="bb-sidebar-host"
@@ -34,99 +34,92 @@
       </ion-card>
       }
 
-    @if (!connected()) {
-    <app-auth-panel
-      [loading]="loading()"
-      [storedCreds]="storedCreds()"
-      (connectRequested)="onConnectRequested($event)"
-      (reuseRequested)="reuseSession()"
-      (useOtherToken)="storedCreds.set(false)">
-    </app-auth-panel>
-    }
+      @if (!connected()) {
+      <app-auth-panel
+        [loading]="loading()"
+        [storedCreds]="storedCreds()"
+        (connectRequested)="onConnectRequested($event)"
+        (reuseRequested)="reuseSession()"
+        (useOtherToken)="storedCreds.set(false)">
+      </app-auth-panel>
+      }
 
-    @if (connected()) {
-    <app-query-panel
-      [(origin)]="origin"
-      [(destination)]="destination"
-      [forceCache]="forceCache"
-      [prefixes]="prefixes"
-      [addingPrefix]="addingPrefix"
-      [(prefixInput)]="prefixInput"
-      [blacklisted]="blacklisted"
-      [addingBlacklist]="addingBlacklist"
-      [(blacklistInput)]="blacklistInput"
-      [projectPrefixes]="projectPrefixes"
-      [addingProjectPrefix]="addingProjectPrefix"
-      [(projectPrefixInput)]="projectPrefixInput"
-      [reposLoading]="reposLoading"
-      (loadRepos)="loadRepos()"
-      (addPrefix)="addPrefix()"
-      (removePrefix)="removePrefix($event)"
-      (addBlacklist)="addBlacklist()"
-      (removeBlacklist)="removeBlacklist($event)"
-      (addProjectPrefix)="addProjectPrefix()"
-      (removeProjectPrefix)="removeProjectPrefix($event)">
-    </app-query-panel>
+      @if (connected()) {
+      <app-buscador
+        [projectPrefixes]="projectPrefixes"
+        [addingProjectPrefix]="addingProjectPrefix"
+        [projectPrefixInput]="projectPrefixInput"
+        (projectPrefixInputChange)="projectPrefixInput = $event"
+        [blacklisted]="blacklisted"
+        [addingBlacklist]="addingBlacklist"
+        [blacklistInput]="blacklistInput"
+        (blacklistInputChange)="blacklistInput = $event"
+        [reposLoading]="reposLoading"
+        (buscarRepos)="loadRepos()"
+        (addProjectPrefix)="addProjectPrefix()"
+        (removeProjectPrefix)="removeProjectPrefix($event)"
+        (addBlacklist)="addBlacklist()"
+        (removeBlacklist)="removeBlacklist($event)">
+      </app-buscador>
 
-    @if (tableLoaded()) {
-    <app-repos-table
-      [repos]="sortedRepos()"
-      [loadedPrefixes]="loadedPrefixes()"
-      [prefixCols]="prefixCols()"
+      @if (tableLoaded() && !detalleOpen()) {
+      <app-repos-buscados
+        [repos]="reposRows()"
+        [states]="reposStates()"
+        [origin]="origin"
+        [destination]="destination"
+        [creating]="prCreatingBySlug()"
+        [removed]="reposRemovedCount()"
+        (toggleBranch)="onToggleBranch($event)"
+        (originChange)="onOriginChange($event)"
+        (destinationChange)="onDestinationChange($event)"
+        (verRama)="onVerRama()"
+        (crearPr)="onCrearPr($event)"
+        (abrirDetalle)="onAbrirDetalle($event)"
+        (seleccion)="onSeleccion($event)"
+        (acciones)="onAcciones($event)">
+      </app-repos-buscados>
+      }
+
+      @if (detalleOpen() && detalleRepo()) {
+      <app-repo-detalle
+        [repo]="detalleRepo()!"
+        [origin]="origin"
+        [destination]="destination"
+        [deployEnv]="prefixes()"
+        [regions]="detalleRegions()"
+        [updating]="prUpdating()"
+        [generating]="detalleGenerating()"
+        (back)="onDetalleBack()"
+        (crearPr)="onCrearPr(detalleRepo()!.slug)"
+        (actualizarPr)="onActualizarPr($event)"
+        (generateTag)="onDetalleTag($event)">
+      </app-repo-detalle>
+      }
+
+      }
+    </div>
+
+    <app-acciones-masivas
+      [open]="accionesOpen()"
+      [selected]="accionesSelected()"
+      [totalSelected]="accionesSelected().length"
+      [readyPr]="accionesReadyPr()"
+      [processing]="massWorking()"
+      (massPr)="onMassPr()"
+      (massTagsDeploy)="onMassTagsDeploy($event)"
+      (flowTags)="onFlowTags($event)"
+      (close)="accionesOpen.set(false)">
+    </app-acciones-masivas>
+
+    <app-crear-pr
+      [open]="crearPrOpen()"
+      [slug]="crearPrSlug()"
+      [origin]="origin"
       [destination]="destination"
-      [origin]="origin"
-      [ciConfigured]="ciConfigured()"
-      [ciError]="ciError()"
-      [creatingPr]="creatingPr()"
-      [tagging]="tagging()"
-      [taggingRepo]="taggingRepo()"
-      [reposLoading]="reposLoading()"
-      [syncingPrs]="syncingPrs()"
-      [failedRepos]="failedRepos()"
-      [sortKey]="repoSortKey()"
-      [sortEnv]="repoSortEnv()"
-      [sortDir]="repoSortDir()"
-      [(prTitle)]="prTitle"
-      (sortEvent)="onSortRepo($event)"
-      (createPr)="createPr($event)"
-      (generateTag)="onGenerateTag($event)"
-      (generateTagsAll)="generateTags()"
-      (syncPrs)="syncPrs($event)"
-      (reportRequested)="openReport()"
-      (refresh)="loadRepos()"
-      (retryFailed)="retryFailed()">
-    </app-repos-table>
-    }
-
-    <app-params-panel
-      [connected]="connected()"
-      [paramsLoaded]="paramsLoaded()"
-      [origin]="origin"
-      [destination]="destination"
-      [hasRepos]="repos().length > 0"
-      [scanMode]="scanMode"
-      [paramsLoading]="paramsLoading"
-      [params]="params()"
-      [removed]="removed()"
-      [rows]="paramRows()"
-      [estadoOptions]="estadoOptions"
-      [estadoFilter]="estadoFilter"
-      (loadParams)="loadParams()"
-      (openParams)="openParams()"
-      (toggleEstado)="toggleEstado($event)"
-      (openSsmView)="openSsmView($event)">
-    </app-params-panel>
-    }
-
-    <app-report-modal
-      [open]="reportOpen()"
-      [initialMode]="reportInitialMode"
-      [origin]="origin"
-      [prefixes]="prefixes()"
-      [repos]="repos()"
-      [rows]="paramRows()"
-      (close)="reportOpen.set(false)">
-    </app-report-modal>
+      (confirm)="onCrearPrConfirm($event)"
+      (close)="crearPrOpen.set(false)">
+    </app-crear-pr>
 
     <app-confirm-modal
       [open]="askDisconnect()"
@@ -150,5 +143,4 @@
     </app-loading-modal>
 
   </div>
-</div>
 </ion-content>

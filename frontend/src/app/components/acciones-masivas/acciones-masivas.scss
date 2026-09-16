@@ -1,0 +1,118 @@
+.bb-modal {
+  padding: 0;
+  gap: 0;
+}
+
+.bb-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--bb-border);
+}
+
+.bb-modal-x {
+  border: none;
+  background: transparent;
+  color: var(--bb-text-secondary);
+  font-size: var(--bb-font-md);
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+
+  &:hover {
+    color: var(--bb-danger);
+  }
+}
+
+.bb-modal-count {
+  color: var(--bb-text);
+}
+
+.bb-modal-opciones {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bb-modal-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius-md);
+  cursor: pointer;
+  background: var(--bb-elevated);
+  text-align: left;
+  font: inherit;
+  color: inherit;
+
+  &:hover {
+    border-color: var(--bb-blue);
+  }
+
+  .bb-option-title {
+    font-weight: 700;
+  }
+
+  .bb-option-desc {
+    font-size: var(--bb-font-sm);
+    color: var(--bb-text-secondary);
+  }
+
+  .bb-option-count {
+    margin-left: auto;
+    text-align: right;
+    font-size: var(--bb-font-sm);
+    white-space: nowrap;
+    color: var(--bb-text-secondary);
+  }
+
+  & span {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+}
+
+.bb-ssm-note {
+  padding: 2px 4px;
+  font-size: var(--bb-font-xs);
+}
+
+.bb-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius-pill);
+  padding: 3px 10px;
+  font-size: var(--bb-font-sm);
+  background: var(--bb-surface);
+  cursor: pointer;
+  text-transform: lowercase;
+
+  input[type="checkbox"] {
+    accent-color: var(--bb-blue);
+    cursor: pointer;
+  }
+}
+
+.bb-tag-chip--active {
+  border-color: var(--bb-blue);
+  background: #e9f2ff;
+}
+
+.bb-nuevo-tag-row {
+  gap: 6px;
+}
+
+.bb-tag-error {
+  color: var(--bb-danger);
+  font-size: var(--bb-font-sm);
+}
+
+.bb-flow-actions {
+  gap: 8px;
+}

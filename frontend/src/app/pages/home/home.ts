@@ -8,13 +8,14 @@ import { SessionHistoryService, SessionConfig } from '../../services/session-his
 import { SessionSidebarComponent } from '../../components/session-sidebar/session-sidebar';
 import { TopbarComponent } from '../../components/topbar/topbar';
 import { AuthPanelComponent } from '../../components/auth-panel/auth-panel';
-import { QueryPanelComponent } from '../../components/query-panel/query-panel';
-import { ReposTableComponent, ReposRow, ReposSortEvent } from '../../components/repos-table/repos-table';
-import { ParamsPanelComponent } from '../../components/params-panel/params-panel';
 import { ConfigModalComponent } from '../../components/config-modal/config-modal';
-import { ReportModalComponent } from '../../components/report-modal/report-modal';
 import { ConfirmModalComponent } from '../../components/confirm-modal/confirm-modal';
 import { LoadingModalComponent } from '../../components/loading-modal/loading-modal';
+import { BuscadorComponent } from '../../components/buscador/buscador';
+import { ReposBuscadosComponent, type ReposBuscarRow, type RepoBranchState, type ReposBuscarSelection } from '../../components/repos-buscados/repos-buscados';
+import { AccionesMasivasComponent, type FlowTagsRequest, type DeployTagsRequest } from '../../components/acciones-masivas/acciones-masivas';
+import { CrearPrComponent } from '../../components/crear-pr/crear-pr';
+import { RepoDetalleComponent, type DetalleRepo, type DetalleParam } from '../../components/repo-detalle/repo-detalle';
 import { buildFlowUrl, decideLoadStrategy, processSseEvent, sortRepos } from './flow-utils';
 import type { RepoSortKey, RepoSortDir } from './flow-utils';
 
@@ -52,13 +53,14 @@ interface ScanRepo {
   slug: string;
   name: string;
   workspace: string;
+  default_branch?: string;
   branch_url: string;
   commit: string;
   error?: string | null;
-  visible?: boolean;  // BBIT-33: false = no mostrar en tabla (sin rama)
-  reason?: string;    // BBIT-33: "branch_not_found" u otro motivo
-  branch_state?: 'found' | 'not_found';  // BBIT-35 P3: estado de rama persistido
-  resolved_branch?: string;              // BBIT-35 P3: rama efectiva (o variante)
+  visible?: boolean;
+  reason?: string;
+  branch_state?: 'found' | 'not_found';
+  resolved_branch?: string;
   tags: TagRow[];
   pr: PrInfo;
   deploys: Record<string, DeployInfo | null>;
@@ -105,6 +107,16 @@ interface DiffResponse {
   removed: RemovedParam[];
 }
 
+interface QuickRepo {
+  slug: string;
+  name: string;
+  workspace: string;
+  default_branch: string;
+  resolved_branch?: string;
+  branch_state?: string;
+  tags?: string[];
+}
+
 @Component({
   selector: 'app-home',
   templateUrl: './home.html',
@@ -116,13 +128,14 @@ interface DiffResponse {
     SessionSidebarComponent,
     TopbarComponent,
     AuthPanelComponent,
-    QueryPanelComponent,
-    ReposTableComponent,
-    ParamsPanelComponent,
     ConfigModalComponent,
-    ReportModalComponent,
     ConfirmModalComponent,
     LoadingModalComponent,
+    BuscadorComponent,
+    ReposBuscadosComponent,
+    AccionesMasivasComponent,
+    CrearPrComponent,
+    RepoDetalleComponent,
   ],
 })
 export class Home implements OnInit {
@@ -150,24 +163,13 @@ export class Home implements OnInit {
 
   origin = '';
   destination = 'master';
-  prTitle = '';
   prefixInput = '';
   prefixes = signal<string[]>(['uat', 'stgp', 'prod']);
-  // BBIT-56: prefijos que ya tienen datos cargados en la tabla (columnas
-  // visibles). Un prefijo agregado a `prefixes` NO pinta columna hasta que
-  // una consulta exitosa lo acredite (sin placeholder "generate tag/—").
   loadedPrefixes = signal<string[]>([]);
-  // BBIT-56: firma de la última consulta exitosa. Una petición idéntica
-  // + memoria caliente (repos() ya pintado) = cero trabajo de red.
   lastQueryKey: string | null = null;
-  // BBIT-56: base (sin prefixes) de la última consulta exitosa — para
-  // detectar recargas selectivas (solo se agregaron ambientes).
   lastQueryBaseKey: string | null = null;
-  // BBIT-56: firma SOLO de campos que el backend necesita re-consultar
-  // (origin, dest, prefixes, mode). Si no cambió, no hay nada nuevo de red.
   lastBackendKey: string | null = null;
 
-  // BBIT-56: firma canónica de la consulta actual (lo que el cliente pide).
   private queryKey(): string {
     return JSON.stringify({
       origin: this.origin,
@@ -179,8 +181,6 @@ export class Home implements OnInit {
     });
   }
 
-  // BBIT-56: base de la consulta SIN prefixes — sirve para detectar que el
-  // único cambio son ambientes nuevos (recarga selectiva) y no filtros.
   private queryBaseKey(): string {
     return JSON.stringify({
       origin: this.origin,
@@ -191,9 +191,6 @@ export class Home implements OnInit {
     });
   }
 
-  // BBIT-56: firma SOLO de los campos que el backend necesita re-consultar
-  // (origin, dest, prefixes, mode). Si esto no cambió, no hay nada nuevo que
-  // traer del backend: blacklist y projectPrefixes son filtrado cliente-side.
   private queryBackendKey(): string {
     return JSON.stringify({
       origin: this.origin,
@@ -212,15 +209,11 @@ export class Home implements OnInit {
   addingBlacklist = signal(false);
   forceCache = signal(false);
 
-  // BBIT-56: último query_diff recibido del backend (para UI / logging).
   lastQueryDiff = signal<{ identical: boolean; added: Record<string, unknown>; removed: Record<string, unknown>; changed: Record<string, unknown> } | null>(null);
 
   repos = signal<ScanRepo[]>([]);
   projects = signal<ScanProject[]>([]);
-  // BBIT-58: repos-quick resuelve branch_state (found/not_found) cuando se
-  // pasa origin+destination; el cache local filtra los sin la rama antes de
-  // pintar (displayFilteredRepos).
-  reposCache = signal<{slug: string, name: string, workspace: string, default_branch: string, resolved_branch?: string, branch_state?: string}[]>([]);
+  reposCache = signal<QuickRepo[]>([]);
   params = signal<SsmParam[]>([]);
   removed = signal<RemovedParam[]>([]);
   scanMode = signal<'diff' | 'all'>('diff');
@@ -242,15 +235,11 @@ export class Home implements OnInit {
   tableLoaded = signal(false);
   paramsLoaded = signal(false);
 
-  /** Modal de "Procesando…": se cierra al pintar la primera fila o a los 2 s. */
   spinnerVisible = signal(false);
   private spinnerTimer: ReturnType<typeof setTimeout> | undefined;
 
-  /** Fase final del stream: el backend ya emitió todos los repos y está
-   *  cerrando (stats → diff → done). Muestra "Finalizando consultas…". */
   finalizing = signal(false);
 
-  /** Orden de la tabla por headers clickeables. */
   repoSortKey = signal<RepoSortKey>('name');
   repoSortEnv = signal<string | null>(null);
   repoSortDir = signal<RepoSortDir>('asc');
@@ -293,11 +282,6 @@ export class Home implements OnInit {
   tagging = signal(false);
   taggingRepo = signal<string | null>(null);
 
-reportOpen = signal(false);
-  // Modo inicial del modal de reporte según quién lo abre ("Ver parámetros"
-  // vs "Previsualizar reporte"); el estado del modal vive en ReportModal.
-  reportInitialMode: 'branch' | 'pr' | 'tag' | 'params' = 'branch';
-
   estadoFilter = signal<string[]>([]);
   readonly estadoOptions = ['nuevo', 'reutilizado', 'solo destino'];
 
@@ -315,7 +299,6 @@ reportOpen = signal(false);
     return this.params().filter((p) => this.estadoFilterActive(p.tipo));
   }
 
-  // Session history
   sidebarOpen = signal(false);
   currentSessionId = signal<string | null>(null);
   sessions = signal<SessionConfig[]>([]);
@@ -324,10 +307,6 @@ reportOpen = signal(false);
     return this.loadedPrefixes().map(() => ' 9.5rem').join('');
   }
 
-  // BBIT-56: tras una consulta exitosa, los prefijos con datos son todos los
-  // que se pidieron y la firma de la última consulta queda registrada (para
-  // que la siguiente petición idéntica haga cero trabajo). Solo se llama en
-  // cargas completas (SSE/batch), nunca en retry de repos fallidos.
   private syncLoadedPrefixes(): void {
     this.loadedPrefixes.set(this.prefixes().slice());
     this.lastQueryKey = this.queryKey();
@@ -338,8 +317,6 @@ reportOpen = signal(false);
   addPrefix() {
     const p = this.prefixInput.trim().toLowerCase();
     if (p && !this.prefixes().includes(p)) {
-      // BBIT-56: el prefijo queda "pendiente" (en prefixes pero no en
-      // loadedPrefixes) → la columna NO se pinta hasta "obtener repositorios".
       this.prefixes.update((list) => [...list, p]);
     }
     this.prefixInput = '';
@@ -381,8 +358,6 @@ reportOpen = signal(false);
     return this.projectPrefixes().join(',');
   }
 
-  // Un repo se considera dentro de un proyecto si su slug empieza con alguno
-  // de los prefijos de proyecto configurados (vacío = todos).
   private repoInProjects(slugs: string[]): boolean {
     const prefs = this.projectPrefixes().map((p) => p.toLowerCase());
     if (!prefs.length) return true;
@@ -408,12 +383,8 @@ reportOpen = signal(false);
           this.repoCount.set(r.repo_count ?? 0);
           this.loadLatestSession();
         } else if (r.stored) {
-          // Auto-reuse tras reiniciar el server: recupera la sesión guardada
-          // ANTES de cargar la última sesión, para no disparar /scan sin sesión.
           this.reuseSession(() => this.loadLatestSession());
         } else if (r.needs_tokens) {
-          // BBIT-33 Phase 7: Si falta token, abre Config automáticamente.
-          // El modal refresca client + AWS al abrirse.
           this.configOpen.set(true);
           this.storedCreds.set(false);
         } else {
@@ -422,7 +393,6 @@ reportOpen = signal(false);
       },
     });
 
-    // Cargar historial de sesiones
     this.refreshSessions();
   }
 
@@ -434,8 +404,6 @@ reportOpen = signal(false);
   }
 
   ngOnInit(): void {
-    // Effect para mantener sessions signal sincronizado
-    // (se actualiza via refreshSessions() en cada cambio)
   }
 
   private refreshSessions(): void {
@@ -495,13 +463,8 @@ reportOpen = signal(false);
     this.prefixes.set(session.prefixes);
     this.projectPrefixes.set(session.projectPrefixes);
     this.blacklisted.set(session.blacklisted);
-    // "Forzar consultas" es un toggle transitorio de UNA consulta: no se
-    // persiste en la sesión ni se restaura al recargar (ver BBIT-20), para
-    // que un reload nunca dispare de nuevo el barrido completo a las APIs.
     this.forceCache.set(false);
     this.currentSessionId.set(session.id);
-    // BBIT-53: la sección SSM pertenece a la sesión que la calculó; al
-    // cambiar de sesión se limpia y solo reaparece al presionar "Cargar parámetros".
     this.params.set([]);
     this.removed.set([]);
     this.paramsLoaded.set(false);
@@ -516,8 +479,8 @@ reportOpen = signal(false);
     const timeoutId = window.setTimeout(() => {
       this.loading.set(false);
       this.error.set('Timeout: no se pudo reusar la sesión. Revisá tus credenciales.');
-    }, 15000); // 15 segundos de timeout
-    
+    }, 15000);
+
     this.http.post<any>('/api/session/reuse', body).subscribe({
       next: (r) => {
         window.clearTimeout(timeoutId);
@@ -545,7 +508,6 @@ reportOpen = signal(false);
       },
       complete: () => {
         window.clearTimeout(timeoutId);
-        // Ya se maneja en next/error
       }
     });
   }
@@ -568,13 +530,13 @@ reportOpen = signal(false);
     if (this.gitClonesDir().trim()) {
       body['git_clones_dir'] = this.gitClonesDir().trim();
     }
-    
+
     const startTime = Date.now();
     const timeoutId = window.setTimeout(() => {
       this.loading.set(false);
       this.error.set('Timeout: la conexión tardó demasiado. Revisá tus credenciales o la red.');
-    }, 15000); // 15 segundos de timeout
-    
+    }, 15000);
+
     this.http.post<any>('/api/session', body).subscribe({
         next: (r) => {
           window.clearTimeout(timeoutId);
@@ -597,7 +559,6 @@ reportOpen = signal(false);
         },
         complete: () => {
           window.clearTimeout(timeoutId);
-          // Ya se maneja en next/error
         }
       });
   }
@@ -618,6 +579,8 @@ reportOpen = signal(false);
         this.clientAlias.set('local');
         this.configOpen.set(false);
         this.storedCreds.set(!deleteCredentials);
+        this.detalleOpen.set(false);
+        this.detalleSlug.set(null);
       },
     });
   }
@@ -626,10 +589,6 @@ reportOpen = signal(false);
     return this.destination || 'master';
   }
 
-  /**
-   * Attempt to load repos via SSE streaming for incremental rendering.
-   * Returns true if SSE started successfully, false if fallback is needed.
-   */
   private scanSse(
     withDiff: boolean,
     onRepo: (item: ScanRepo) => void,
@@ -666,10 +625,6 @@ reportOpen = signal(false);
       console.log(`[SSE] Connection opened successfully`);
     });
 
-    // BBIT-56: capturar el diff de la consulta vs la anterior. El backend
-    // lo emite como primer evento; en un reload frío (repos vacíos) el front
-    // aún necesita los datos, por lo que se almacena para referencia sin
-    // cortar el flujo.
     es.addEventListener('query_diff', (e: MessageEvent) => {
       console.log(`[SSE] Received query_diff event:`, e.data.substring(0, 100));
       firstEventReceived = true;
@@ -686,8 +641,6 @@ reportOpen = signal(false);
       if (parsed?.type === 'repo') {
         repos = parsed.repos;
         const repo = parsed.repos[parsed.repos.length - 1];
-        // BBIT-35 P4: repos sin rama (visible=false / branch_state=not_found)
-        // se REMUEVEN de la tabla en vivo (antes eran placeholders colgados).
         if (repo.visible !== false) {
           onRepo(repo);
         } else {
@@ -697,14 +650,11 @@ reportOpen = signal(false);
       }
     });
 
-    // Nota: evento 'skip' ya no se usa; los repos sin rama vienen con visible=false en el evento 'repo'
-
     es.addEventListener('field', (e: MessageEvent) => {
       console.log(`[SSE] Received field event:`, e.data.substring(0, 100));
       firstEventReceived = true;
       const parsed = processSseEvent('field', e.data, repos);
       if (parsed?.type === 'field') {
-        // BBIT-35 P5: merge parcial de un campo (commit/pr/tags/deploys) sin esperar el repo completo.
         onField(parsed.field.slug, parsed.field.field, parsed.field.value);
       }
     });
@@ -713,7 +663,6 @@ reportOpen = signal(false);
       console.log(`[SSE] Received stats event`);
       const parsed = processSseEvent('stats', e.data, repos);
       if (parsed?.type === 'stats') {
-        // Todos los repos escaneados: el backend está cerrando (diff + done).
         this.finalizing.set(true);
         this.spinnerVisible.set(true);
         onStats(parsed.stats as unknown as ScanStats);
@@ -738,8 +687,6 @@ reportOpen = signal(false);
     });
 
     es.addEventListener('error', (e: MessageEvent) => {
-      // Server-sent `event: error` carries data; network-level errors
-      // dispatch an Event without data and are handled by es.onerror below.
       if (!e.data) return;
       console.error(`[SSE] Received error event:`, e.data);
       clearTimeout(timeout);
@@ -775,9 +722,6 @@ reportOpen = signal(false);
     this.scheduleSpinnerCap();
     if (!retryOnly) {
       this.tableLoaded.set(true);
-      // BBIT-53: el diff SSM solo se procesa cuando el usuario presiona
-      // "Cargar parámetros" (withDiff=true). Sin diffs, se preserva el
-      // estado previo de la sección y no se prende el spinner del botón.
       if (withDiff) {
         this.paramsLoading.set(true);
         this.params.set([]);
@@ -794,21 +738,11 @@ reportOpen = signal(false);
       }
     });
 
-    // Retry-only path always uses batch HTTP (single repo re-scan).
-    // BBIT-53: el retry no pide diff (with_diff=0); re-escanea solo los
-    // repos fallidos y la sección SSM queda como estaba (no se re-procesa).
     if (retryOnly) {
       this.loadReposBatch(retryOnly, done, withDiff);
       return;
     }
 
-    // BBIT-56: decidir la estrategia de carga en una función pura testeable:
-    // - identical → la petición es idéntica a la última exitosa y la tabla ya
-    //   está pintada → cero trabajo de red (ni SSE ni /repos-quick).
-    // - selective → solo se agregaron ambientes → consultar columnas nuevas.
-    // - removal → cambiaron filtros cliente-side (blacklist/project_prefixes)
-    //   → refiltrar en el cliente sin re-consultar lo que ya está cargado.
-    // - full → cualquier otro cambio, fuerza o withDiff ("Cargar parámetros").
     const strategy = decideLoadStrategy({
       withDiff,
       forceCache: this.forceCache(),
@@ -824,9 +758,6 @@ reportOpen = signal(false);
     });
 
     if (strategy.kind === 'identical') {
-      // Refresh de keys: si llegamos acá por "se quitaron ambientes" (ya
-      // cargados), las keys de estrategia quedaron desactualizadas y la
-      // próxima consulta idéntica las necesita frescas.
       this.syncLoadedPrefixes();
       this.finalizing.set(false);
       done();
@@ -850,19 +781,15 @@ reportOpen = signal(false);
       return;
     }
 
-    // QUICK LOAD: Si ya tenemos repos en caché LOCAL, usarlos sin HTTP.
-    // Si no, hacer llamada a /repos-quick primero.
     if (this.reposCache().length > 0) {
-      // Ya tenemos repos: mostrar tabla filtrada, cargar datos pesados en background
       this.displayFilteredRepos();
       this.loadReposHeavy(done, withDiff);
       return;
     }
-    
-    // Primera vez: cargar repos desde backend
+
     const projectPrefixesParam = this.projectPrefixParam();
     const excludeParam = this.blacklisted().join(',');
-    
+
     this.http.get<any>('/api/repos-quick', {
       params: {
         origin: this.origin,
@@ -873,35 +800,26 @@ reportOpen = signal(false);
     }).subscribe({
       next: (r) => {
         if (r.repos) {
-          // Guardar en caché LOCAL (cliente)
           this.reposCache.set(r.repos);
-          // Mostrar repos filtrados inmediatamente
           this.displayFilteredRepos();
           this.clearSpinner();
-          // Ahora cargar datos pesados en background
           this.loadReposHeavy(done, withDiff);
         }
       },
       error: () => {
-        // Si falla /repos-quick, fallback a SSE/batch
         this.loadReposHeavy(done, withDiff);
       }
     });
   }
 
   private displayFilteredRepos(): void {
-    // Filtrar repos cacheados localmente (cliente-side, sin HTTP)
     const projectPrefixesParam = this.projectPrefixParam();
     const blacklist = this.blacklisted();
-    
-    const filtered = this.reposCache().filter((r: any) => {
-      // BBIT-58: repos sin la rama origen quedan fuera de la tabla. El campo
-      // branch_state llega de repos-quick cuando se pasa origin+destination;
-      // si no viene (retrocompat), se muestra el repo (lo decide el SSE).
+
+    const filtered = this.reposCache().filter((r: QuickRepo) => {
       if ('branch_state' in r && r.branch_state === 'not_found') {
         return false;
       }
-      // Aplicar filtros de prefijo de proyecto
       if (projectPrefixesParam) {
         const prefixes = projectPrefixesParam.split(',').filter(p => p.trim());
         const slug = r.slug.toLowerCase();
@@ -909,15 +827,13 @@ reportOpen = signal(false);
           return false;
         }
       }
-      // Aplicar blacklist
       if (blacklist.includes(r.slug.toLowerCase())) {
         return false;
       }
       return true;
     });
 
-    // Convertir a ScanRepo para mostrar en tabla (sin metadata pesada todavía)
-    const quickRepos: ScanRepo[] = filtered.map((repo: any) => ({
+    const quickRepos: ScanRepo[] = filtered.map((repo: QuickRepo) => ({
       slug: repo.slug,
       name: repo.name,
       workspace: repo.workspace,
@@ -929,12 +845,11 @@ reportOpen = signal(false);
       deploys: {},
       match_tag: {},
     }));
-    
+
     this.repos.set(quickRepos);
   }
 
   private loadReposHeavy(done: () => void, withDiff = false): void {
-    // Normal load: try SSE streaming first, fallback to batch on failure.
     let batchFallbackScheduled = false;
     const scheduleFallback = () => {
       if (batchFallbackScheduled) return;
@@ -946,15 +861,11 @@ reportOpen = signal(false);
     this.scanSse(
       withDiff,
       (item) => {
-        // Actualizar el signal DIRECTAMENTE: agregar el nuevo repo a la tabla
         this.repos.update((current) => {
-          // Buscar si el repo ya existe (por slug)
           const existing = current.find((r) => r.slug === item.slug);
           if (existing) {
-            // Reemplazar: el repo fue re-escaneado, actualizar su info
             return current.map((r) => (r.slug === item.slug ? item : r));
           } else {
-            // Nuevo: agregar a la tabla
             return [...current, item];
           }
         });
@@ -963,13 +874,12 @@ reportOpen = signal(false);
         this.stats.set(stats as ScanStats);
       },
       (diff) => {
-        // BBIT-53: sin diff solicitado no se pinta la sección SSM.
         if (!withDiff) return;
         this.params.set((diff.params ?? []) as unknown as SsmParam[]);
         this.removed.set((diff.removed ?? []) as unknown as RemovedParam[]);
         this.paramsLoaded.set(true);
       },
-() => {
+      () => {
         done();
         this.saveCurrentSession();
         this.syncLoadedPrefixes();
@@ -979,16 +889,12 @@ reportOpen = signal(false);
         done();
       },
       () => {
-        // SSE failed — fallback to batch
         scheduleFallback();
       },
       (slug) => {
-        // BBIT-35 P4: el repo no tiene la rama → remover la fila placeholder en vivo
         this.repos.update((current) => current.filter((r) => r.slug !== slug));
       },
       (slug, field, value) => {
-        // BBIT-35 P5: pintado por campo async — merge parcial sin esperar el repo completo.
-        // La fila existe (placeholder de repos-quick) o se crea con el campo resuelto.
         this.repos.update((current) => {
           const existing = current.find((r) => r.slug === slug);
           if (existing) {
@@ -1000,15 +906,6 @@ reportOpen = signal(false);
     );
   }
 
-  // BBIT-56: recarga SELECTIVA — solo los prefixes NUEVOS se consultan al
-  // backend (prefixesOverride). El SSE devolverá items con deploys solo para
-  // esos prefixes. El handler de merge por columna preserva los deploys
-  // existentes de los otros prefixes y solo actualiza los nuevos.
-  // BBIT-56: remoción sin re-consulta — cuando cambian blacklist o
-  // project_prefixes (filtros cliente-side) con el mismo origin/dest/prefixes/
-  // mode, la tabla ya pintada se refiltra en el cliente sin tocar red. Los
-  // repos que dejan de matchear desaparecen; los que quedan preservan sus
-  // datos (no se re-consultaron).
   private applyRemovals(): void {
     const projectPrefixesParam = this.projectPrefixParam();
     const prefixes = projectPrefixesParam.split(',').filter(p => p.trim());
@@ -1040,12 +937,9 @@ reportOpen = signal(false);
     this.scanSse(
       withDiff,
       (item) => {
-        // Merge por columna: los deploys que trae el item son SOLO los del
-        // prefijo nuevo; los existentes se preservan intactos.
         this.repos.update((current) => {
           const idx = current.findIndex((r) => r.slug === item.slug);
           if (idx === -1) {
-            // Repo nuevo: agregar fila completa
             return [...current, item];
           }
           const existing = current[idx];
@@ -1080,8 +974,6 @@ reportOpen = signal(false);
         scheduleFallback();
       },
       (slug) => {
-        // En recarga selectiva, si el repo desaparece (branch not found),
-        // se remueve la fila como en carga normal.
         this.repos.update((current) => current.filter((r) => r.slug !== slug));
       },
       (slug, field, value) => {
@@ -1138,13 +1030,11 @@ reportOpen = signal(false);
             this.error.set(scan.error ?? `Ningún repo contiene la rama '${this.origin}'.`);
           }
         } else {
-          // Reintento: reempleza solo las filas de los repos re-consultados.
           const bySlug = new Map<string, ScanRepo>((r.scan?.repos ?? []).map((row: ScanRepo) => [row.slug, row]));
           this.repos.update((current) => current.map((repo) => bySlug.get(repo.slug) ?? repo));
         }
 
         const diff = r.diff ?? {};
-        // BBIT-53: sin diff solicitado no se pinta la sección SSM.
         if (withDiff) {
           this.params.set(diff.params ?? []);
           this.removed.set(diff.removed ?? []);
@@ -1166,17 +1056,13 @@ reportOpen = signal(false);
   }
 
   loadParams() {
-    // BBIT-53: "Cargar parámetros" es el único camino que procesa el diff SSM.
     this.loadRepos(false, true);
   }
 
-  // Alias: tras crear/actualizar PRs o tags se recarga la tabla (no encadena params).
-  // Solo reprocesa el diff SSM si la sección ya estaba cargada (paramsLoaded).
   resolve() {
     this.loadRepos(false, this.paramsLoaded());
   }
 
-  /** Re-escanea un solo repo (deploy status, tags, PRs) y hace merge. */
   refreshRepo(slug: string) {
     if (!this.origin) return;
     this.reposLoading.set(true);
@@ -1238,20 +1124,9 @@ reportOpen = signal(false);
     this.configOpen.set(true);
   }
 
-  onSortRepo(event: ReposSortEvent): void {
-    this.toggleRepoSort(event.key, event.env);
-  }
-
-  onGenerateTag(event: { repo: ReposRow; env: string }): void {
-    this.generateTags(event.repo, event.env);
-  }
-
-  /** El config-modal guardó credenciales de Bitbucket → recrear la sesión. */
   onBitbucketReauth(): void {
-    // Destruir sesión anterior (con workspace/token viejo)
     this.http.delete<any>('/api/session').subscribe({
       complete: () => {
-        // Desconectar UI localmente
         this.connected.set(false);
         this.identity.set('');
         this.repoCount.set(0);
@@ -1261,8 +1136,6 @@ reportOpen = signal(false);
         this.params.set([]);
         this.removed.set([]);
         this.stats.set(null);
-
-        // Ahora reconectar con nuevas credenciales
         window.setTimeout(() => {
           this.configOpen.set(false);
           this.reuseSession(() => this.loadLatestSession());
@@ -1271,21 +1144,11 @@ reportOpen = signal(false);
     });
   }
 
-  openReport() {
-    this.reportInitialMode = 'branch';
-    this.reportOpen.set(true);
-  }
-
-  openParams() {
-    this.reportInitialMode = 'params';
-    this.reportOpen.set(true);
-  }
-
   createPr(repo: ScanRepo) {
     this.creatingPr.set(repo.slug);
     const dest = this.destination || 'master';
-    const title = encodeURIComponent(this.prTitle || `Release: ${this.origin} → ${dest}`);
-    this.http.post<any>(`/api/pr?repo=${encodeURIComponent(repo.slug)}&origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&title=${title}`, {})
+    const title = `Release: ${this.origin} → ${dest}`;
+    this.http.post<any>(`/api/pr?repo=${encodeURIComponent(repo.slug)}&origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&title=${encodeURIComponent(title)}`, {})
       .subscribe({
         next: (r) => {
           if (r.ok && r.pr?.url) {
@@ -1305,10 +1168,10 @@ reportOpen = signal(false);
     this.syncingPrs.set(true);
     this.error.set(null);
     const dest = this.destination || 'master';
-    const title = encodeURIComponent(this.prTitle || `Release: ${this.origin} → ${dest}`);
+    const title = `Release: ${this.origin} → ${dest}`;
     const action = target === 'create' ? 'create-missing' : 'update-titles';
     const filters = `&project_prefixes=${encodeURIComponent(this.projectPrefixParam())}&exclude=${encodeURIComponent(this.blacklisted().join(','))}`;
-    this.http.post<any>(`/api/prs/${action}?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&title=${title}${filters}`, {})
+    this.http.post<any>(`/api/prs/${action}?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&title=${encodeURIComponent(title)}${filters}`, {})
       .subscribe({
         next: (r) => {
           if (r.ok) {
@@ -1387,6 +1250,398 @@ reportOpen = signal(false);
         this.tagging.set(false);
         this.taggingRepo.set(null);
       },
+    });
+  }
+
+  // ─── NUEVOS: integración mockup ────────────────────────────────────────
+
+  /** Filas para ReposBuscadosComponent: union repos() (ScanRepo) + reposCache (flow tags). */
+  readonly reposRows = computed<ReposBuscarRow[]>(() => {
+    const cache = new Map(this.reposCache().map((c) => [c.slug, c]));
+    return this.repos().map((r) => {
+      const c = cache.get(r.slug);
+      return {
+        slug: r.slug,
+        name: r.name,
+        workspace: r.workspace,
+        default_branch: r.default_branch || c?.default_branch || '',
+        tags: c?.tags ?? [],
+        resolved_branch: r.resolved_branch ?? c?.resolved_branch,
+        branch_state: (r.branch_state ?? c?.branch_state) as 'found' | 'not_found' | undefined,
+        pr: r.pr?.exists && r.pr.url ? { url: r.pr.url, title: r.pr.title ?? '', id: undefined } : undefined,
+      };
+    });
+  });
+
+  /** Estados por repo para la tabla (found/not_found/pending/checking). */
+  readonly reposStates = computed<Record<string, RepoBranchState>>(() => {
+    const map: Record<string, RepoBranchState> = {};
+    const isLoading = this.reposLoading();
+    for (const r of this.reposCache()) {
+      const bs = r.branch_state;
+      if (bs === 'not_found') {
+        map[r.slug] = 'not_found';
+      } else if (bs === 'found') {
+        map[r.slug] = 'found';
+      } else {
+        map[r.slug] = isLoading ? 'checking' : 'pending';
+      }
+    }
+    return map;
+  });
+
+  /** Repos removidos por no tener la rama (solo la cuenta). */
+  readonly reposRemovedCount = computed(() =>
+    this.reposCache().filter((r) => r.branch_state === 'not_found').length,
+  );
+
+  /** Creando PR por slug (Record<slug, boolean>). */
+  readonly prCreatingBySlug = computed<Record<string, boolean>>(() => {
+    const slug = this.creatingPr();
+    if (!slug) return {};
+    return { [slug]: true };
+  });
+
+  // ─── Seleccion y acciones ───────────────────────────────────────────────
+
+  private selSlugs = signal<string[]>([]);
+
+  onToggleBranch(on: boolean): void {
+    if (on && this.origin) {
+      this.loadRepos();
+    }
+  }
+
+  onOriginChange(value: string): void {
+    this.origin = value;
+  }
+
+  onDestinationChange(value: string): void {
+    this.destination = value;
+  }
+
+  onVerRama(): void {
+    this.loadRepos();
+  }
+
+  onSeleccion(sel: ReposBuscarSelection): void {
+    this.selSlugs.set(sel.slugs);
+  }
+
+  accionesOpen = signal(false);
+
+  /** Repos seleccionados (ReposBuscarRow[]) para el modal acciones-masivas. */
+  readonly accionesSelected = computed<ReposBuscarRow[]>(() => {
+    const slugs = new Set(this.selSlugs());
+    return this.reposRows().filter((r) => slugs.has(r.slug));
+  });
+
+  /** Repos seleccionados con rama found (aptos para crear PR). */
+  readonly accionesReadyPr = computed(() =>
+    this.accionesSelected().filter((r) => this.reposStates()[r.slug] === 'found').length,
+  );
+
+  /** Indicador de trabajo masivo (PRs/tags/flow). */
+  massWorking = signal(false);
+
+  onAcciones(slugs: string[]): void {
+    this.selSlugs.set(slugs);
+    this.accionesOpen.set(true);
+  }
+
+  // ─── Crear PR (modal) ──────────────────────────────────────────────────
+
+  crearPrOpen = signal(false);
+  crearPrSlug = signal('');
+
+  onCrearPr(slug: string): void {
+    this.crearPrSlug.set(slug);
+    this.crearPrOpen.set(true);
+  }
+
+  onCrearPrConfirm(e: { slug: string; title: string }): void {
+    this.crearPrOpen.set(false);
+    this.creatingPr.set(e.slug);
+    const dest = this.destination || 'master';
+    this.http.post<any>(
+      `/api/pr?repo=${encodeURIComponent(e.slug)}&origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&title=${encodeURIComponent(e.title)}`,
+      {},
+    ).subscribe({
+      next: (r) => {
+        if (r.ok && r.pr?.url) {
+          this.repos.update((list) => list.map((repo) =>
+            repo.slug === e.slug
+              ? { ...repo, pr: { exists: true, url: r.pr.url, title: r.pr.title, state: r.pr.state } }
+              : repo,
+          ));
+        } else {
+          this.error.set(r.error ?? 'No se pudo crear el PR.');
+        }
+      },
+      error: (err) => this.error.set(err.error?.error ?? 'Error al crear el PR.'),
+      complete: () => this.creatingPr.set(null),
+    });
+  }
+
+  // ─── Acciones masivas ──────────────────────────────────────────────────
+
+  onMassPr(): void {
+    this.accionesOpen.set(false);
+    this.massWorking.set(true);
+    const dest = this.destination || 'master';
+    const title = `Release: ${this.origin} → ${dest}`;
+    const slugs = this.accionesSelected()
+      .filter((r) => this.reposStates()[r.slug] === 'found')
+      .map((r) => r.slug);
+    if (!slugs.length) {
+      this.massWorking.set(false);
+      return;
+    }
+
+    let created = 0;
+    let errors = 0;
+    let done = 0;
+
+    for (const slug of slugs) {
+      this.http.post<any>(
+        `/api/pr?repo=${encodeURIComponent(slug)}&origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&title=${encodeURIComponent(title)}`,
+        {},
+      ).subscribe({
+        next: (r) => {
+          if (r.ok) {
+            created++;
+            if (r.pr?.url) {
+              this.repos.update((list) => list.map((repo) =>
+                repo.slug === slug
+                  ? { ...repo, pr: { exists: true, url: r.pr.url, title: r.pr.title, state: r.pr.state } }
+                  : repo,
+              ));
+            }
+          } else {
+            errors++;
+          }
+        },
+        error: () => errors++,
+        complete: () => {
+          done++;
+          if (done === slugs.length) {
+            this.massWorking.set(false);
+            this.error.set(
+              `PRs creados: ${created} de ${slugs.length}` +
+              (errors ? ` | errores: ${errors}` : ''),
+            );
+          }
+        },
+      });
+    }
+  }
+
+  onMassTagsDeploy(req: DeployTagsRequest): void {
+    this.accionesOpen.set(false);
+    this.massWorking.set(true);
+    const prefixes = req.prefixes.join(',');
+    let done = 0;
+    let created = 0;
+    let skipped = 0;
+    let errors = 0;
+    const total = req.slugs.length;
+
+    for (const slug of req.slugs) {
+      this.http.post<any>(
+        `/api/tags?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(this.destination || 'master')}&prefixes=${encodeURIComponent(prefixes)}&repo=${encodeURIComponent(slug)}`,
+        {},
+      ).subscribe({
+        next: (r) => {
+          if (r.ok) {
+            const c: string[] = r.items?.flatMap((i: any) => i.created) ?? [];
+            const s: string[] = r.items?.flatMap((i: any) => i.skipped) ?? [];
+            created += c.length;
+            skipped += s.length;
+            if (c.length) {
+              this.repos.update((list) => list.map((repo) => {
+                if (repo.slug !== slug) return repo;
+                const match_tag = { ...repo.match_tag };
+                for (const tagName of c) {
+                  const env = tagName.split('-').slice(0, -1).join('-') || tagName;
+                  match_tag[env] = tagName;
+                }
+                return { ...repo, match_tag };
+              }));
+            }
+          } else {
+            errors++;
+          }
+        },
+        error: () => errors++,
+        complete: () => {
+          done++;
+          if (done === total) {
+            this.massWorking.set(false);
+            this.error.set(
+              `Tags creados: ${created} | sin cambios: ${skipped}` +
+              (errors ? ` | errores: ${errors}` : ''),
+            );
+          }
+        },
+      });
+    }
+  }
+
+  onFlowTags(req: FlowTagsRequest): void {
+    this.accionesOpen.set(false);
+    const slugsParam = req.slugs.join(',');
+    const request$ = req.clear
+      ? this.http.delete<any>(`/api/flow-tags?repos=${encodeURIComponent(slugsParam)}`)
+      : this.http.patch<any>(`/api/flow-tags?repos=${encodeURIComponent(slugsParam)}&tags=${encodeURIComponent(req.apply.join(','))}`, {});
+
+    request$.subscribe({
+      next: (r) => {
+        if (r.ok && r.repos) {
+          const tagsBySlug: Record<string, string[]> = r.repos;
+          this.reposCache.update((list) =>
+            list.map((repo) => {
+              const newTags = tagsBySlug[repo.slug];
+              if (newTags !== undefined) {
+                return { ...repo, tags: newTags };
+              }
+              return repo;
+            }),
+          );
+        }
+      },
+      error: () => this.error.set('Error al aplicar tags de flujo.'),
+    });
+  }
+
+  // ─── Detalle repo ──────────────────────────────────────────────────────
+
+  detalleOpen = signal(false);
+  detalleSlug = signal<string | null>(null);
+  private detalleFlow = signal<{ pr: DetalleRepo['pr']; matchTag: Record<string, string | null> } | null>(null);
+  private detalleParams = signal<DetalleParam[]>([]);
+  detalleRegions = signal<string[]>([]);
+  detalleGenerating = signal<Record<string, boolean>>({});
+  prUpdating = signal(false);
+
+  readonly detalleRepo = computed<DetalleRepo | null>(() => {
+    const slug = this.detalleSlug();
+    if (!slug) return null;
+    const cache = this.reposCache().find((r) => r.slug === slug);
+    const flow = this.detalleFlow();
+    const params = this.detalleParams();
+    return {
+      slug,
+      workspace: cache?.workspace ?? '',
+      resolved_branch: cache?.resolved_branch,
+      pr: flow?.pr ?? null,
+      tags: (flow?.matchTag ?? {}) as Record<string, string>,
+      params,
+    };
+  });
+
+  onAbrirDetalle(slug: string): void {
+    this.detalleSlug.set(slug);
+    this.detalleOpen.set(true);
+    this.detalleFlow.set(null);
+    this.detalleParams.set([]);
+    this.detalleRegions.set([]);
+
+    const dest = this.projectsDest();
+    const prefixes = this.prefixes().join(',');
+    const exclude = this.blacklisted().join(',');
+
+    this.http.get<any>(buildFlowUrl({
+      origin: this.origin,
+      dest,
+      prefixes,
+      projectPrefixes: this.projectPrefixParam(),
+      exclude,
+      scanMode: this.scanMode(),
+      force: 0,
+      withTags: this.prefixes().length > 0,
+      withDiff: true,
+      repos: [slug],
+    })).subscribe({
+      next: (r) => {
+        const row = (r.scan?.repos ?? [])[0];
+        if (row) {
+          this.detalleFlow.set({
+            pr: row.pr?.exists ? { id: row.pr.id, url: row.pr.url, title: row.pr.title, state: row.pr.state } : null,
+            matchTag: row.match_tag ?? {},
+          });
+        }
+        const diffParams = (r.diff?.params ?? []) as SsmParam[];
+        const environmentSet = new Set<string>();
+        const repoParams: DetalleParam[] = [];
+        for (const p of diffParams) {
+          if (!p.repos?.includes(slug)) continue;
+          const envValues = p.env_values ?? {};
+          Object.keys(envValues).forEach((k) => environmentSet.add(k));
+          repoParams.push({
+            name: p.param,
+            type: p.type ?? p.tipo ?? 'ssm',
+            values: envValues,
+            aws_status: p.aws_status ?? 'skipped',
+          });
+        }
+        this.detalleParams.set(repoParams);
+        this.detalleRegions.set([...environmentSet].sort());
+      },
+      error: () => this.error.set('Error al cargar detalle del repositorio.'),
+    });
+  }
+
+  onDetalleBack(): void {
+    this.detalleOpen.set(false);
+    this.detalleSlug.set(null);
+  }
+
+  onActualizarPr(title: string): void {
+    const slug = this.detalleSlug();
+    if (!slug) return;
+    this.prUpdating.set(true);
+    const dest = this.destination || 'master';
+    this.http.post<any>(
+      `/api/prs/update-titles?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&title=${encodeURIComponent(title)}&repos=${encodeURIComponent(slug)}`,
+      {},
+    ).subscribe({
+      next: () => {
+        const flow = this.detalleFlow();
+        if (flow?.pr) {
+          this.detalleFlow.set({ ...flow, pr: { ...flow.pr, title } });
+        }
+        this.repos.update((list) => list.map((r) =>
+          r.slug === slug ? { ...r, pr: { ...r.pr, title } } : r,
+        ));
+        this.reposCache.update((list) => list); // force recomputación
+      },
+      error: () => this.error.set('Error al actualizar título del PR.'),
+      complete: () => this.prUpdating.set(false),
+    });
+  }
+
+  onDetalleTag(env: string): void {
+    const slug = this.detalleSlug();
+    if (!slug || !this.origin) return;
+    this.detalleGenerating.update((g) => ({ ...g, [env]: true }));
+    const dest = this.destination || 'master';
+    this.http.post<any>(
+      `/api/tags?origin=${encodeURIComponent(this.origin)}&destination=${encodeURIComponent(dest)}&repo=${encodeURIComponent(slug)}&prefixes=${encodeURIComponent(env)}`,
+      {},
+    ).subscribe({
+      next: (r) => {
+        if (r.ok) {
+          const created: string[] = r.items?.flatMap((i: any) => i.created) ?? [];
+          for (const tagName of created) {
+            const flow = this.detalleFlow();
+            if (flow) {
+              this.detalleFlow.set({ ...flow, matchTag: { ...flow.matchTag, [env]: tagName } });
+            }
+          }
+        }
+      },
+      error: () => this.error.set('Error al generar tag.'),
+      complete: () => this.detalleGenerating.update((g) => ({ ...g, [env]: false })),
     });
   }
 }

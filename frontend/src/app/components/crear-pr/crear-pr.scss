@@ -1,0 +1,44 @@
+.bb-modal {
+  padding: 0;
+  gap: 0;
+}
+
+.bb-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--bb-border);
+}
+
+.bb-modal-x {
+  border: none;
+  background: transparent;
+  color: var(--bb-text-secondary);
+  font-size: var(--bb-font-md);
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+
+  &:hover {
+    color: var(--bb-danger);
+  }
+}
+
+.bb-modal-route {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.bb-pr-title {
+  margin-top: 14px;
+
+  label {
+    display: block;
+  }
+}
+
+.bb-modal-acciones {
+  margin-top: 16px;
+  justify-content: flex-end;
+}
