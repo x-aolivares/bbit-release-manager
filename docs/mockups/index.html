@@ -613,6 +613,7 @@
 
             if (opt.dataset.action === "mass-tag-flow") {
                 // Sub-paso: tags existentes + input para crear nuevo.
+                // Sigue el lenguaje del buscador: header + field con label + chips.
                 const existingTags = new Set();
                 slugs.forEach(s => {
                     const r = state.repos.find(x => x.slug === s);
@@ -625,19 +626,31 @@
                         ${esc(t)}
                     </div>`;
                 $("modalOptions").innerHTML =
-                    '<div class="muted" style="padding:2px 4px;">Tags existentes entre los seleccionados. Podés crear uno nuevo.</div>' +
+                    '<div class="bb-section-header">Crear tag de repo (flujo)</div>' +
+                    '<div class="bb-row-top">' +
+                    '<div class="bb-field">' +
+                    '<label>Tags de flujo</label>' +
+                    '<div class="bb-chips" id="tagFlowChips">' +
                     (allTags.length
                         ? allTags.map(t => {
                             const allHave = slugs.every(s => (state.repos.find(x => x.slug === s)?.tags || []).includes(t));
                             return makeCheck(t, allHave);
                         }).join("")
-                        : '<div class="muted" style="padding:2px 4px;font-size:12px;">Ningún repo tiene tags de flujo aún.</div>') +
-                    '<div class="bb-row-top" style="margin-top:6px;gap:6px;align-items:center;">' +
-                    '<input class="bb-input" id="newTagInput" placeholder="Nuevo tag (ej: lambdas)" style="max-width:200px;font-size:12px;">' +
+                        : '<span class="muted">Ningún repo tiene tags de flujo aún.</span>') +
+                    '</div>' +
+                    '</div>' +
+                    '</div>' +
+                    '<div class="bb-row-top">' +
+                    '<div class="bb-field" style="flex:none;">' +
+                    '<label for="newTagInput">Nuevo tag</label>' +
+                    '<div class="bb-row-top" style="gap:6px;">' +
+                    '<input class="bb-input" id="newTagInput" placeholder="ej: lambdas" style="max-width:200px;font-size:12px;">' +
                     '<button class="bb-btn-secondary" data-action="add-new-tag" style="font-size:12px;padding:4px 10px;">+ Agregar</button>' +
                     '</div>' +
-                    '<div id="newTagError" style="color:var(--bb-danger);font-size:12px;margin-top:2px;"></div>' +
-                    '<div class="bb-row-top" style="margin-top:6px;">' +
+                    '</div>' +
+                    '</div>' +
+                    '<div id="newTagError" style="color:var(--bb-danger);font-size:12px;"></div>' +
+                    '<div class="bb-row-top" style="gap:8px;">' +
                     '<button class="bb-btn-primary" data-action="apply-tags">Aplicar</button>' +
                     '<button class="bb-btn-secondary" data-action="back-tags">‹ Volver</button>' +
                     '</div>';
@@ -652,14 +665,14 @@
                 if (val.length < 2) { if (err) err.textContent = "Muy corto (mín. 2 chars)."; return; }
                 if (!/^[a-z0-9][a-z0-9_-]*$/.test(val)) { if (err) err.textContent = "Solo minúsculas, números, guiones o guión bajo."; return; }
                 if (document.querySelector(`[data-tag-check="${val}"]`)) { if (err) err.textContent = "Ese tag ya está en la lista."; return; }
-                // Agregar como nuevo checkbox al final
-                const container = $("modalOptions");
-                const btnRow = container.querySelector('[data-action="apply-tags"]')?.closest('.bb-row-top');
+                // Agregar como nuevo chip dentro de la lista de tags (arriba),
+                // no debajo del input.
+                const chipsRow = $("tagFlowChips");
                 const newChip = document.createElement("div");
                 newChip.className = "bb-tag-chip";
                 newChip.dataset.tag = val;
                 newChip.innerHTML = `<input type="checkbox" data-tag-check="${esc(val)}" checked> ${esc(val)}`;
-                container.insertBefore(newChip, btnRow);
+                chipsRow.appendChild(newChip);
                 input.value = "";
                 if (err) err.textContent = "";
                 return;
