@@ -700,6 +700,8 @@
                 console.log("[MOCK] upsert tags:", logs);
                 closeActionsModal();
                 renderRows();
+                renderCounts();
+                renderTagChips();
                 return;
             }
             if (opt.dataset.action === "back-tags") {
@@ -717,8 +719,10 @@
                     state.flowBySlug[s] && delete state.flowBySlug[s].tags;
                     if (cleared) console.log("[MOCK] clear tags:", `${s}: -${cleared}`);
                 });
-                renderRows();
                 closeActionsModal();
+                renderRows();
+                renderCounts();
+                renderTagChips();
                 return;
             }
 
