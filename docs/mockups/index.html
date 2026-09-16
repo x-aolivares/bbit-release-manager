@@ -336,6 +336,9 @@
             if (!ev.target.checked) {
                 state.removed.clear();
                 state.repos.forEach(r => { state.states[r.slug] = "pending"; });
+                $("statTotal").textContent = "–";
+                $("statFound").textContent = "–";
+                $("statMissing").textContent = "–";
                 renderRows(); renderCounts(); renderTagChips();
                 $("btnBranch").disabled = false;
                 $("btnBranch").textContent = "Ver rama en estos repos";
@@ -348,6 +351,14 @@
             state.removed.clear();
             $("branchSummary").style.display = "inline-block";
             state.repos.forEach(r => { state.states[r.slug] = "checking"; });
+            const updateStats = () => {
+                const total = state.repos.length;
+                const found = state.repos.filter(r => state.states[r.slug] === "found").length;
+                $("statTotal").textContent = total;
+                $("statFound").textContent = found;
+                $("statMissing").textContent = total - found;
+            };
+            updateStats();
             renderRows(); renderCounts(); renderTagChips();
 
             state.repos.forEach((repo, i) => {
@@ -358,6 +369,7 @@
                         state.removed.add(repo.slug);
                         state.selected.delete(repo.slug);
                     }
+                    updateStats();
                     renderRows(); renderCounts(); renderTagChips();
                     if (state.repos.every(r => state.states[r.slug] !== "checking")) {
                         $("btnBranch").disabled = false;
