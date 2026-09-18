@@ -1407,12 +1407,6 @@ export class Home implements OnInit {
 
   private selSlugs = signal<string[]>([]);
 
-  onToggleBranch(on: boolean): void {
-    if (on && this.origin) {
-      this.loadRepos();
-    }
-  }
-
   onOriginChange(value: string): void {
     this.origin = value;
   }

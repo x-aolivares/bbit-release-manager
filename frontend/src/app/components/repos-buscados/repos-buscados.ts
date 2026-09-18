@@ -35,7 +35,6 @@ export class ReposBuscadosComponent {
   creating = input<Record<string, boolean>>({});
   removed = input(0);
 
-  toggleBranch = output<boolean>();
   originChange = output<string>();
   destinationChange = output<string>();
   verRama = output<void>();
@@ -46,6 +45,7 @@ export class ReposBuscadosComponent {
 
   // ---------- estado local de la vista ----------
   procesarSalida = signal(false);
+  verRamaEjecutado = signal(false);
   search = signal('');
   activeTags = signal<Set<string>>(new Set());
   selectedSlugs = signal<Set<string>>(new Set());
@@ -105,6 +105,16 @@ export class ReposBuscadosComponent {
     this.verificando() ? 'Verificando…' : 'Ver rama en estos repos',
   );
 
+  readonly puedeVerRama = computed(
+    () =>
+      !this.verificando() &&
+      this.totalEncontrados() > 0 &&
+      !!this.origin().trim() &&
+      !!this.destination().trim(),
+  );
+
+  readonly mostrarPr = computed(() => this.procesarSalida() && this.verRamaEjecutado());
+
   readonly todosFiltradosSeleccionados = computed(() => {
     const slugs = this.filteredRepos().map((r) => r.slug);
     return slugs.length > 0 && slugs.every((s) => this.selectedSlugs().has(s));
@@ -141,6 +151,18 @@ export class ReposBuscadosComponent {
     });
     this.page.set(1);
     this.pruneSelection();
+  }
+
+  // ---------- ver rama en estos repos ----------
+  onToggleProcesarSalida(on: boolean): void {
+    this.procesarSalida.set(on);
+    this.verRamaEjecutado.set(false);
+  }
+
+  onVerRama(): void {
+    if (!this.puedeVerRama()) return;
+    this.verRamaEjecutado.set(true);
+    this.verRama.emit();
   }
 
   // ---------- selección ----------

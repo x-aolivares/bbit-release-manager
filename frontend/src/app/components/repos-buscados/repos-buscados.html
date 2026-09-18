@@ -28,7 +28,7 @@
   <div class="bb-row-top bb-branch-row">
     <label class="bb-branch-toggle">
       <input type="checkbox" [checked]="procesarSalida()"
-             (change)="procesarSalida.set($any($event.target).checked); toggleBranch.emit($any($event.target).checked)">
+             (change)="onToggleProcesarSalida($any($event.target).checked)">
       Procesar salida
     </label>
     @if (procesarSalida()) {
@@ -44,8 +44,8 @@
       <b>{{ totalEncontrados() }}</b> repos · <b class="bb-found">{{ conRama() }}</b> con la rama
       · <b class="bb-missing">{{ sinRama() }}</b> sin la rama
     </span>
-    <button class="bb-btn-secondary bb-btn-sm" (click)="verRama.emit()"
-            [disabled]="verificando() || totalEncontrados() === 0">{{ verRamaLabel() }}</button>
+    <button class="bb-btn-secondary bb-btn-sm" (click)="onVerRama()"
+            [disabled]="!puedeVerRama()">{{ verRamaLabel() }}</button>
     }
   </div>
 
@@ -64,7 +64,7 @@
 
   <!-- tabla -->
   <div class="bb-table bb-table--repos bb-table--repos-buscados"
-       [style.--bb-cols]="procesarSalida() ? '2.2rem 2rem 1.3fr 1.6fr 1.2fr' : '2.2rem 2rem 1.3fr 1.2fr'">
+       [style.--bb-cols]="mostrarPr() ? '2.2rem 2rem 1.3fr 1.6fr 1.2fr' : '2.2rem 2rem 1.3fr 1.2fr'">
     <div class="bb-repos-head">
       <span class="bb-check-cell">
         <input type="checkbox" [checked]="paginaSeleccionada()"
@@ -73,7 +73,7 @@
       </span>
       <span>#</span>
       <span>Repositorio</span>
-      @if (procesarSalida()) {
+      @if (mostrarPr()) {
       <span>Pull Request</span>
       }
       <span>Procesamiento</span>
@@ -97,7 +97,7 @@
         </div>
         }
       </span>
-      @if (procesarSalida()) {
+      @if (mostrarPr()) {
       <span>
         @if (estaCreando(repo.slug)) {
         <span class="bb-deploy-badge bb-deploy--pending"><span class="bb-spinner-inline"></span>Creando PR…</span>
