@@ -322,11 +322,13 @@ class ReleaseCache:
             CREATE INDEX IF NOT EXISTS idx_ae_name ON aws_environment (ae_name);
 
             CREATE TABLE IF NOT EXISTS repositories (
-                r_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                r_id TEXT PRIMARY KEY,
                 r_slug TEXT NOT NULL,
                 r_workspace TEXT NOT NULL,
                 r_url TEXT NOT NULL DEFAULT '',
-                r_details TEXT NOT NULL DEFAULT '{}'
+                r_details TEXT NOT NULL DEFAULT '{}',
+                r_created_at REAL NOT NULL,
+                r_updated_at REAL NOT NULL
             );
             CREATE UNIQUE INDEX IF NOT EXISTS uuidx_repositories_workspace_slug
                 ON repositories (r_workspace, r_slug);
@@ -418,6 +420,52 @@ class ReleaseCache:
                 )
             finally:
                 cur.close()
+
+            # repositories: r_id pasa a ser un uuid determinístico (semilla
+            # slug+workspace, no repetible) y se agregan timestamps. Las DBs
+            # viejas tienen r_id INTEGER AUTOINCREMENT y sin r_created_at:
+            # se reconstruye la tabla conservando los tags/flujo persistidos.
+            repo_cols = {
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(repositories)").fetchall()
+            }
+            if "r_created_at" not in repo_cols:
+                cur = self._conn.cursor()
+                try:
+                    cur.execute("ALTER TABLE repositories RENAME TO repositories_old")
+                    cur.execute("DROP INDEX IF EXISTS uuidx_repositories_workspace_slug")
+                    cur.execute(
+                        "CREATE TABLE repositories ("
+                        " r_id TEXT PRIMARY KEY,"
+                        " r_slug TEXT NOT NULL,"
+                        " r_workspace TEXT NOT NULL,"
+                        " r_url TEXT NOT NULL DEFAULT '',"
+                        " r_details TEXT NOT NULL DEFAULT '{}',"
+                        " r_created_at REAL NOT NULL,"
+                        " r_updated_at REAL NOT NULL)"
+                    )
+                    now = time.time()
+                    rows = cur.execute(
+                        "SELECT r_slug, r_workspace, r_url, r_details FROM repositories_old"
+                    ).fetchall()
+                    for r_slug, r_ws, r_url, r_details in rows:
+                        radix = str(
+                            uuid.uuid5(uuid.NAMESPACE_URL, f"{r_slug}|{r_ws}")
+                        )
+                        cur.execute(
+                            "INSERT INTO repositories "
+                            "(r_id, r_slug, r_workspace, r_url, r_details, "
+                            " r_created_at, r_updated_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (radix, r_slug, r_ws, r_url, r_details, now, now),
+                        )
+                    cur.execute("DROP TABLE repositories_old")
+                    cur.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uuidx_repositories_workspace_slug "
+                        "ON repositories (r_workspace, r_slug)"
+                    )
+                finally:
+                    cur.close()
             self._conn.commit()
 
     def _drop_legacy_tables(self) -> None:
@@ -1515,16 +1563,19 @@ class ReleaseCache:
         """Fila de ``repositories`` del repo, o ``None`` si no existe aún.
 
         ``r_details`` es JSON canónico: ``{"tags": [...]}`` con los tags de
-        flujo (minúsculas) y cualquier metadata persistente del repo.
+        flujo (minúsculas) y cualquier metadata persistente del repo (como
+        ``sources``). ``r_id`` es un uuid determinístico de la semilla
+        ``slug|workspace`` (no repetible entre workspaces).
         """
         row = self._fetchone(
-            "SELECT r_id, r_slug, r_workspace, r_url, r_details "
+            "SELECT r_id, r_slug, r_workspace, r_url, r_details, "
+            " r_created_at, r_updated_at "
             "FROM repositories WHERE r_workspace = ? AND r_slug = ?",
             (workspace, slug),
         )
         if row is None:
             return None
-        r_id, r_slug, r_workspace, r_url, r_details = row
+        r_id, r_slug, r_workspace, r_url, r_details, r_created_at, r_updated_at = row
         try:
             details = json.loads(r_details)
         except (TypeError, ValueError):
@@ -1535,17 +1586,21 @@ class ReleaseCache:
             "r_workspace": r_workspace,
             "r_url": r_url,
             "r_details": details,
+            "r_created_at": r_created_at,
+            "r_updated_at": r_updated_at,
         }
 
     def list_repositories(self, workspace: str) -> list[dict]:
         """Todas las filas de ``repositories`` del workspace."""
         rows = self._fetchall(
-            "SELECT r_id, r_slug, r_workspace, r_url, r_details "
+            "SELECT r_id, r_slug, r_workspace, r_url, r_details, "
+            " r_created_at, r_updated_at "
             "FROM repositories WHERE r_workspace = ?",
             (workspace,),
         )
         out = []
-        for r_id, r_slug, r_ws, r_url, r_details in rows:
+        for row in rows:
+            r_id, r_slug, r_ws, r_url, r_details, r_created_at, r_updated_at = row
             try:
                 details = json.loads(r_details)
             except (TypeError, ValueError):
@@ -1556,26 +1611,37 @@ class ReleaseCache:
                 "r_workspace": r_ws,
                 "r_url": r_url,
                 "r_details": details,
+                "r_created_at": r_created_at,
+                "r_updated_at": r_updated_at,
             })
         return out
 
     def upsert_repository(self, workspace: str, slug: str, url: str = "", details: dict | None = None) -> None:
-        """Crea o actualiza la fila del repo (merge de ``r_details`` sobre lo existente)."""
+        """Crea o actualiza la fila del repo (merge de ``r_details`` sobre lo existente).
+
+        ``r_id`` es un uuid determinístico de la semilla ``slug|workspace``:
+        es idéntico al crearlo varias veces y nunca colisiona entre workspaces.
+        """
         existing = self.get_repository(workspace, slug)
         merged = {**(existing["r_details"] if existing else {}), **(details or {})}
+        now = time.time()
+        radix = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{slug}|{workspace}"))
         if existing is None:
             self._execute(
-                "INSERT INTO repositories (r_slug, r_workspace, r_url, r_details) "
-                "VALUES (?, ?, ?, ?)"
+                "INSERT INTO repositories "
+                "(r_id, r_slug, r_workspace, r_url, r_details, r_created_at, r_updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(r_workspace, r_slug) DO UPDATE SET "
-                " r_url = excluded.r_url, r_details = excluded.r_details",
-                (slug, workspace, url, json.dumps(merged)),
+                " r_id = excluded.r_id, r_url = excluded.r_url, "
+                " r_details = excluded.r_details, r_updated_at = excluded.r_updated_at",
+                (radix, slug, workspace, url, json.dumps(merged), now, now),
             )
         else:
             self._execute(
-                "UPDATE repositories SET r_url = ?, r_details = ? "
+                "UPDATE repositories SET r_url = ?, r_details = ?, r_updated_at = ?, "
+                " r_id = ? "
                 "WHERE r_workspace = ? AND r_slug = ?",
-                (url or existing["r_url"], json.dumps(merged), workspace, slug),
+                (url or existing["r_url"], json.dumps(merged), now, radix, workspace, slug),
             )
 
     def get_repository_flow_tags(self, workspace: str, slug: str) -> list[str]:
@@ -1598,6 +1664,94 @@ class ReleaseCache:
         })
         self.upsert_repository(workspace, slug, url=url, details={"tags": clean})
         return clean
+
+    def set_repository_source(self, workspace: str, slug: str, source: dict, url: str = "") -> None:
+        """Upsert/merge de un source (release de una branch origen) en ``r_details.sources``.
+
+        Mergea el source nuevo sobre el existente de la misma ``branch``
+        (conserva ``url/head_commit/tags/ssm`` previos cuando el nuevo no los
+        trae) y hace upsert de cada ``target`` por ``target.branch`` (destino),
+        conservando destinos de otras ramas. El merge de targets respeta el
+        ``ssm`` ya persistido cuando el target nuevo no lo incluye. Los tags de
+        flujo existentes se conservan. ``url`` es la URL del repo; si no se
+        pasa, se conserva la existente.
+        """
+        repo = self.get_repository(workspace, slug)
+        details = dict(repo["r_details"] if repo else {})
+        branch = (source or {}).get("branch", "")
+        kept = [s for s in (details.get("sources") or []) if s.get("branch") != branch]
+
+        existing = next((s for s in (details.get("sources") or []) if s.get("branch") == branch), None)
+        target_dests = {t.get("branch") for t in (source or {}).get("targets") or []}
+        if existing:
+            merged = dict(existing)
+            for k, v in (source or {}).items():
+                if v is not None:
+                    merged[k] = v
+            merged_targets = [t for t in (existing.get("targets") or []) if t.get("branch") not in target_dests]
+            for tnew in (source or {}).get("targets") or []:
+                old = next((t for t in (existing.get("targets") or []) if t.get("branch") == tnew.get("branch")), None)
+                if old is not None:
+                    tmerged = dict(old)
+                    for k, v in tnew.items():
+                        if v is not None:
+                            tmerged[k] = v
+                    merged_targets.append(tmerged)
+                else:
+                    merged_targets.append(dict(tnew))
+            merged["targets"] = merged_targets
+            kept.append(merged)
+        elif source:
+            kept.append(dict(source or {}))
+
+        details["sources"] = kept
+        self.upsert_repository(
+            workspace, slug,
+            url=url or (repo["r_url"] if repo else ""),
+            details={"sources": kept},
+        )
+
+    def set_repository_source_ssm(
+        self,
+        workspace: str,
+        slug: str,
+        origin: str,
+        destination: str,
+        source_ssm: list[str],
+        target_ssm: list[str],
+        target_head_commit: str = "",
+    ) -> None:
+        """Sobrescribe los arrays ``ssm`` del source/release de un repo.
+
+        ``source_ssm`` reemplaza el ``ssm`` del source con ``branch == origin``
+        y ``target_ssm`` reemplaza el ``ssm`` y el ``head_commit`` del target
+        con ``branch == destination``. El reemplazo es TOTAL (no merge) porque
+        cada lectura del flujo refleja la realidad actual de esas ramas. Si el
+        repo o el source no existen aún, no hace nada (el scan los persiste luego).
+        """
+        repo = self.get_repository(workspace, slug)
+        if repo is None:
+            return
+        details = dict(repo["r_details"] or {})
+        sources = list(details.get("sources") or [])
+        for s in sources:
+            if s.get("branch") != origin:
+                continue
+            if source_ssm is not None:
+                s["ssm"] = sorted(set(source_ssm))
+                s.setdefault("targets", [])
+            for t in s.get("targets") or []:
+                if t.get("branch") != destination:
+                    continue
+                if target_ssm is not None:
+                    t["ssm"] = sorted(set(target_ssm))
+                if target_head_commit:
+                    t["head_commit"] = target_head_commit
+        self.upsert_repository(
+            workspace, slug,
+            url=repo["r_url"],
+            details={"sources": sources},
+        )
 
     # -- valores SSM (per cliente + decrypt) ------------------------------------
 

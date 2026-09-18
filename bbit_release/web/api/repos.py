@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import re
 import time
+from types import SimpleNamespace
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -1004,6 +1005,87 @@ def _merge_tags_slice(item, slice_data, ci):
     item["ci_vcs"] = ci.vcs if ci else None
 
 
+def _persist_repo_source(cache, workspace, slug, origin, destination, item, pr_raw, repo_url=""):
+    """Persiste el source de release del repo en ``repositories.r_details.sources``.
+
+    El source representa una branch origen con su commit, los tags de deploy
+    con URL de CircleCI y los targets (destino + PR). Upsert por la combinación
+    (branch origen, destino): no pisa destinos ya persistidos de la misma branch.
+    El ``pr`` se guarda como ``{status, title, url}``; cada target lleva su
+    ``ssm`` (params del destino, los puebla la fase diff). 
+    """
+    commit = (item or {}).get("commit") or ""
+    if not commit:
+        return
+    deploy_tags = [
+        {"name": row.get("name"), "url": row["deploy"].get("url")}
+        for row in (item.get("tags") or [])
+        if row.get("deploy") and row["deploy"].get("url")
+    ]
+    pr = pr_raw or {}
+    target = {
+        "branch": destination,
+        "pr": {
+            "status": (pr.get("state") or "").lower(),
+            "title": pr.get("title", ""),
+            "url": pr.get("url", ""),
+        } if pr_raw else None,
+        "ssm": [],
+    }
+    source = {
+        "branch": origin,
+        "url": (item.get("branch_url") or ""),
+        "head_commit": commit,
+        "tags": deploy_tags,
+        "ssm": [],
+        "targets": [target],
+    }
+    cache.set_repository_source(workspace, slug, source, url=repo_url)
+
+
+def _persist_pr_target(cache, workspace, slug, origin, destination, pr):
+    """Actualiza el target (destino + PR) del source de ``origin`` para un repo.
+
+    Se usa tras crear/renombrar un PR: mergea solo el target, sin pisar
+    url/head_commit/tags/ssm del source ya persistido por el scan ni el ``ssm``
+    del target ya resuelto por la fase diff.
+    """
+    cache.set_repository_source(workspace, slug, {
+        "branch": origin,
+        "targets": [{
+            "branch": destination,
+            "pr": {
+                "status": (pr.get("state") or "").lower(),
+                "title": pr.get("title", ""),
+                "url": pr.get("url", ""),
+            } if pr else None,
+        }],
+    })
+
+
+def _persist_source_ssm(client, cache, workspace, slug, origin, destination, prefixes, ctx=None):
+    """Sobrescribe el ``ssm`` del source y del target de un repo con los
+    params reales de cada rama (origen y destino).
+
+    Reutiliza los snapshot tarball cacheados (``_snapshot_for``, SQLite TTL
+    3600 + dedupe intra-request por ``ctx``) y la lectura de master params de
+    la fase diff: no hace lecturas completas 2 veces por consulta.
+    """
+    try:
+        origin_ref, dest_ref = _repo_refs(client, SimpleNamespace(slug=slug), origin, destination, ctx)
+    except (bb.BitbucketAuthError, bb.BitbucketError):
+        origin_ref = _ref_for(client, slug, origin)
+        dest_ref = _ref_for(client, slug, destination)
+    origin_params = _read_all_params(client, slug, origin_ref, prefixes, ctx)
+    dest_params = _read_all_params(client, slug, dest_ref, prefixes, ctx)
+    cache.set_repository_source_ssm(
+        workspace, slug, origin, destination,
+        source_ssm=sorted({p for p, _ in origin_params}),
+        target_ssm=sorted({p for p, _ in dest_params}),
+        target_head_commit=dest_ref,
+    )
+
+
 def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=None, with_tags=True):
     """Payload de un repo (etapa paralela de /scan).
 
@@ -1170,6 +1252,7 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
         "item": {k: v for k, v in item.items() if k not in ("tags", "deploys", "match_tag", "ci_project", "ci_vcs")},
         "pr_raw": pr,
     })
+    _persist_repo_source(cache, repo.workspace, repo.slug, origin, destination, item, pr)
     return item, slice_data["ci_error"]
 
 
@@ -1368,6 +1451,169 @@ def repos_quick(
         "repos": [_with_tags(r) for r in repos],
         "count": len(repos),
     }
+
+
+@router.get("/get-repositories")
+def get_repositories():
+    """Shape ``__get_repositories`` del mockup: repos del workspace con sus
+    tags de flujo y sources persistidos en ``repositories.r_details``.
+
+    Cada repo es::
+
+        {"slug": ..., "tags": [...], "sources": [...]}
+
+    donde ``sources`` son las ramas de release escaneadas con su commit, tags
+    de deploy (URL de CircleCI) y targets (destino → PR). El body es
+    directo para consumo de Home (sin wrap por repo adicional).
+    """
+    data = _require_session()
+    return _repositories_payload(get_cache(), data.client.workspace)
+
+
+def _repositories_payload(cache, workspace: str) -> dict:
+    """Shape ``__get_repositories``: repos del workspace con tags y sources."""
+    rows = cache.list_repositories(workspace)
+    repositories = []
+    for row in rows:
+        details = row["r_details"] or {}
+        repositories.append({
+            "slug": row["r_slug"],
+            "tags": details.get("tags") or [],
+            "sources": details.get("sources") or [],
+        })
+    return {
+        "body": {"repositories": repositories},
+        "status": {"code": "BBIT-000", "description": "Todas transacciones realizadas correctamente"},
+    }
+
+
+REPOS_SCAN_FRESH_SECONDS = 24 * 3600
+
+
+def _scan_fresh_rows(rows: list[dict], now: float) -> tuple[bool, float]:
+    """Frescura del último scan del workspace.
+
+    Retorna ``(fresh, last_scan_at)``: ``fresh`` es ``True`` si el scan más
+    reciente (max ``r_updated_at`` sobre repos con ``sources``) está dentro de
+    la ventana de 24h. El orquestador decide con esto si re-escanea o sirve
+    lo persistido.
+    """
+    with_sources = [r for r in rows if (r["r_details"] or {}).get("sources")]
+    last_scan = max((r["r_updated_at"] or 0) for r in with_sources) if with_sources else 0
+    fresh = bool(with_sources) and (now - last_scan) <= REPOS_SCAN_FRESH_SECONDS
+    return fresh, last_scan
+
+
+def _rescan_workspace(client, ci, cache, workspace: str, rows: list[dict]) -> None:
+    """Re-escanea los sources ya persistidos del workspace.
+
+    Levanta todos los pares (branch origen → destino) de los sources
+    guardados en ``repositories.r_details``, invalida el cache de esos pares
+    (para que el scan por repo vuelva a consultar Bitbucket/CircleCI) y
+    re-ejecuta el scan de cada repo con sources en paralelo. El scan persiste
+    el resultado (via ``_persist_repo_source``), refrescando ``r_updated_at``.
+    """
+    cfg = Config()
+    deploy_prefixes = cfg.deploy_prefixes if cfg is not None else []
+    pairs = set()
+    for row in rows:
+        details = row["r_details"] or {}
+        for source in details.get("sources") or []:
+            origin = source.get("branch", "")
+            if not origin:
+                continue
+            dests = {t.get("branch", "") for t in (source.get("targets") or []) if t.get("branch")}
+            for dest in dests or {"master"}:
+                pairs.add((origin, dest))
+    if not pairs:
+        return
+
+    inval = {"repositories": {"excluded": [], "prefixes": []}}
+    for origin, dest in pairs:
+        cache.invalidate(origin, dest, inval)
+
+    jobs = []
+    for row in rows:
+        details = row["r_details"] or {}
+        for source in details.get("sources") or []:
+            origin = source.get("branch", "")
+            if not origin:
+                continue
+            dests = {t.get("branch", "") for t in (source.get("targets") or []) if t.get("branch")} or {"master"}
+            for dest in dests:
+                job = SimpleNamespace(
+                    slug=row["r_slug"],
+                    name=row["r_slug"],
+                    workspace=row["r_workspace"],
+                    default_branch="",
+                    resolved_branch="",
+                )
+                jobs.append((job, origin, dest))
+
+    workers = min(MAX_WORKERS, len(jobs) or 1)
+    ctx: dict = {}
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [
+            ex.submit(_repo_scan, client, ci, repo, origin, dest, deploy_prefixes, ctx, with_tags=True)
+            for repo, origin, dest in jobs
+        ]
+        for fut in futures:
+            try:
+                fut.result()
+            except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+                log.warning("rescan workspace %s: %s", workspace, exc)
+            except Exception:  # noqa: BLE001
+                log.exception("rescan workspace %s: error inesperado", workspace)
+
+
+@router.get("/repositories")
+def repositories_orchestrator():
+    """Orquestador del primer load de Home.
+
+    No exige sesión activa para servir lo persistido: si el workspace ya fue
+    escaneado hace menos de 24h (max ``r_updated_at`` de repos con ``sources``),
+    devuelve el shape ``__get_repositories`` directo desde SQLite, sin tocar
+    Bitbucket/CircleCI ni reconstruir la sesión.
+
+    Solo si el scan está vencido necesita credenciales: reconstruye la sesión
+    server-side (como ``/session/reuse`` pero bajo demanda, solo para
+    re-escannear) y re-escanea los sources ya persistidos. Sin credenciales
+    configuradas → 401 (el front cae a login).
+
+    El payload incluye ``session`` con identity/workspace/repo_count para que
+    el front pinte el topbar sin haber llamado a ``/session/reuse``.
+    """
+    cache = get_cache()
+    sid = active_session_id()
+    data = get_session(sid) if sid else None
+    cfg = Config()
+    ws = data.client.workspace if (data and data.client) else cfg.workspace
+    if not ws:
+        raise HTTPException(
+            401, "No hay sesión activa ni credenciales configuradas para el workspace."
+        )
+    rows = cache.list_repositories(ws)
+    fresh, _ = _scan_fresh_rows(rows, time.time())
+    if not fresh:
+        if not data:
+            tok = cfg.bitbucket_token
+            if not (tok and ws):
+                raise HTTPException(
+                    401, "No hay credenciales para re-escannear el workspace. Conectá desde la web."
+                )
+            try:
+                data = create_session(ws, tok, client_id=cfg.client_id)
+            except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+                raise HTTPException(401, f"No se pudieron validar las credenciales guardadas: {exc}") from exc
+        _rescan_workspace(data.client, _circleci(), cache, ws, rows)
+    payload = _repositories_payload(cache, ws)
+    payload["session"] = {
+        "active": True,
+        "identity": data.identity if (data and data.identity) else (cfg.client_alias or ws),
+        "workspace": ws,
+        "repo_count": len(rows) or (data.repo_count if data else 0),
+    }
+    return payload
 
 
 @router.patch("/flow-tags")
@@ -1820,6 +2066,16 @@ def flow_stream(
                     data.client, origin, destination, mode, proj, blocked, ssm_prefixes, cache, ctx,
                     dest_by_repo=dest_by_repo, force=bool(force),
                 )
+                # BBIT: persistir el ssm real por repo (source=origen, target=destino)
+                # aprovechando los snapshot tarball y master params ya cacheados.
+                for entry in diff_raw.get("repos") or []:
+                    try:
+                        _persist_source_ssm(
+                            data.client, cache, data.client.workspace, entry["repo"],
+                            origin, destination, ssm_prefixes, ctx,
+                        )
+                    except Exception as exc:
+                        log.warning("openline: ssm persist %s falló: %s", entry["repo"], exc)
                 diff_enriched = _enrich_diff_ssm(diff_raw, cfg_diff)
                 try:
                     yield _event("diff", diff_enriched)
@@ -1858,6 +2114,7 @@ def create_pr(repo: str, origin: str, destination: str = "master", title: str = 
         pr = data.client.create_pr(repo, origin, destination, title=title or None)
     except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    _persist_pr_target(get_cache(), data.client.workspace, repo, origin, destination, pr)
     return {"ok": True, "pr": _serialize_pr(pr)}
 
 
@@ -1930,6 +2187,11 @@ def update_pr_titles(origin: str, destination: str = "master", title: str = "", 
                 continue
             data.client.update_pr_title(slug, pr["id"], target)
             updated.append(slug)
+            _persist_pr_target(get_cache(), data.client.workspace, slug, origin, destination, {
+                "title": target,
+                "url": pr.get("url", ""),
+                "state": (pr.get("state") or "").lower(),
+            })
         except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
             failed.append({"repo": slug, "error": str(exc)})
     return {"ok": True, "title": target, "updated": updated, "skipped": skipped, "failed": failed}

@@ -3876,6 +3876,282 @@ def test_repos_quick_incluye_tags_de_flujo_persistidos(monkeypatch):
     assert by_slug["orders-web"]["tags"] == ["batch", "fargate"]
 
 
+def test_get_repositories_shape_con_tags_y_sources(monkeypatch):
+    """GET /api/get-repositories devuelve el shape __get_repositories:
+    {body:{repositories:[{slug,tags,sources}]}, status:{code,description}}."""
+
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True), "J")
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return []
+
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": "ws", "token": "tok"})
+
+    cache = get_cache()
+    cache.set_repository_source(
+        "ws", "orders-api",
+        {"branch": "release/x", "url": "https://x/branch/release/x", "head_commit": "abc",
+         "tags": [{"name": "uat-1201", "url": "https://app.circleci.com/pipelines/1"}],
+         "ssm": ["/config/common/ledger/database-user"],
+         "targets": [{"branch": "master",
+                      "head_commit": "def456",
+                      "pr": {"status": "open", "title": "Fix", "url": "https://x/pull-requests/42"},
+                      "ssm": ["/config/common/amount-calculate", "/config/common/amount-round"]}]},
+    )
+    cache.set_repository_flow_tags("ws", "orders-api", ["Batch", "Fargate"])
+
+    body = client.get("/api/get-repositories").json()
+    assert body["status"] == {"code": "BBIT-000", "description": "Todas transacciones realizadas correctamente"}
+    repos = body["body"]["repositories"]
+    assert [r["slug"] for r in repos] == ["orders-api"]
+    repo = repos[0]
+    assert repo["tags"] == ["batch", "fargate"]
+    assert repo["sources"][0]["branch"] == "release/x"
+    assert repo["sources"][0]["tags"] == [{"name": "uat-1201", "url": "https://app.circleci.com/pipelines/1"}]
+    assert repo["sources"][0]["ssm"] == ["/config/common/ledger/database-user"]
+    assert repo["sources"][0]["targets"] == [{
+        "branch": "master",
+        "head_commit": "def456",
+        "pr": {"status": "open", "title": "Fix", "url": "https://x/pull-requests/42"},
+        "ssm": ["/config/common/amount-calculate", "/config/common/amount-round"],
+    }]
+
+
+def test_get_repositories_requires_session():
+    resp = client.get("/api/get-repositories")
+    assert resp.status_code == 401
+
+
+def _make_stub_client(monkeypatch, ws="ws"):
+    class StubClient:
+        def __init__(self, ws, tok, **kw):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug="ws", is_private=True), "J")
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return []
+    monkeypatch.setattr("bbit_release.web.session.BitbucketClient", StubClient)
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+    client.post("/api/session", json={"workspace": ws, "token": "tok"})
+
+
+def test_repositories_orchestrator_fresh_sin_rescan(monkeypatch):
+    """GET /api/repositories con scan < 24h NO re-escanea: devuelve el shape
+    persistido sin consultar Bitbucket/CircleCI."""
+    _make_stub_client(monkeypatch)
+    cache = get_cache()
+    cache.set_repository_source("ws", "orders-api", {
+        "branch": "release/x",
+        "url": "https://x/branch/release/x",
+        "head_commit": "abc",
+        "tags": [],
+        "ssm": [],
+        "targets": [{"branch": "master", "head_commit": "def", "pr": None, "ssm": []}],
+    })
+    cache.set_repository_flow_tags("ws", "orders-api", ["fargate"])
+
+    scanned: list[tuple] = []
+    def _fake_scan(*a, **k):
+        scanned.append(a)
+        return None, None
+    monkeypatch.setattr(repos_mod, "_repo_scan", _fake_scan)
+
+    resp = client.get("/api/repositories")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"]["code"] == "BBIT-000"
+    repos = body["body"]["repositories"]
+    assert [r["slug"] for r in repos] == ["orders-api"]
+    assert repos[0]["tags"] == ["fargate"]
+    assert repos[0]["sources"][0]["head_commit"] == "abc"
+    assert scanned == []  # fresco: no re-escaneo
+
+
+def test_repositories_orchestrator_stale_rescan_y_persiste(monkeypatch):
+    """GET /api/repositories con scan vencido (> 24h) re-escanea los sources
+    persistidos y refresca r_updated_at antes de devolver el shape."""
+    _make_stub_client(monkeypatch)
+    cache = get_cache()
+    cache.set_repository_source("ws", "orders-api", {
+        "branch": "release/x",
+        "url": "https://x/branch/release/x",
+        "head_commit": "abc",
+        "tags": [],
+        "ssm": [],
+        "targets": [{"branch": "master", "head_commit": "def", "pr": None, "ssm": []}],
+    })
+
+    # Envejecer el scan: el source fue persistido hace > 24h.
+    import time as _t
+    cache._execute(
+        "UPDATE repositories SET r_updated_at = ? WHERE r_workspace = ?",
+        (_t.time() - 26 * 3600, "ws"),
+    )
+
+    scanned: list[tuple] = []
+    def _fake_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=None, with_tags=True):
+        scanned.append((repo.slug, origin, destination))
+        item = {
+            "slug": repo.slug,
+            "name": repo.slug,
+            "workspace": repo.workspace,
+            "branch_url": "https://x/branch/release/x",
+            "commit": "new123",
+            "no_changes": False,
+            "pr": {"exists": False, "state": "open", "title": "PR", "url": "https://x/pr/1"},
+            "tags": [],
+            "deploys": {},
+            "match_tag": {},
+        }
+        from bbit_release.web.api.repos import _persist_repo_source
+        _persist_repo_source(get_cache(), repo.workspace, repo.slug, origin, destination, item, item["pr"])
+        return item, None
+    monkeypatch.setattr(repos_mod, "_repo_scan", _fake_scan)
+
+    resp = client.get("/api/repositories")
+    assert resp.status_code == 200
+    body = resp.json()
+    repos = body["body"]["repositories"]
+    assert [r["slug"] for r in repos] == ["orders-api"]
+    # El re-escaneo se ejecutó contra el par persistido (release/x → master).
+    assert ("orders-api", "release/x", "master") in scanned
+    # El re-escaneo persistió el head_commit nuevo.
+    assert repos[0]["sources"][0]["head_commit"] == "new123"
+    # r_updated_at quedó fresco (< 24h) tras el re-escaneo.
+    row = cache.get_repository("ws", "orders-api")
+    assert _t.time() - row["r_updated_at"] < 24 * 3600
+
+
+def test_repositories_orchestrator_requires_session():
+    resp = client.get("/api/repositories")
+    assert resp.status_code == 401
+
+
+def test_repositories_orchestrator_fresh_sin_sesion_activa_usa_config(monkeypatch):
+    """Reinicio del backend (sesión en memoria caída): el orquestador sirve
+    fresco desde SQLite usando credenciales de Config, sin reconstruir sesión
+    ni tocar Bitbucket."""
+    monkeypatch.setattr(FakeConfig, "workspace", "ws")
+    monkeypatch.setattr(FakeConfig, "bitbucket_token", "tok")
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+
+    cache = get_cache()
+    cache.set_repository_source("ws", "orders-api", {
+        "branch": "release/x",
+        "url": "https://x/branch/release/x",
+        "head_commit": "abc",
+        "tags": [],
+        "ssm": [],
+        "targets": [{"branch": "master", "head_commit": "def", "pr": None, "ssm": []}],
+    })
+
+    scanned: list[tuple] = []
+    monkeypatch.setattr(
+        repos_mod, "_repo_scan",
+        lambda *a, **k: scanned.append(a) or (None, None),
+    )
+
+    # Sin sesión activa en memoria (nadie posteó /api/session).
+    from bbit_release.web import session as _sess
+    assert not getattr(_sess, "active_session_id")()
+
+    resp = client.get("/api/repositories")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"]["code"] == "BBIT-000"
+    assert [r["slug"] for r in body["body"]["repositories"]] == ["orders-api"]
+    assert body["body"]["repositories"][0]["sources"][0]["head_commit"] == "abc"
+    # Fresco: no re-escaneo y sin sesión recomida.
+    assert scanned == []
+    # El payload lleva session para que el front pinte el topbar sin reuse.
+    assert body["session"]["workspace"] == "ws"
+    assert body["session"]["active"] is True
+    assert body["session"]["repo_count"] == 1
+
+
+def test_repositories_orchestrator_stale_sin_sesion_activa_reconstruye(monkeypatch):
+    """Reinicio del backend con scan vencido: el orquestador reconstruye la
+    sesión server-side con las credenciales de Config y re-escanea."""
+    monkeypatch.setattr(FakeConfig, "workspace", "ws")
+    monkeypatch.setattr(FakeConfig, "bitbucket_token", "tok")
+    monkeypatch.setattr("bbit_release.web.api.repos._circleci", lambda: None)
+
+    cache = get_cache()
+    cache.set_repository_source("ws", "orders-api", {
+        "branch": "release/x",
+        "url": "https://x/branch/release/x",
+        "head_commit": "abc",
+        "tags": [],
+        "ssm": [],
+        "targets": [{"branch": "master", "head_commit": "def", "pr": None, "ssm": []}],
+    })
+    import time as _t
+    cache._execute(
+        "UPDATE repositories SET r_updated_at = ? WHERE r_workspace = ?",
+        (_t.time() - 26 * 3600, "ws"),
+    )
+
+    scanned: list[tuple] = []
+    def _fake_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=None, with_tags=True):
+        scanned.append((repo.slug, origin, destination))
+        item = {
+            "slug": repo.slug,
+            "name": repo.slug,
+            "workspace": repo.workspace,
+            "branch_url": "https://x/branch/release/x",
+            "commit": "new123",
+            "no_changes": False,
+            "pr": {"exists": False, "state": "open", "title": "PR", "url": "https://x/pr/1"},
+            "tags": [],
+            "deploys": {},
+            "match_tag": {},
+        }
+        from bbit_release.web.api.repos import _persist_repo_source
+        _persist_repo_source(get_cache(), repo.workspace, repo.slug, origin, destination, item, item["pr"])
+        return item, None
+    monkeypatch.setattr(repos_mod, "_repo_scan", _fake_scan)
+
+    # Patch create_session para que la reconstrucción server-side use el stub.
+    monkeypatch.setattr(repos_mod, "create_session", _stub_create_session)
+
+    resp = client.get("/api/repositories")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["body"]["repositories"][0]["sources"][0]["head_commit"] == "new123"
+    assert ("orders-api", "release/x", "master") in scanned
+    assert body["session"]["workspace"] == "ws"
+
+
+def _stub_create_session(workspace, token, url="", client_id=""):
+    class StubClient:
+        def __init__(self, ws):
+            self.workspace = ws
+        def session(self):
+            return (SimpleNamespace(uuid="x", name="WS", slug=self.workspace, is_private=True), "J")
+        def close(self):
+            pass
+        def list_repos(self, prefixes=None):
+            return []
+
+    return session_mod.SessionData(
+        session_id="sess-orch",
+        client=StubClient(workspace),
+        workspace=workspace,
+        identity="J",
+        repo_count=0,
+        client_id=client_id,
+    )
+
+
 def test_flow_tags_upsert_merge_y_clear_persistido(monkeypatch):
     """BBIT-66: PATCH mergea sobre los existentes y DELETE vacía,
     ambos escribiendo en repositories.r_details."""

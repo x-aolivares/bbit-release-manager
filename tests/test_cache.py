@@ -1014,6 +1014,155 @@ def test_repository_none_cuando_no_existe(tmp_path):
     assert cache.get_repository_flow_tags("ws", "orders-api") == []
 
 
+def test_repository_r_id_es_uuid_deterministico_por_workspace_slug(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.upsert_repository("ws", "orders-api", url="https://x/orders-api", details={"tags": ["fargate"]})
+    repo = cache.get_repository("ws", "orders-api")
+    assert isinstance(repo["r_id"], str)
+    assert repo["r_id"] == str(uuid.uuid5(uuid.NAMESPACE_URL, "orders-api|ws"))
+    # mismo slug en distinto workspace -> distinto r_id
+    cache.upsert_repository("ws2", "orders-api", details={"tags": []})
+    assert cache.get_repository("ws2", "orders-api")["r_id"] != repo["r_id"]
+    # recrear la misma fila no cambia el r_id (no repetible)
+    cache.upsert_repository("ws", "orders-api", details={"tags": ["batch"]})
+    assert cache.get_repository("ws", "orders-api")["r_id"] == repo["r_id"]
+
+
+def test_repository_r_created_at_updated_at(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.upsert_repository("ws", "orders-api", details={"tags": ["fargate"]})
+    repo = cache.get_repository("ws", "orders-api")
+    assert repo["r_created_at"] > 0
+    assert repo["r_updated_at"] > 0
+    first = repo["r_updated_at"]
+    import time as _time
+    _time.sleep(0.01)
+    cache.upsert_repository("ws", "orders-api", details={"other": True})
+    repo = cache.get_repository("ws", "orders-api")
+    assert repo["r_created_at"] == first or repo["r_created_at"] <= repo["r_updated_at"]
+    assert repo["r_updated_at"] >= first
+
+
+def test_repository_migra_r_id_integer_a_uuid(tmp_path):
+    """DBs viejas: r_id INTEGER AUTOINCREMENT y sin timestamps se reconstruyen."""
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE repositories (
+            r_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            r_slug TEXT NOT NULL,
+            r_workspace TEXT NOT NULL,
+            r_url TEXT NOT NULL DEFAULT '',
+            r_details TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE UNIQUE INDEX uuidx_repositories_workspace_slug
+            ON repositories (r_workspace, r_slug);
+        INSERT INTO repositories (r_slug, r_workspace, r_url, r_details)
+        VALUES ('orders-api', 'ws', 'https://x', '{"tags": ["fargate"]}');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    cache = ReleaseCache(db_path=path)
+    repo = cache.get_repository("ws", "orders-api")
+    assert repo["r_id"] == str(uuid.uuid5(uuid.NAMESPACE_URL, "orders-api|ws"))
+    assert repo["r_details"]["tags"] == ["fargate"]
+    assert repo["r_created_at"] > 0
+    # el índice único (workspace, slug) sigue presente tras la migración
+    idx = [r[0] for r in cache._fetchall(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='repositories'"
+    )]
+    assert "uuidx_repositories_workspace_slug" in idx
+    # upsert posterior no choca con la PK nueva
+    cache.upsert_repository("ws", "orders-api", details={"other": 1})
+    assert cache.get_repository("ws", "orders-api")["r_details"]["other"] == 1
+    cache.close()
+
+
+def test_repository_source_upsert_por_branch_y_target(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_repository_source(
+        "ws", "orders-api",
+        {"branch": "release/x", "url": "https://x/branch", "head_commit": "abc",
+         "tags": [{"name": "uat-1", "url": "https://ci/1"}],
+         "targets": [{"branch": "master", "pr": {"status": "open", "title": "PR1", "url": "https://pr/1"},
+                      "ssm": ["/config/common/one"]}]},
+    )
+    repo = cache.get_repository("ws", "orders-api")
+    sources = repo["r_details"]["sources"]
+    assert len(sources) == 1
+    assert sources[0]["branch"] == "release/x"
+    assert sources[0]["head_commit"] == "abc"
+
+    # misma branch nuevo target -> upsert target, conserva el otro destino
+    cache.set_repository_source(
+        "ws", "orders-api",
+        {"branch": "release/x", "targets": [{"branch": "prod", "pr": {"status": "open", "title": "PR2", "url": "https://pr/2"}}]},
+    )
+    sources = cache.get_repository("ws", "orders-api")["r_details"]["sources"]
+    assert len(sources) == 1
+    dests = {t["branch"] for t in sources[0]["targets"]}
+    assert dests == {"master", "prod"}
+    # merge sobre source existente conserva head_commit (no lo pisa el target parcial)
+    assert sources[0]["head_commit"] == "abc"
+    # el ssm del target master ya persistido se conserva al mergear otro destino
+    master_t = next(t for t in sources[0]["targets"] if t["branch"] == "master")
+    assert master_t["ssm"] == ["/config/common/one"]
+
+    # otra branch origen -> source aparte
+    cache.set_repository_source(
+        "ws", "orders-api",
+        {"branch": "release/y", "head_commit": "def", "targets": [{"branch": "master", "pr": None}]},
+    )
+    branches = sorted(s["branch"] for s in cache.get_repository("ws", "orders-api")["r_details"]["sources"])
+    assert branches == ["release/x", "release/y"]
+
+
+def test_repository_source_ssm_sobrescribe_total(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.set_repository_source(
+        "ws", "orders-api",
+        {"branch": "release/x", "head_commit": "abc",
+         "targets": [{"branch": "master", "pr": {"status": "open", "title": "PR1", "url": ""}}]},
+    )
+    # primero populate con dos params
+    cache.set_repository_source_ssm(
+        "ws", "orders-api", "release/x", "master",
+        source_ssm=["/config/common/ledger/db-user", "/config/common/amount"],
+        target_ssm=["/config/common/amount-round"],
+    )
+    s = cache.get_repository("ws", "orders-api")["r_details"]["sources"][0]
+    assert s["ssm"] == ["/config/common/amount", "/config/common/ledger/db-user"]
+    assert s["targets"][0]["ssm"] == ["/config/common/amount-round"]
+    # segunda lectura: SOBRESCRIBE (no merge) los arrays de ssm
+    cache.set_repository_source_ssm(
+        "ws", "orders-api", "release/x", "master",
+        source_ssm=["/config/common/amount"],
+        target_ssm=[],
+        target_head_commit="def456",
+    )
+    s = cache.get_repository("ws", "orders-api")["r_details"]["sources"][0]
+    assert s["ssm"] == ["/config/common/amount"]
+    assert s["targets"][0]["ssm"] == []
+    assert s["targets"][0]["head_commit"] == "def456"
+    # target sin ssm previo: no rompe
+    cache.set_repository_source(
+        "ws", "orders-api",
+        {"branch": "release/z", "head_commit": "z", "targets": [{"branch": "master", "pr": None}]},
+    )
+    cache.set_repository_source_ssm("ws", "orders-api", "release/z", "master",
+                                    source_ssm=["/config/other/x"], target_ssm=[],
+                                    target_head_commit="def456")
+    s = cache.get_repository("ws", "orders-api")["r_details"]["sources"]
+    sz = next(x for x in s if x["branch"] == "release/z")
+    assert sz["ssm"] == ["/config/other/x"]
+    assert sz["targets"][0]["head_commit"] == "def456"
+
+
 def test_repository_upsert_crea_y_merge_details(tmp_path):
     cache = _make_cache(tmp_path)
     cache.upsert_repository("ws", "orders-api", url="https://x/orders-api", details={"tags": ["fargate"]})
