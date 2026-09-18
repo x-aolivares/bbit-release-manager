@@ -28,7 +28,7 @@
   <div class="bb-row-top bb-branch-row">
     <label class="bb-branch-toggle">
       <input type="checkbox" [checked]="procesarSalida()"
-             (change)="toggleBranch.emit($any($event.target).checked)">
+             (change)="procesarSalida.set($any($event.target).checked); toggleBranch.emit($any($event.target).checked)">
       Procesar salida
     </label>
     @if (procesarSalida()) {

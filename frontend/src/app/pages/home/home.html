@@ -44,7 +44,7 @@
       </app-auth-panel>
       }
 
-      @if (connected()) {
+      @if (connected() && !detalleOpen()) {
       <app-buscador
         [projectPrefixes]="projectPrefixes"
         [addingProjectPrefix]="addingProjectPrefix"
