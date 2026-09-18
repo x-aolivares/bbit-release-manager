@@ -381,9 +381,10 @@ export class Home implements OnInit {
           this.connected.set(true);
           this.identity.set(r.identity ?? '');
           this.repoCount.set(r.repo_count ?? 0);
-          this.loadLatestSession();
+          this.loadInitialRepositories();
         } else if (r.stored) {
-          this.reuseSession(() => this.loadLatestSession());
+          this.storedCreds.set(true);
+          this.loadInitialRepositories();
         } else if (r.needs_tokens) {
           this.configOpen.set(true);
           this.storedCreds.set(false);
@@ -404,6 +405,106 @@ export class Home implements OnInit {
   }
 
   ngOnInit(): void {
+  }
+
+  /** Primer load de Home: decide el backend (scan 24h vs get-repositories).
+   *
+   * GET /api/repositories devuelve el shape persistido de cada repo
+   * ({slug, tags, sources}); cada source es una rama release con targets
+   * (destino + PR). Se mapea al primer source como rama principal de la
+   * tabla actual (branch_url/commit/PR del primer target) y los tags de
+   * flujo a reposCache para que la tabla renderice igual que con un flow.
+   */
+  loadInitialRepositories(): void {
+    this.reposLoading.set(true);
+    this.tableLoaded.set(true);
+    this.error.set(null);
+    this.scheduleSpinnerCap();
+    const startedAt = Date.now();
+    const done = () => this.releaseBusy(startedAt, () => {
+      this.clearSpinner();
+      this.reposLoading.set(false);
+    });
+
+    this.http.get<any>('/api/repositories').subscribe({
+      next: (r) => {
+        const session = r?.session;
+        if (session) {
+          this.connected.set(true);
+          this.identity.set(session.identity ?? '');
+          this.repoCount.set(session.repo_count ?? 0);
+          this.storedCreds.set(false);
+        }
+        const records: Array<{
+          slug: string;
+          tags?: string[];
+          sources?: Array<{
+            branch?: string;
+            url?: string;
+            head_commit?: string;
+            tags?: Array<{ name: string; url?: string }>;
+            targets?: Array<{ pr?: { url?: string; title?: string; status?: string } }>;
+          }>;
+        }> = r?.body?.repositories ?? [];
+
+        this.repos.set(records.map((repo) => {
+          const src = repo.sources?.[0];
+          const tgt = src?.targets?.[0];
+          const pr = tgt?.pr;
+          return {
+            slug: repo.slug,
+            name: repo.slug,
+            workspace: '',
+            default_branch: '',
+            branch_url: src?.url ?? '',
+            commit: src?.head_commit ?? '',
+            branch_state: src ? 'found' : undefined,
+            resolved_branch: src?.branch,
+            pr: {
+              exists: !!pr?.url,
+              url: pr?.url ?? '',
+              title: pr?.title ?? '',
+              state: pr?.status ?? '',
+            },
+            tags: (src?.tags ?? []).map((t) => ({
+              name: t.name,
+              deploy: t.url ? { workflow: '', status: '', created_at: '', url: t.url } : null,
+            })),
+            deploys: {},
+            match_tag: {},
+            ci_project: null,
+            ci_vcs: null,
+          };
+        }));
+
+        this.reposCache.set(records.map((repo) => {
+          const src = repo.sources?.[0];
+          return {
+            slug: repo.slug,
+            name: repo.slug,
+            workspace: '',
+            default_branch: '',
+            tags: repo.tags ?? [],
+            resolved_branch: src?.branch,
+            branch_state: src ? 'found' : undefined,
+          };
+        }));
+
+        this.projects.set(records.map((repo) => ({
+          slug: repo.slug,
+          name: repo.slug,
+          workspace: '',
+          default_branch: '',
+        })));
+
+        this.forceCache.set(false);
+        done();
+      },
+      error: () => {
+        this.error.set('No se pudieron cargar los repositorios.');
+        done();
+      },
+    });
   }
 
   private refreshSessions(): void {
@@ -1138,7 +1239,7 @@ export class Home implements OnInit {
         this.stats.set(null);
         window.setTimeout(() => {
           this.configOpen.set(false);
-          this.reuseSession(() => this.loadLatestSession());
+          this.reuseSession(() => this.loadInitialRepositories());
         }, 500);
       },
     });

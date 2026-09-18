@@ -113,6 +113,38 @@ async function mountHome() {
   return { fixture, component, httpMock };
 }
 
+// BBIT-66: arranque con credenciales guardadas (stored) — a diferencia de
+// mountHome (sesión inactiva), dispara el primer load vía /api/repositories
+// SIN pasar por /api/session/reuse.
+async function mountHomeStored() {
+  TestBed.configureTestingModule({
+    imports: [Home],
+    providers: [
+      provideHttpClient(),
+      provideHttpClientTesting(),
+      {
+        provide: ActivatedRoute,
+        useValue: {
+          snapshot: { params: {}, data: {} },
+          params: of({}),
+          queryParams: of({}),
+        },
+      },
+      { provide: Router, useValue: { navigate: vi.fn() } },
+    ],
+  });
+  await TestBed.compileComponents();
+
+  const fixture = TestBed.createComponent(Home);
+  const component = fixture.componentInstance;
+  const httpMock = TestBed.inject(HttpTestingController);
+
+  httpMock.expectOne('/api/health').flush({ status: 'ok', version: '0.70.0', connected: false, workspace: null, identity: null, repo_count: 0 });
+  httpMock.expectOne('/api/session').flush({ active: false, stored: true });
+
+  return { fixture, component, httpMock };
+}
+
 // BBIT-56: simula una "carga completa" exitosa (estrategia full) con N repos.
 // Primea el reposCache local para que loadRepos no pegue a /repos-quick y
 // aterrice directo en el SSE, luego emite repo/stats/done.
@@ -311,5 +343,102 @@ describe('Home (BBIT-56: columnas de ambiente bajo demanda)', () => {
     es.emit('stats', JSON.stringify({ repos: 1, with_pr: 0, prod: 0 }));
     es.emit('done', JSON.stringify({}));
     expect(component.repos().map((r) => r.slug)).toEqual(['r1']);
+  });
+
+  it('primer load: /api/repositories decide el scan y mapea sources a la tabla actual', async () => {
+    const { component, httpMock } = await mountHome();
+
+    component.loadInitialRepositories();
+
+    const req = httpMock.expectOne('/api/repositories');
+    req.flush({
+      status: { code: 'BBIT-000', message: 'OK' },
+      body: {
+        repositories: [
+          {
+            slug: 'orders-api',
+            tags: ['batch', 'fargate'],
+            sources: [
+              {
+                branch: 'release/x',
+                url: 'https://bitbucket.org/ws/orders-api/branch/release/x',
+                head_commit: 'abcdef1234567890abcdef1234567890abcdef12',
+                tags: [{ name: 'uat-1201', url: 'https://app.circleci.com/pipelines/1' }],
+                ssm: ['/common/db_url'],
+                targets: [
+                  {
+                    branch: 'master',
+                    head_commit: 'master000',
+                    pr: { status: 'open', title: 'Release: release/x → master', url: 'https://bitbucket.org/ws/orders-api/pull-requests/12' },
+                    ssm: [],
+                  },
+                ],
+              },
+            ],
+          },
+          { slug: 'legacy', tags: [], sources: [] },
+        ],
+      },
+    });
+
+    // Primer source → rama principal de la fila (branch_url/commit/PR).
+    const [r, legacy] = component.repos();
+    expect(r.slug).toBe('orders-api');
+    expect(r.name).toBe('orders-api');
+    expect(r.branch_url).toBe('https://bitbucket.org/ws/orders-api/branch/release/x');
+    expect(r.commit).toBe('abcdef1234567890abcdef1234567890abcdef12');
+    expect(r.resolved_branch).toBe('release/x');
+    expect(r.branch_state).toBe('found');
+    expect(r.pr).toMatchObject({
+      exists: true,
+      url: 'https://bitbucket.org/ws/orders-api/pull-requests/12',
+      title: 'Release: release/x → master',
+      state: 'open',
+    });
+    expect(r.tags[0]).toMatchObject({ name: 'uat-1201' });
+    expect(r.tags[0].deploy?.url).toBe('https://app.circleci.com/pipelines/1');
+
+    // Flow tags del repo van a reposCache → la tabla renderiza igual que con flow.
+    expect(component.reposCache()[0].tags).toEqual(['batch', 'fargate']);
+    expect(component.reposCache()[1].branch_state).toBeUndefined();
+    expect(component.projects().map((p) => p.slug)).toEqual(['orders-api', 'legacy']);
+  });
+
+  it('primer load: error de /api/repositories se muestra en lugar de la tabla', async () => {
+    const { component, httpMock } = await mountHome();
+
+    component.loadInitialRepositories();
+    const req = httpMock.expectOne('/api/repositories');
+    req.error(new ProgressEvent('network-error'));
+
+    expect(component.error()).toContain('No se pudieron cargar los repositorios.');
+  });
+
+  it('arranque con credenciales guardadas NO reusa sesión: pega directo al orquestador', async () => {
+    const { fixture, httpMock } = await mountHomeStored();
+
+    // El orquestador decide: no hay POST /api/session/reuse.
+    httpMock.expectNone('/api/session/reuse');
+    const req = httpMock.expectOne('/api/repositories');
+    req.flush({
+      status: { code: 'BBIT-000', description: 'ok' },
+      body: {
+        repositories: [
+          {
+            slug: 'orders-api',
+            tags: ['fargate'],
+            sources: [{ branch: 'release/x', url: 'https://x/b', head_commit: 'abc', tags: [], targets: [] }],
+          },
+        ],
+      },
+      session: { active: true, identity: 'J', workspace: 'ws', repo_count: 1 },
+    });
+
+    const component = fixture.componentInstance;
+    expect(component.connected()).toBe(true);
+    expect(component.identity()).toBe('J');
+    expect(component.repoCount()).toBe(1);
+    expect(component.repos().map((r) => r.slug)).toEqual(['orders-api']);
+    httpMock.verify();
   });
 });
