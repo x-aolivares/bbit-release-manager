@@ -7,6 +7,7 @@ export interface ReposBuscarRow {
   workspace: string;
   default_branch: string;
   tags: string[];
+  branch_url?: string;
   resolved_branch?: string;
   branch_state?: 'found' | 'not_found';
   pr?: { url: string; title: string; id?: number } | null;
@@ -244,5 +245,16 @@ export class ReposBuscadosComponent {
 
   ramaResuelta(repo: ReposBuscarRow): boolean {
     return this.states()[repo.slug] === 'found';
+  }
+
+  /** URL del repositorio derivada de branch_url (quita el sufijo de la rama). */
+  repoUrl(repo: ReposBuscarRow): string {
+    const u = (repo.branch_url || '').trim();
+    if (!u) return '';
+    for (const marker of ['/branch/', '/src/', '/commits/', '/pull-requests/']) {
+      const i = u.indexOf(marker);
+      if (i !== -1) return u.slice(0, i);
+    }
+    return u;
   }
 }

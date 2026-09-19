@@ -71,4 +71,30 @@ describe('ReposBuscadosComponent — columna PR y botón ver rama', () => {
     component.onToggleProcesarSalida(false);
     expect(component.mostrarPr()).toBe(false);
   });
+
+  it('repoUrl deriva la URL del repo quitando el sufijo de la rama', () => {
+    const component = TestBed.createComponent(ReposBuscadosComponent).componentInstance;
+    expect(
+      component.repoUrl({ slug: 'r1', name: 'R1', workspace: 'ws', default_branch: 'master', tags: [], branch_url: 'https://bitbucket.org/ws/r1/branch/release/x' }),
+    ).toBe('https://bitbucket.org/ws/r1');
+    expect(
+      component.repoUrl({ slug: 'r1', name: 'R1', workspace: 'ws', default_branch: 'master', tags: [], branch_url: 'https://bitbucket.org/ws/r1/src/release/x' }),
+    ).toBe('https://bitbucket.org/ws/r1');
+    expect(
+      component.repoUrl({ slug: 'r1', name: 'R1', workspace: 'ws', default_branch: 'master', tags: [] }),
+    ).toBe('');
+  });
+
+  it('el slug se renderiza como link al repo cuando hay branch_url', async () => {
+    const { fixture } = await mount();
+    fixture.componentRef.setInput('repos', [
+      { slug: 'r1', name: 'R1', workspace: 'ws', default_branch: 'master', tags: [], branch_url: 'https://bitbucket.org/ws/r1/branch/release/x' },
+    ]);
+    fixture.detectChanges();
+
+    const anchor = fixture.nativeElement.querySelector('a.bb-link');
+    expect(anchor).toBeTruthy();
+    expect(anchor.getAttribute('href')).toBe('https://bitbucket.org/ws/r1');
+    expect(anchor.getAttribute('target')).toBe('_blank');
+  });
 });

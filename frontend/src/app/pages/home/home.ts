@@ -1370,6 +1370,7 @@ export class Home implements OnInit {
         workspace: r.workspace,
         default_branch: r.default_branch || c?.default_branch || '',
         tags: c?.tags ?? [],
+        branch_url: r.branch_url ?? '',
         resolved_branch: r.resolved_branch ?? c?.resolved_branch,
         branch_state: (r.branch_state ?? c?.branch_state) as 'found' | 'not_found' | undefined,
         pr: r.pr?.exists && r.pr.url ? { url: r.pr.url, title: r.pr.title ?? '', id: undefined } : undefined,

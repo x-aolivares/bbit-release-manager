@@ -88,7 +88,11 @@
       </span>
       <span class="bb-mono bb-muted">{{ offset() + i + 1 }}</span>
       <span>
-        <a class="bb-link" href="javascript:void(0)" (click)="abrirDetalle.emit(repo.slug)">{{ repo.slug }}</a>
+        @if (repoUrl(repo)) {
+        <a class="bb-link" [href]="repoUrl(repo)" target="_blank" rel="noopener">{{ repo.slug }}</a>
+        } @else {
+        <span class="bb-mono">{{ repo.slug }}</span>
+        }
         @if (states()[repo.slug] === 'checking') {
         <div class="bb-muted bb-repo-checking">
           <span class="bb-deploy-badge bb-deploy--pending">
