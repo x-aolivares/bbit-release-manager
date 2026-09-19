@@ -10,6 +10,7 @@ export interface ReposBuscarRow {
   branch_url?: string;
   resolved_branch?: string;
   branch_state?: 'found' | 'not_found';
+  no_changes?: boolean;
   pr?: { url: string; title: string; id?: number } | null;
 }
 
@@ -245,6 +246,16 @@ export class ReposBuscadosComponent {
 
   ramaResuelta(repo: ReposBuscarRow): boolean {
     return this.states()[repo.slug] === 'found';
+  }
+
+  /** La rama está resuelta pero no tiene commits por delante del destino:
+   *  no hay nada que mergear, no se ofrece crear PR. */
+  sinCambios(repo: ReposBuscarRow): boolean {
+    return this.ramaResuelta(repo) && !!repo.no_changes;
+  }
+
+  puedeCrearPr(repo: ReposBuscarRow): boolean {
+    return this.ramaResuelta(repo) && !this.sinCambios(repo);
   }
 
   /**

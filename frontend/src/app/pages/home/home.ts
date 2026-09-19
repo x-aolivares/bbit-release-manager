@@ -63,6 +63,7 @@ interface ScanRepo {
   resolved_branch?: string;
   tags: TagRow[];
   pr: PrInfo;
+  no_changes?: boolean;
   deploys: Record<string, DeployInfo | null>;
   match_tag: Record<string, string | null>;
   ci_project?: string | null;
@@ -1375,6 +1376,7 @@ export class Home implements OnInit {
         branch_url: r.branch_url ?? '',
         resolved_branch: r.resolved_branch ?? c?.resolved_branch,
         branch_state: (r.branch_state ?? c?.branch_state) as 'found' | 'not_found' | undefined,
+        no_changes: r.no_changes ?? false,
         pr: r.pr?.exists && r.pr.url ? { url: r.pr.url, title: r.pr.title ?? '', id: undefined } : undefined,
       };
     });

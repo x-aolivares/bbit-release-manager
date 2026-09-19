@@ -107,7 +107,9 @@
         <span class="bb-deploy-badge bb-deploy--pending"><span class="bb-spinner-inline"></span>Creando PR…</span>
         } @else if (prTieneUrl(repo)) {
         <a class="bb-link" [href]="repo.pr!.url!" target="_blank">{{ repo.pr!.title }}</a>
-        } @else if (ramaResuelta(repo)) {
+        } @else if (sinCambios(repo)) {
+        <span class="bb-muted">Sin cambios</span>
+        } @else if (puedeCrearPr(repo)) {
         <button class="bb-link" (click)="crearPr.emit(repo.slug)">Crear PR</button>
         } @else {
         <span class="bb-muted">—</span>

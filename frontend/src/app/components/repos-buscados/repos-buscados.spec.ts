@@ -125,4 +125,45 @@ describe('ReposBuscadosComponent — columna PR y botón ver rama', () => {
     expect(anchor.getAttribute('href')).toBe('https://bitbucket.org/my_org_web_dev/bbit-trnxd-01/branch/main');
     expect(anchor.getAttribute('target')).toBe('_blank');
   });
+
+  it('sin cambios no ofrece crear PR y muestra el estado muted', async () => {
+    const { fixture, component } = await mount();
+    fixture.componentRef.setInput('origin', 'release/x');
+    fixture.componentRef.setInput('states', { r1: 'found' });
+    fixture.componentRef.setInput('repos', [
+      { slug: 'r1', name: 'R1', workspace: 'ws', default_branch: 'master', tags: [], no_changes: true },
+    ]);
+    component.onToggleProcesarSalida(true);
+    component.onVerRama();
+    fixture.detectChanges();
+
+    const row = { slug: 'r1', name: 'R1', workspace: 'ws', default_branch: 'master', tags: [], no_changes: true };
+    const el = fixture.nativeElement as HTMLElement;
+    expect(component.sinCambios(row)).toBe(true);
+    expect(component.puedeCrearPr(row)).toBe(false);
+    const btn = Array.from(el.querySelectorAll('button') as unknown as HTMLButtonElement[])
+      .find((b) => b.textContent?.trim() === 'Crear PR');
+    expect(btn).toBeUndefined();
+    expect(el.textContent).toContain('Sin cambios');
+  });
+
+  it('con rama resuelta y cambios ofrece crear PR', async () => {
+    const { fixture, component } = await mount();
+    fixture.componentRef.setInput('origin', 'release/x');
+    fixture.componentRef.setInput('states', { r1: 'found' });
+    fixture.componentRef.setInput('repos', [
+      { slug: 'r1', name: 'R1', workspace: 'ws', default_branch: 'master', tags: [], no_changes: false },
+    ]);
+    component.onToggleProcesarSalida(true);
+    component.onVerRama();
+    fixture.detectChanges();
+
+    const row = { slug: 'r1', name: 'R1', workspace: 'ws', default_branch: 'master', tags: [], no_changes: false };
+    expect(component.sinCambios(row)).toBe(false);
+    expect(component.puedeCrearPr(row)).toBe(true);
+    const el2 = fixture.nativeElement as HTMLElement;
+    const btn = Array.from(el2.querySelectorAll('button') as unknown as HTMLButtonElement[])
+      .find((b) => b.textContent?.trim() === 'Crear PR');
+    expect(btn).toBeTruthy();
+  });
 });
