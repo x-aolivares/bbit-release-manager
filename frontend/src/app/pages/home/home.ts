@@ -415,7 +415,7 @@ export class Home implements OnInit {
    * tabla actual (branch_url/commit/PR del primer target) y los tags de
    * flujo a reposCache para que la tabla renderice igual que con un flow.
    */
-  loadInitialRepositories(): void {
+  loadInitialRepositories(afterData?: (rows: ScanRepo[]) => void): void {
     this.reposLoading.set(true);
     this.tableLoaded.set(true);
     this.error.set(null);
@@ -447,7 +447,7 @@ export class Home implements OnInit {
           }>;
         }> = r?.body?.repositories ?? [];
 
-        this.repos.set(records.map((repo) => {
+        const mapped: ScanRepo[] = records.map((repo) => {
           const src = repo.sources?.[0];
           const tgt = src?.targets?.[0];
           const pr = tgt?.pr;
@@ -475,7 +475,10 @@ export class Home implements OnInit {
             ci_project: null,
             ci_vcs: null,
           };
-        }));
+        });
+
+        this.repos.set(mapped);
+        afterData?.(mapped);
 
         this.reposCache.set(records.map((repo) => {
           const src = repo.sources?.[0];
@@ -1413,6 +1416,27 @@ export class Home implements OnInit {
 
   onDestinationChange(value: string): void {
     this.destination = value;
+  }
+
+  /** "Buscar Repositorios": con rama origen corre el flow (scan completo); sin
+   * rama reconsulta la lista persistida y aplica los filtros de prefijos y
+   * blacklist en el cliente. */
+  onBuscarRepos(): void {
+    if (this.origin?.trim()) {
+      this.loadRepos();
+      return;
+    }
+    this.loadInitialRepositories((rows) => this.applyViewFilter(rows));
+  }
+
+  private applyViewFilter(rows: ScanRepo[]): void {
+    const prefs = this.projectPrefixes().map((p) => p.toLowerCase());
+    const block = this.blacklisted();
+    this.repos.set(rows.filter((r) => {
+      if (block.includes(r.slug.toLowerCase())) return false;
+      if (prefs.length && !prefs.some((p) => r.slug.toLowerCase().startsWith(p))) return false;
+      return true;
+    }));
   }
 
   onVerRama(): void {

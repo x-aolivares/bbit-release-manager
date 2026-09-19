@@ -55,7 +55,7 @@
         [blacklistInput]="blacklistInput"
         (blacklistInputChange)="blacklistInput = $event"
         [reposLoading]="reposLoading"
-        (buscarRepos)="loadRepos()"
+        (buscarRepos)="onBuscarRepos()"
         (addProjectPrefix)="addProjectPrefix()"
         (removeProjectPrefix)="removeProjectPrefix($event)"
         (addBlacklist)="addBlacklist()"

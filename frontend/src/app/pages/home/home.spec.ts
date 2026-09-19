@@ -345,6 +345,41 @@ describe('Home (BBIT-56: columnas de ambiente bajo demanda)', () => {
     expect(component.repos().map((r) => r.slug)).toEqual(['r1']);
   });
 
+  it('Buscar Repositorios sin rama: reconsulta /api/repositories y filtra por prefijos', async () => {
+    const { component, httpMock } = await mountHome();
+    component.projectPrefixes.set(['r1']);
+
+    component.onBuscarRepos();
+
+    const req = httpMock.expectOne('/api/repositories');
+    req.flush({
+      body: {
+        repositories: [
+          { slug: 'r1', tags: [], sources: [{ branch: 'release/x', url: '', head_commit: 'abc', tags: [], targets: [{ pr: { url: 'https://pr/1', title: 'PR1' } }] }] },
+          { slug: 'r2-order', tags: [], sources: [{ branch: 'release/x', url: '', head_commit: 'def', tags: [], targets: [] }] },
+        ],
+      },
+      status: { code: 'BBIT-000', message: 'ok' },
+      session: { active: true, identity: 'J', workspace: 'ws', repo_count: 2 },
+    });
+
+    // El filtro de prefijos se aplica tras la consulta (r1 matchea, r2-order no).
+    expect(component.repos().map((r) => r.slug)).toEqual(['r1']);
+  });
+
+  it('Buscar Repositorios con rama origen corre el flow vía /repos-quick', async () => {
+    const { component, httpMock } = await mountHome();
+    component.origin = 'release/x';
+    component.projectPrefixes.set(['r1']);
+
+    component.onBuscarRepos();
+
+    const req = httpMock.expectOne((r) => r.url === '/api/repos-quick');
+    expect(req.request.params.get('origin')).toBe('release/x');
+    req.flush({ repos: [], count: 0 });
+    expect(component.repos().length).toBe(0);
+  });
+
   it('primer load: /api/repositories decide el scan y mapea sources a la tabla actual', async () => {
     const { component, httpMock } = await mountHome();
 
