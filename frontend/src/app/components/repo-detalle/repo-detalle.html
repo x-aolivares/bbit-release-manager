@@ -15,6 +15,19 @@
 
   @if (repo(); as r) {
   <div class="bb-section">
+    <div class="bb-section-header">Enlaces importantes</div>
+    @if (enlaces().length > 0) {
+    <div class="bb-row-top bb-detalle-links">
+      @for (e of enlaces(); track e.label) {
+      <a class="bb-link" [href]="e.url" target="_blank" rel="noopener">{{ e.label }} ↗</a>
+      }
+    </div>
+    } @else {
+    <span class="bb-muted">Sin enlaces disponibles.</span>
+    }
+  </div>
+
+  <div class="bb-section">
     <div class="bb-section-header">Pull Request</div>
     @if (r.pr?.url) {
     <div class="bb-row-top">

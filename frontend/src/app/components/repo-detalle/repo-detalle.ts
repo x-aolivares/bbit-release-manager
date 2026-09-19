@@ -19,10 +19,20 @@ export interface DetalleRepo {
   slug: string;
   project?: string;
   workspace: string;
+  default_branch?: string;
   resolved_branch?: string;
+  commit?: string;
+  ci_project?: string | null;
+  ci_vcs?: string | null;
   pr: DetallePr | null;
   tags: Record<string, string>;
   params: DetalleParam[];
+}
+
+export interface DetalleEnlace {
+  label: string;
+  url: string;
+  external?: boolean;
 }
 
 /**
@@ -102,4 +112,34 @@ export class RepoDetalleComponent {
   awsBadge(p: DetalleParam): string {
     return p.aws_status === 'missing' ? 'missing' : 'ok';
   }
+
+  /** Enlaces importantes del repositorio: Bitbucket (repo/rama/commit) y CircleCI. */
+  readonly enlaces = computed<DetalleEnlace[]>(() => {
+    const r = this.repo();
+    if (!r) return [];
+    const ws = (r.workspace || '').trim();
+    const slug = r.slug;
+    const links: DetalleEnlace[] = [];
+    if (ws && slug) {
+      links.push({ label: 'Bitbucket — repo', url: `https://bitbucket.org/${ws}/${slug}/browse`, external: true });
+      const branch = (r.resolved_branch || '').trim();
+      if (branch) {
+        links.push({ label: `Bitbucket — rama ${branch}`, url: `https://bitbucket.org/${ws}/${slug}/branch/${encodeURIComponent(branch)}`, external: true });
+      }
+      const commit = (r.commit || '').trim();
+      if (commit) {
+        links.push({ label: `Bitbucket — commit ${commit.slice(0, 12)}`, url: `https://bitbucket.org/${ws}/${slug}/commits/${commit}`, external: true });
+      }
+    }
+    if (r.ci_project) {
+      const vcs = r.ci_vcs || 'bb';
+      const base = `https://app.circleci.com/pipelines/${vcs}/${ws}?useNewPipelines=true&project=${r.ci_project}`;
+      links.push({ label: 'CircleCI — pipelines', url: base, external: true });
+      const branch = (r.resolved_branch || '').trim();
+      if (branch) {
+        links.push({ label: `CircleCI — rama ${branch}`, url: `${base}&branch=${encodeURIComponent(branch)}`, external: true });
+      }
+    }
+    return links;
+  });
 }

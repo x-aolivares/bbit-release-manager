@@ -116,6 +116,8 @@ interface QuickRepo {
   resolved_branch?: string;
   branch_state?: string;
   tags?: string[];
+  ci_project?: string | null;
+  ci_vcs?: string | null;
 }
 
 @Component({
@@ -1651,12 +1653,17 @@ export class Home implements OnInit {
     const slug = this.detalleSlug();
     if (!slug) return null;
     const cache = this.reposCache().find((r) => r.slug === slug);
+    const item = this.repos().find((r) => r.slug === slug);
     const flow = this.detalleFlow();
     const params = this.detalleParams();
     return {
       slug,
-      workspace: cache?.workspace ?? '',
-      resolved_branch: cache?.resolved_branch,
+      workspace: item?.workspace || cache?.workspace || '',
+      default_branch: item?.default_branch || cache?.default_branch || '',
+      resolved_branch: item?.resolved_branch || cache?.resolved_branch,
+      commit: item?.commit || '',
+      ci_project: item?.ci_project ?? cache?.ci_project ?? null,
+      ci_vcs: item?.ci_vcs ?? cache?.ci_vcs ?? null,
       pr: flow?.pr ?? null,
       tags: (flow?.matchTag ?? {}) as Record<string, string>,
       params,
