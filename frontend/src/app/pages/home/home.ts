@@ -437,6 +437,8 @@ export class Home implements OnInit {
         }
         const records: Array<{
           slug: string;
+          workspace?: string;
+          default_branch?: string;
           tags?: string[];
           sources?: Array<{
             branch?: string;
@@ -454,8 +456,8 @@ export class Home implements OnInit {
           return {
             slug: repo.slug,
             name: repo.slug,
-            workspace: '',
-            default_branch: '',
+            workspace: repo.workspace ?? '',
+            default_branch: repo.default_branch ?? '',
             branch_url: src?.url ?? '',
             commit: src?.head_commit ?? '',
             branch_state: src ? 'found' : undefined,
@@ -485,8 +487,8 @@ export class Home implements OnInit {
           return {
             slug: repo.slug,
             name: repo.slug,
-            workspace: '',
-            default_branch: '',
+            workspace: repo.workspace ?? '',
+            default_branch: repo.default_branch ?? '',
             tags: repo.tags ?? [],
             resolved_branch: src?.branch,
             branch_state: src ? 'found' : undefined,
@@ -496,8 +498,8 @@ export class Home implements OnInit {
         this.projects.set(records.map((repo) => ({
           slug: repo.slug,
           name: repo.slug,
-          workspace: '',
-          default_branch: '',
+          workspace: repo.workspace ?? '',
+          default_branch: repo.default_branch ?? '',
         })));
 
         this.forceCache.set(false);

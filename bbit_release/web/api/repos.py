@@ -1029,6 +1029,10 @@ def _persist_repo_source(cache, workspace, slug, origin, destination, item, pr_r
     ``ssm`` (params del destino, los puebla la fase diff). 
     """
     commit = (item or {}).get("commit") or ""
+    cache.upsert_repository(workspace, slug, url=repo_url, details={
+        "workspace": workspace,
+        "default_branch": (item.get("default_branch") or ""),
+    })
     if not commit:
         return
     deploy_tags = [
@@ -1254,6 +1258,7 @@ def _repo_scan(client, ci, repo, origin, destination, clean, ctx=None, on_field=
         "slug": repo.slug,
         "name": repo.name,
         "workspace": repo.workspace,
+        "default_branch": getattr(repo, "default_branch", "") or "",
         "branch_state": "found",
         "resolved_branch": resolved,
         "branch_url": client.branch_url(repo.slug, origin),
@@ -1280,6 +1285,7 @@ def _failed_repo_item(repo, client, origin, exc):
         "slug": repo.slug,
         "name": repo.name,
         "workspace": repo.workspace,
+        "default_branch": getattr(repo, "default_branch", "") or "",
         "branch_url": client.branch_url(repo.slug, origin),
         "commit": "",
         "no_changes": False,
@@ -1492,6 +1498,8 @@ def _repositories_payload(cache, workspace: str) -> dict:
         details = row["r_details"] or {}
         repositories.append({
             "slug": row["r_slug"],
+            "workspace": row["r_workspace"],
+            "default_branch": details.get("default_branch") or "",
             "tags": details.get("tags") or [],
             "sources": details.get("sources") or [],
         })
@@ -1559,7 +1567,7 @@ def _rescan_workspace(client, ci, cache, workspace: str, rows: list[dict]) -> No
                     slug=row["r_slug"],
                     name=row["r_slug"],
                     workspace=row["r_workspace"],
-                    default_branch="",
+                    default_branch=details.get("default_branch") or "",
                     resolved_branch="",
                 )
                 jobs.append((job, origin, dest))

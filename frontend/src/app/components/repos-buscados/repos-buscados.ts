@@ -247,14 +247,27 @@ export class ReposBuscadosComponent {
     return this.states()[repo.slug] === 'found';
   }
 
-  /** URL del repositorio derivada de branch_url (quita el sufijo de la rama). */
+  /**
+   * URL del enlace de la columna de repositorio:
+   * - Con "Procesar salida" + "ver rama": la rama origen (`branch_url`).
+   * - Sin procesar salida: la rama default del repo (main/master según
+   *   Bitbucket), construida con workspace + default_branch.
+   * - Sin datos de rama: cae al root del repo quitando el sufijo de `branch_url`.
+   */
   repoUrl(repo: ReposBuscarRow): string {
-    const u = (repo.branch_url || '').trim();
-    if (!u) return '';
-    for (const marker of ['/branch/', '/src/', '/commits/', '/pull-requests/']) {
-      const i = u.indexOf(marker);
-      if (i !== -1) return u.slice(0, i);
+    const branchUrl = (repo.branch_url || '').trim();
+    if (this.mostrarPr() && branchUrl) return branchUrl;
+    const ws = (repo.workspace || '').trim();
+    const def = (repo.default_branch || '').trim();
+    if (ws && repo.slug && def) {
+      return `https://bitbucket.org/${ws}/${repo.slug}/branch/${def}`;
     }
-    return u;
+    if (branchUrl) {
+      for (const marker of ['/branch/', '/src/', '/commits/', '/pull-requests/']) {
+        const i = branchUrl.indexOf(marker);
+        if (i !== -1) return branchUrl.slice(0, i);
+      }
+    }
+    return '';
   }
 }

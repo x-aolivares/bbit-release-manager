@@ -72,29 +72,57 @@ describe('ReposBuscadosComponent — columna PR y botón ver rama', () => {
     expect(component.mostrarPr()).toBe(false);
   });
 
-  it('repoUrl deriva la URL del repo quitando el sufijo de la rama', () => {
+  it('repoUrl sin procesar salida apunta a la rama default (workspace + default_branch)', () => {
+    const component = TestBed.createComponent(ReposBuscadosComponent).componentInstance;
+    const row: ReposBuscarRow = {
+      slug: 'bbit-trnxd-01',
+      name: '',
+      workspace: 'my_org_web_dev',
+      default_branch: 'master',
+      tags: [],
+      branch_url: 'https://bitbucket.org/my_org_web_dev/bbit-trnxd-01/branch/release/REP-325073',
+    };
+    expect(component.repoUrl(row)).toBe('https://bitbucket.org/my_org_web_dev/bbit-trnxd-01/branch/master');
+  });
+
+  it('repoUrl con procesar salida + ver rama apunta a la rama origen', async () => {
+    const { fixture, component } = await mount();
+    fixture.componentRef.setInput('origin', 'release/REP-325073');
+    component.onToggleProcesarSalida(true);
+    component.onVerRama();
+
+    const row: ReposBuscarRow = {
+      slug: 'bbit-trnxd-01',
+      name: '',
+      workspace: 'my_org_web_dev',
+      default_branch: 'master',
+      tags: [],
+      branch_url: 'https://bitbucket.org/my_org_web_dev/bbit-trnxd-01/branch/release/REP-325073',
+    };
+    expect(component.mostrarPr()).toBe(true);
+    expect(component.repoUrl(row)).toBe('https://bitbucket.org/my_org_web_dev/bbit-trnxd-01/branch/release/REP-325073');
+  });
+
+  it('repoUrl sin workspace/default_branch cae al root del repo', () => {
     const component = TestBed.createComponent(ReposBuscadosComponent).componentInstance;
     expect(
-      component.repoUrl({ slug: 'r1', name: 'R1', workspace: 'ws', default_branch: 'master', tags: [], branch_url: 'https://bitbucket.org/ws/r1/branch/release/x' }),
+      component.repoUrl({ slug: 'r1', name: 'R1', workspace: 'ws', default_branch: '', tags: [], branch_url: 'https://bitbucket.org/ws/r1/src/release/x' }),
     ).toBe('https://bitbucket.org/ws/r1');
     expect(
-      component.repoUrl({ slug: 'r1', name: 'R1', workspace: 'ws', default_branch: 'master', tags: [], branch_url: 'https://bitbucket.org/ws/r1/src/release/x' }),
-    ).toBe('https://bitbucket.org/ws/r1');
-    expect(
-      component.repoUrl({ slug: 'r1', name: 'R1', workspace: 'ws', default_branch: 'master', tags: [] }),
+      component.repoUrl({ slug: 'r1', name: 'R1', workspace: '', default_branch: '', tags: [] }),
     ).toBe('');
   });
 
-  it('el slug se renderiza como link al repo cuando hay branch_url', async () => {
+  it('el slug se renderiza como link a la rama default cuando no hay procesar salida', async () => {
     const { fixture } = await mount();
     fixture.componentRef.setInput('repos', [
-      { slug: 'r1', name: 'R1', workspace: 'ws', default_branch: 'master', tags: [], branch_url: 'https://bitbucket.org/ws/r1/branch/release/x' },
+      { slug: 'bbit-trnxd-01', name: '', workspace: 'my_org_web_dev', default_branch: 'main', tags: [], branch_url: 'https://bitbucket.org/my_org_web_dev/bbit-trnxd-01/branch/release/x' },
     ]);
     fixture.detectChanges();
 
     const anchor = fixture.nativeElement.querySelector('a.bb-link');
     expect(anchor).toBeTruthy();
-    expect(anchor.getAttribute('href')).toBe('https://bitbucket.org/ws/r1');
+    expect(anchor.getAttribute('href')).toBe('https://bitbucket.org/my_org_web_dev/bbit-trnxd-01/branch/main');
     expect(anchor.getAttribute('target')).toBe('_blank');
   });
 });
