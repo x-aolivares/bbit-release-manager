@@ -4201,3 +4201,15 @@ def test_flow_tags_requiere_session(monkeypatch):
     client.post("/api/session", json={"workspace": "ws", "token": "tok"})
     resp = client.patch("/api/flow-tags", params={"repos": "", "tags": "fargate"})
     assert resp.status_code == 400
+
+
+def test_flow_tags_autocrea_sesion_con_credenciales_guardadas(monkeypatch):
+    """BBIT-66: sin sesión activa, /api/flow-tags reconstruye la sesión con las
+    credenciales de Config en vez de devolver 401 (gate de _require_session)."""
+    monkeypatch.setattr(FakeConfig, "workspace", "ws")
+    monkeypatch.setattr(FakeConfig, "bitbucket_token", "tok")
+    monkeypatch.setattr(repos_mod, "create_session", _stub_create_session)
+
+    resp = client.patch("/api/flow-tags", params={"repos": "", "tags": "fargate"})
+    assert resp.status_code == 400
+    monkeypatch.undo()

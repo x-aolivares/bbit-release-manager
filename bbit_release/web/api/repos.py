@@ -288,6 +288,20 @@ def _read_files_params(
 def _require_session():
     sid = active_session_id()
     if not sid:
+        # BBIT-66: sin sesión activa en memoria pero con credenciales guardadas
+        # en Config, reconstruye la sesión server-side (mismo criterio que el
+        # orquestador en su path stale). Así flow/scan/ssm funcionan tras un
+        # reinicio del backend SIN obligar al front a llamar /session/reuse.
+        cfg = Config()
+        ws = cfg.workspace
+        tok = cfg.bitbucket_token
+        if ws and tok:
+            try:
+                return create_session(ws, tok, client_id=cfg.client_id)
+            except (bb.BitbucketAuthError, bb.BitbucketError) as exc:
+                raise HTTPException(
+                    401, f"No se pudieron validar las credenciales guardadas: {exc}"
+                ) from exc
         raise HTTPException(401, "No hay sesión activa. Conectá desde la web.")
     data = get_session(sid)
     if not data:
