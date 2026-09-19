@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bbit-release-manager"
-version = "0.75.3"
+version = "0.75.4"
 description = "BBit Release Manager - CLI y web para revisar ramas y parametros SSM contra Bitbucket"
 requires-python = ">=3.12"
 dynamic = ["dependencies", "optional-dependencies"]
