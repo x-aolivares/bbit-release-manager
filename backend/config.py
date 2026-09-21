@@ -4,10 +4,16 @@ La concurrencia (multihilos / multiproceso) y la persistencia se controlan
 desde variables de entorno para que el deploy pueda ajustarlas sin tocar
 codigo:
 
-- ``BBIT_DB_PATH``: ruta del archivo sqlite (default ``data/bbit.db``).
+- ``BBIT_DB_DIR``: directorio base de los schemas sqlite (default ``data/``).
+- ``BBIT_DB_<SCHEMA>_PATH``: override de la ruta de un schema puntual
+  (ej: ``BBIT_DB_PROFILE_PATH``).
 - ``BBIT_MAX_WORKERS``: worker count para tareas paralelas.
 - ``BBIT_WORKER_MODE``: ``thread`` (ThreadPoolExecutor) o ``process``
   (ProcessPoolExecutor).
+
+Persistencia por dominios: cada "schema" es un archivo ``.db`` propio
+(``bbit_{schema}.db``) para que los locks de sqlite sean independientes
+por dominio.
 """
 
 from __future__ import annotations
@@ -15,20 +21,37 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
-_DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "bbit.db"
+_DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+
+#: Dominios de persistencia: un archivo ``.db`` por dominio.
+DB_SCHEMAS: tuple[str, ...] = ("record", "profile", "transaction", "authentication")
 
 
 @dataclass(frozen=True, slots=True)
 class Settings:
-    db_path: Path = _DEFAULT_DB_PATH
+    db_dir: Path = _DEFAULT_DATA_DIR
     max_workers: int = 4
     worker_mode: str = "thread"
 
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
-            db_path=Path(os.environ.get("BBIT_DB_PATH", str(_DEFAULT_DB_PATH))),
+            db_dir=Path(os.environ.get("BBIT_DB_DIR", str(_DEFAULT_DATA_DIR))),
             max_workers=int(os.environ.get("BBIT_MAX_WORKERS", "4")),
             worker_mode=os.environ.get("BBIT_WORKER_MODE", "thread").strip().lower(),
         )
+
+    @property
+    def schemas(self) -> Mapping[str, Path]:
+        """Ruta de cada schema de persistencia (override por env)."""
+        return {
+            schema: Path(
+                os.environ.get(
+                    f"BBIT_DB_{schema.upper()}_PATH",
+                    str(self.db_dir / f"bbit_{schema}.db"),
+                )
+            )
+            for schema in DB_SCHEMAS
+        }

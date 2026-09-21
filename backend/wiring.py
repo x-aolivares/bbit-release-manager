@@ -7,8 +7,6 @@ tests reemplazar piezas (ej: sqlite en tmp) sin levantar la app.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from .adapter.repositories.records_repository import RecordsRepository
 from .adapter.services.execution_pool_service import ExecutionPoolService
 from .commands.save_record_command import SaveRecordCommand
@@ -19,11 +17,11 @@ from .logics.record_logic import RecordLogic
 def build_dependencies(settings: Settings | None = None) -> dict:
     """Construye y devuelve las piezas del monolito.
 
-    El repositorio queda memoizado en el dict para que todos los endpoints
-    compartan el mismo archivo sqlite (y el mismo pool de ejecucion).
+    Cada repositorio queda asociado a su schema sqlite (un archivo ``.db``
+    por dominio) y se memoiza en el dict para compartir el pool de ejecucion.
     """
     cfg = settings or Settings.from_env()
-    repository = RecordsRepository(Path(cfg.db_path))
+    repository = RecordsRepository(cfg.schemas["record"])
     repository.init()
 
     pool = ExecutionPoolService(cfg)

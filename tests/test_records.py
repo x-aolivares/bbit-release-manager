@@ -11,11 +11,8 @@ from backend.commands.result import Failure
 from backend.config import Settings
 from backend.handler import create_app
 
-DB_PATH = Path("data/test.db")
-
-
 def _client(tmp_path: Path) -> TestClient:
-    settings = Settings(db_path=tmp_path / "test.db", max_workers=2, worker_mode="thread")
+    settings = Settings(db_dir=tmp_path, max_workers=2, worker_mode="thread")
     return TestClient(create_app(settings))
 
 
@@ -36,7 +33,7 @@ def test_create_record_persists_and_returns_envelope(tmp_path: Path) -> None:
 def test_record_row_exists_in_sqlite(tmp_path: Path) -> None:
     _client(tmp_path).post("/api/records", json={"body": {"name": "prueba"}})
 
-    conn = sqlite3.connect(tmp_path / "test.db")
+    conn = sqlite3.connect(tmp_path / "bbit_record.db")
     try:
         row = conn.execute(
             "SELECT id, name FROM records WHERE name = ?", ("prueba",)

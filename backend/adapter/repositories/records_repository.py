@@ -25,7 +25,7 @@ class RecordsRepository:
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._db_path)
+        conn = sqlite3.connect(self._db_path, timeout=5.0)
         conn.row_factory = sqlite3.Row
         try:
             yield conn
@@ -35,6 +35,8 @@ class RecordsRepository:
 
     def init(self) -> None:
         with self._connect() as conn:
+            # WAL: lectores y escritor conviven; el lock real queda por archivo.
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS records (
