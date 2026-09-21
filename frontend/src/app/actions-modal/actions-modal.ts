@@ -6,7 +6,6 @@ type ActionsView = 'menu' | 'tags';
 @Component({
   imports: [],
   selector: 'app-actions-modal',
-  styleUrl: './actions-modal.css',
   templateUrl: './actions-modal.html',
 })
 export class ActionsModal {

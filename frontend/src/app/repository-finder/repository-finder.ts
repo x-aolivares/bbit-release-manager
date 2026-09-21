@@ -4,7 +4,6 @@ import { ReleaseStore } from '../shared/release-store';
 @Component({
   imports: [],
   selector: 'app-repository-finder',
-  styleUrl: './repository-finder.css',
   templateUrl: './repository-finder.html',
 })
 export class RepositoryFinder {

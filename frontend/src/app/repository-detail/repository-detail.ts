@@ -5,7 +5,6 @@ import { APP_CONFIG } from '../shared/app-config';
 @Component({
   imports: [],
   selector: 'app-repository-detail',
-  styleUrl: './repository-detail.css',
   templateUrl: './repository-detail.html',
 })
 export class RepositoryDetail {

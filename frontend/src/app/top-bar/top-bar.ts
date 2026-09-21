@@ -4,7 +4,6 @@ import { APP_CONFIG } from '../shared/app-config';
 @Component({
   imports: [],
   selector: 'app-top-bar',
-  styleUrl: './top-bar.css',
   templateUrl: './top-bar.html',
 })
 export class TopBar implements OnInit {

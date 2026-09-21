@@ -7,8 +7,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from bbit_release.config import Settings
-from bbit_release.handler import create_app
+from backend.config import Settings
+from backend.handler import create_app
 
 DB_PATH = Path("data/test.db")
 
