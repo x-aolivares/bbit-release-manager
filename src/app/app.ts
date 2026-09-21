@@ -1,9 +1,10 @@
 import { Component, signal } from '@angular/core';
-import { RouterOutlet } from '@angular/router';
-import { Navbar } from './navbar/navbar';
+import { TopBar } from './top-bar/top-bar';
+import { RepositoryFinder } from './repository-finder/repository-finder';
+import { TableOfFilteredRepositories } from './table-of-filtered-repositories/table-of-filtered-repositories';
 
 @Component({
-  imports: [Navbar],
+  imports: [RepositoryFinder, TopBar, TableOfFilteredRepositories],
   selector: 'app-root',
   styleUrl: './app.css',
   templateUrl: './app.html',
