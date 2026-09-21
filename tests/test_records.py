@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from backend.commands.result import Failure
 from backend.config import Settings
 from backend.handler import create_app
 
@@ -18,19 +19,21 @@ def _client(tmp_path: Path) -> TestClient:
     return TestClient(create_app(settings))
 
 
-def test_create_record_persists_and_returns_dto(tmp_path: Path) -> None:
+def test_create_record_persists_and_returns_envelope(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    response = client.post("/api/records", json={"name": "x"})
+    response = client.post("/api/records", json={"body": {"name": "x"}})
 
     assert response.status_code == 201
     data = response.json()
-    assert data["name"] == "x"
-    assert data["id"] == 1
-    assert data["created_at"]
+    assert data["body"]["name"] == "x"
+    assert data["body"]["id"] == 1
+    assert data["body"]["created_at"]
+    assert data["status"]["success"] is True
+    assert data["status"]["code"] == 201
 
 
 def test_record_row_exists_in_sqlite(tmp_path: Path) -> None:
-    _client(tmp_path).post("/api/records", json={"name": "prueba"})
+    _client(tmp_path).post("/api/records", json={"body": {"name": "prueba"}})
 
     conn = sqlite3.connect(tmp_path / "test.db")
     try:
@@ -45,7 +48,31 @@ def test_record_row_exists_in_sqlite(tmp_path: Path) -> None:
     assert row[1] == "prueba"
 
 
-def test_validation_fails_without_name(tmp_path: Path) -> None:
+def test_validation_fails_without_body(tmp_path: Path) -> None:
     client = _client(tmp_path)
     response = client.post("/api/records", json={})
     assert response.status_code == 422
+
+
+def test_validation_fails_with_empty_inner_body(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    response = client.post("/api/records", json={"body": {}})
+    assert response.status_code == 422
+
+
+def test_domain_failure_returns_error_envelope(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    class _FailingCommand:
+        def run(self, payload_body: object) -> Failure:
+            return Failure("boom")
+
+    client.app.state.container["save_record_command"] = _FailingCommand()
+
+    response = client.post("/api/records", json={"body": {"name": "x"}})
+    assert response.status_code == 500
+    data = response.json()
+    assert data["body"] is None
+    assert data["status"]["success"] is False
+    assert data["status"]["code"] == 500
+    assert data["status"]["message"] == "boom"
