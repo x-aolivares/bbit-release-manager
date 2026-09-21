@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
-from .commands.save_record_command import SaveRecordCommand
+from backend.src.commands import SaveRecordCommand
 
 
 def get_container(request: Request) -> dict:

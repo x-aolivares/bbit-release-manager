@@ -16,9 +16,9 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from .config import Settings
-from .controllers import router
-from .wiring import build_dependencies
+from backend.library.config import Settings
+from backend.src.controllers import router
+from backend.library.wiring import build_dependencies
 
 
 def _setup_logging() -> None:

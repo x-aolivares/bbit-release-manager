@@ -7,8 +7,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from backend.commands.result import Failure
-from backend.config import Settings
+from backend.library.patterns import Failure
+from backend.library.config import Settings
 from backend.handler import create_app
 
 def _client(tmp_path: Path) -> TestClient:

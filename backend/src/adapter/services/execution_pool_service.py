@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 
-from ...config import Settings
+from backend.library.config import Settings
 
 
 class ExecutionPoolService:

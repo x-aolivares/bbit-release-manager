@@ -7,11 +7,10 @@ tests reemplazar piezas (ej: sqlite en tmp) sin levantar la app.
 
 from __future__ import annotations
 
-from .adapter.repositories.records_repository import RecordsRepository
-from .adapter.services.execution_pool_service import ExecutionPoolService
-from .commands.save_record_command import SaveRecordCommand
+from backend.src.adapter import RecordsRepository, ExecutionPoolService, QueryService
+from backend.src.commands import SaveRecordCommand
+from backend.src.logics import RecordLogic
 from .config import Settings
-from .logics.record_logic import RecordLogic
 
 
 def build_dependencies(settings: Settings | None = None) -> dict:
@@ -21,16 +20,18 @@ def build_dependencies(settings: Settings | None = None) -> dict:
     por dominio) y se memoiza en el dict para compartir el pool de ejecucion.
     """
     cfg = settings or Settings.from_env()
-    repository = RecordsRepository(cfg.schemas["record"])
+    repository = RecordsRepository(cfg.schemas["bbit_record"])
     repository.init()
 
     pool = ExecutionPoolService(cfg)
+    query_service = QueryService(cfg)
     logic = RecordLogic(repository)
 
     return {
         "settings": cfg,
         "repository": repository,
         "pool": pool,
+        "query_service": query_service,
         "logic": logic,
         "save_record_command": SaveRecordCommand(logic, pool),
     }

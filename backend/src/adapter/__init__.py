@@ -5,7 +5,7 @@
 - ``entities``: clases que mapean filas de DB a objetos Python.
 """
 
-from .services import ExecutionPoolService
+from .services import ExecutionPoolService, QueryService
 from .repositories import RecordsRepository
 
-__all__ = ["ExecutionPoolService", "RecordsRepository"]
+__all__ = ["ExecutionPoolService", "QueryService", "RecordsRepository"]

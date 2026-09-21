@@ -11,7 +11,7 @@ from typing import Generic, TypeVar
 
 from pydantic import BaseModel
 
-from ...enums import BCStatusEnum
+from backend.src.enums import BCStatusEnum
 
 T = TypeVar("T")
 

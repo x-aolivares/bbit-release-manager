@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from backend.enums import BCStatusEnum
+from backend.src.enums import BCStatusEnum
 
 
 def test_ok_status_attributes() -> None:

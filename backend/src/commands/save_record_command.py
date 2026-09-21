@@ -11,8 +11,8 @@ from concurrent.futures import wait
 from typing import TYPE_CHECKING
 
 from ..logics.record_logic import RecordLogic
-from ..models.record_model import RecordCreate, RecordOut
-from .result import Failure, ResultSet, Success
+from backend.src.models import RecordCreate, RecordOut
+from backend.library.patterns.result_pattern import Failure, ResultSet, Success
 
 if TYPE_CHECKING:
     from ..adapter.services.execution_pool_service import ExecutionPoolService

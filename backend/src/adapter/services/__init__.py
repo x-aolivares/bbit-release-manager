@@ -4,5 +4,6 @@ Nomenclatura: ``{name}_service.py``.
 """
 
 from .execution_pool_service import ExecutionPoolService
+from .query_service import QueryService
 
-__all__ = ["ExecutionPoolService"]
+__all__ = ["ExecutionPoolService", "QueryService"]

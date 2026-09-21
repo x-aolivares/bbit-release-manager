@@ -11,9 +11,9 @@ codigo:
 - ``BBIT_WORKER_MODE``: ``thread`` (ThreadPoolExecutor) o ``process``
   (ProcessPoolExecutor).
 
-Persistencia por dominios: cada "schema" es un archivo ``.db`` propio
-(``bbit_{schema}.db``) para que los locks de sqlite sean independientes
-por dominio.
+Persistencia por dominios: cada schema es un archivo ``.db`` con el MISMO
+nombre del schema (``bbit_record.db``), para que los locks de sqlite sean
+independientes por dominio y la notacion ``schema.tabla`` sea directa.
 """
 
 from __future__ import annotations
@@ -25,8 +25,18 @@ from typing import Mapping
 
 _DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
-#: Dominios de persistencia: un archivo ``.db`` por dominio.
-DB_SCHEMAS: tuple[str, ...] = ("record", "profile", "transaction", "authentication")
+#: Dominios de persistencia: el schema ES el nombre del archivo (``bbit_x.db``).
+DB_SCHEMAS: tuple[str, ...] = (
+    "bbit_record",
+    "bbit_profile",
+    "bbit_transaction",
+    "bbit_authentication",
+)
+
+
+def _schema_env(schema: str) -> str:
+    """Env var de override para un schema (``bbit_record`` -> ``BBIT_DB_RECORD_PATH``)."""
+    return f"BBIT_DB_{schema.removeprefix('bbit_').upper()}_PATH"
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,13 +55,12 @@ class Settings:
 
     @property
     def schemas(self) -> Mapping[str, Path]:
-        """Ruta de cada schema de persistencia (override por env)."""
+        """Ruta de cada schema de persistencia (override por env).
+
+        El alias sqlite del schema coincide con el nombre del archivo:
+        ``bbit_transaction`` vive en ``data/bbit_transaction.db``.
+        """
         return {
-            schema: Path(
-                os.environ.get(
-                    f"BBIT_DB_{schema.upper()}_PATH",
-                    str(self.db_dir / f"bbit_{schema}.db"),
-                )
-            )
+            schema: Path(os.environ.get(_schema_env(schema), str(self.db_dir / f"{schema}.db")))
             for schema in DB_SCHEMAS
         }

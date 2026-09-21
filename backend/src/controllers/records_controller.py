@@ -10,16 +10,16 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from starlette.responses import JSONResponse
 
-from ..commands.result import ResultSet
+from backend.library.patterns import ResultSet
 from ..commands.save_record_command import SaveRecordCommand
-from ..deps import get_save_record_command
+from backend.library.deps import get_save_record_command
 from ..enums import BCStatusEnum
-from ..models.commons.envelope_model import (
+from backend.library.models.envelope_model import (
     BackendRequestEntity,
     BackendResponseEntity,
     StatusDTO,
 )
-from ..models.record_model import RecordCreate, RecordOut
+from backend.src.models import RecordCreate, RecordOut
 
 router = APIRouter(prefix="/api", tags=["records"])
 
