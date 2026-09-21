@@ -18,7 +18,7 @@ from typing import Iterator
 from ..entities.records_entity import RecordsEntity
 
 
-class RecordsRepository:
+class RepositoryRepository:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
 
@@ -39,25 +39,25 @@ class RecordsRepository:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS records (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name        TEXT    NOT NULL,
-                    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+                CREATE TABLE IF NOT EXISTS repositories (
+                    r_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    r_name        TEXT    NOT NULL,
+                    r_created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
                 )
                 """
             )
 
     def insert_record(self, name: str) -> int:
         with self._connect() as conn:
-            cur = conn.execute("INSERT INTO records (name) VALUES (?)", (name,))
+            cur = conn.execute("INSERT INTO repositories (r_name) VALUES (?)", (name,))
             return int(cur.lastrowid)
 
-    def get_record(self, record_id: int) -> RecordsEntity | None:
+    def get_record(self, record_id: int) -> RepositoryRepository | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, name, created_at FROM records WHERE id = ?",
+                "SELECT r_id, r_name, r_created_at FROM r_repositories r WHERE r_id = ?",
                 (record_id,),
             ).fetchone()
         if row is None:
             return None
-        return RecordsEntity.from_row(row)
+        return RepositoryRepository(row)
