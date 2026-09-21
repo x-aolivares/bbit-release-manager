@@ -1,12 +1,73 @@
-<div class="bb-modal-overlay" id="actionsModal" style="display:none;">
+<div class="bb-modal-overlay" id="actionsModal" [style.display]="store.actionsModalOpen() ? 'flex' : 'none'"
+    (click)="onOverlayClick($event)">
     <div class="bb-modal">
         <div class="bb-modal-head">
             <span class="bb-modal-title">Acciones masivas</span>
-            <button class="bb-modal-x" id="modalClose" title="Cerrar">✕</button>
+            <button class="bb-modal-x" id="modalClose" title="Cerrar" (click)="close()">✕</button>
         </div>
         <div class="bb-modal-body">
-            <div class="muted">Repos seleccionados: <b id="modalCount" style="color:var(--bb-text);">0</b></div>
-            <div class="bb-modal-body" id="modalOptions" style="padding:0;"></div>
+            @if (view() === 'menu') {
+            <div class="muted">Repos seleccionados: <b id="modalCount" style="color:var(--bb-text);">{{ selectedRepos().length }}</b></div>
+            <div class="bb-modal-body" id="modalOptions" style="padding:0;">
+                <div class="bb-modal-option" (click)="onMassPr()">
+                    <div>
+                        <div class="bb-option-title">Crear PRs</div>
+                        <div class="bb-option-desc">Para los repos con rama resuelta, PR de la rama origen → destino.
+                            @if (hintMar()) { — <b>{{ hintMar() }}</b>}
+                        </div>
+                    </div>
+                    <div class="bb-option-count">{{ countAptos() }}</div>
+                </div>
+                <div class="bb-modal-option" (click)="onMassTagsDeploy()">
+                    <div>
+                        <div class="bb-option-title">Crear tags Circle (deploy)</div>
+                        <div class="bb-option-desc">Genera el tag de deploy (uat/stgp) para los repos seleccionados.</div>
+                    </div>
+                    <div class="bb-option-count">{{ countAptos() }}</div>
+                </div>
+                <div class="bb-modal-option" (click)="openTagsView()">
+                    <div>
+                        <div class="bb-option-title">Crear tag de repo (flujo)</div>
+                        <div class="bb-option-desc">Etiqueta repos con su flujo: fargate, step-function, workflow, batch.</div>
+                    </div>
+                    <div class="bb-option-count">{{ countTags() }}</div>
+                </div>
+                <div class="muted" style="padding:2px 4px;">SSM (params por región) — más adelante.</div>
+            </div>
+            } @else {
+            <div class="bb-section-header">Crear tag de repo (flujo)</div>
+            <div class="bb-row-top">
+                <div class="bb-field">
+                    <label>Tags de flujo</label>
+                    <div class="bb-chips" id="tagFlowChips">
+                        @for (entry of objectEntries(tagChecks()); track entry[0]) {
+                        <div class="bb-tag-chip" [attr.data-tag]="entry[0]">
+                            <input type="checkbox" [checked]="entry[1]" (change)="toggleTagCheck(entry[0])" />
+                            {{ entry[0] }}
+                        </div>
+                        } @empty {
+                        <span class="muted">Ningún repo tiene tags de flujo aún.</span>
+                        }
+                    </div>
+                </div>
+            </div>
+            <div class="bb-row-top">
+                <div class="bb-field" style="flex:none;">
+                    <label for="newTagInput">Nuevo tag</label>
+                    <div class="bb-row-top" style="gap:6px;">
+                        <input class="bb-input" id="newTagInput" placeholder="ej: lambdas" style="max-width:200px;font-size:12px;"
+                            [value]="newTag()" (input)="newTag.set($any($event.target).value)" (keydown.enter)="addNewTag()" />
+                        <button class="bb-btn-secondary" style="font-size:12px;padding:4px 10px;" (click)="addNewTag()">+ Agregar</button>
+                    </div>
+                </div>
+            </div>
+            <div id="newTagError" style="color:var(--bb-danger);font-size:12px;">{{ newTagError() }}</div>
+            <div class="bb-row-top" style="gap:8px;">
+                <button class="bb-btn-primary" (click)="applyTags()">Aplicar</button>
+                <button class="bb-btn-danger" (click)="clearTags()">Limpiar tags</button>
+                <button class="bb-btn-secondary" (click)="view.set('menu')">‹ Volver</button>
+            </div>
+            }
         </div>
     </div>
 </div>

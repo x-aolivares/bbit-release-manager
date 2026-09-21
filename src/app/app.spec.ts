@@ -1,5 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { App } from './app';
+import { ReleaseStore } from './shared/release-store';
 
 describe('App', () => {
   beforeEach(async () => {
@@ -22,8 +23,26 @@ describe('App', () => {
     expect(compiled.querySelector('app-top-bar')).toBeTruthy();
     expect(compiled.querySelector('app-repository-finder')).toBeTruthy();
     expect(compiled.querySelector('app-table-of-filtered-repositories')).toBeTruthy();
-    expect(compiled.querySelector('app-repository-detail')).toBeTruthy();
     expect(compiled.querySelector('app-actions-modal')).toBeTruthy();
     expect(compiled.querySelector('app-create-pr-modal')).toBeTruthy();
+  });
+
+  it('should toggle between list and detail views', async () => {
+    const fixture = TestBed.createComponent(App);
+    const store = TestBed.inject(ReleaseStore);
+    await fixture.whenStable();
+    const compiled = fixture.nativeElement as HTMLElement;
+
+    expect(compiled.querySelector('app-repository-detail')).toBeNull();
+
+    store.detailSlug.set('bbit-trnxd-orders-api');
+    fixture.detectChanges();
+    expect(compiled.querySelector('app-repository-detail')).toBeTruthy();
+    expect(compiled.querySelector('app-repository-finder')).toBeNull();
+
+    store.detailSlug.set(null);
+    fixture.detectChanges();
+    expect(compiled.querySelector('app-repository-detail')).toBeNull();
+    expect(compiled.querySelector('app-table-of-filtered-repositories')).toBeTruthy();
   });
 });

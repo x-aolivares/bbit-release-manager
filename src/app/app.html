@@ -1,8 +1,12 @@
 <app-top-bar></app-top-bar>
+@if (!store.detailSlug()) {
 <div class="page">
     <app-repository-finder></app-repository-finder>
     <app-table-of-filtered-repositories></app-table-of-filtered-repositories>
-    <app-repository-detail></app-repository-detail>
 </div>
+}
+@if (store.detailSlug()) {
+<app-repository-detail></app-repository-detail>
+}
 <app-actions-modal></app-actions-modal>
 <app-create-pr-modal></app-create-pr-modal>

@@ -3,14 +3,30 @@
     <div class="bb-row-top">
         <div class="bb-field">
             <label>Prefijos de proyecto</label>
-            <div class="bb-chips" id="prefixChips"></div>
+            <div class="bb-chips" id="prefixChips">
+                @for (prefix of store.prefixes(); track prefix; let i = $index) {
+                <span class="bb-chip-pill bb-mono">
+                    {{ prefix }}
+                    <button class="bb-chip-x" (click)="removePrefix(i)" title="Quitar">✕</button>
+                </span>
+                }
+                <button class="bb-chip-add" (click)="addPrefix()">＋ Agregar</button>
+            </div>
         </div>
         <div class="bb-field">
             <label>Blacklist (excluir)</label>
-            <div class="bb-chips" id="blacklistChips"></div>
+            <div class="bb-chips" id="blacklistChips">
+                @for (item of store.blacklist(); track item; let i = $index) {
+                <span class="bb-chip-pill bb-chip-pill--danger bb-mono">
+                    {{ item }}
+                    <button class="bb-chip-x" (click)="removeBlacklist(i)" title="Quitar">✕</button>
+                </span>
+                }
+                <button class="bb-chip-add" (click)="addBlacklist()">＋ Agregar</button>
+            </div>
         </div>
-        <button class="bb-btn-primary" id="btnSearch">Buscar repositorios</button>
+        <button class="bb-btn-primary" id="btnSearch" (click)="onSearch()" [disabled]="searching">
+            {{ searching ? 'Buscando…' : 'Buscar repositorios' }}
+        </button>
     </div>
-    <!-- <div class="summary"><span id="wsTotal3">900</span> repositorios en el workspace → <b id="matchCount">0</b>
-                con coincidencia (prefijos + blacklist)</div> -->
 </div>

@@ -1,7 +1,119 @@
-<div class="bb-panel" id="detailPanel" style="display:none;">
+<div class="bb-panel" id="detailPanel" [style.display]="store.detailSlug() ? 'flex' : 'none'">
+    @if (store.detailSlug(); as slug) {
     <div class="bb-row-top">
-        <button class="bb-btn-secondary bb-btn-sm" id="btnBack">‹ Volver a la lista</button>
-        <div id="detailMeta"></div>
+        <button class="bb-btn-secondary bb-btn-sm" id="btnBack" (click)="store.closeDetail()">‹ Volver a la lista</button>
+        <div id="detailMeta">
+            <div style="font-weight:800;font-size:var(--bb-font-md);">{{ slug }}</div>
+            <div class="muted">
+                {{ repo()?.project || '' }} · {{ workspace }} · rama resuelta:
+                <span class="bb-mono">{{ repo()?.resolved_branch || '—' }}</span>
+                <a class="bb-link" href="https://bitbucket.org/{{ workspace }}/{{ slug }}/browse" target="_blank">ver repo ↗</a>
+            </div>
+        </div>
     </div>
-    <div id="detailBody"></div>
+    <div id="detailBody">
+        <!-- ===== Pull Request ===== -->
+        <div class="bb-section">
+            <div class="bb-section-header">Pull Request</div>
+            @if (store.detailFlow()?.pr?.id) {
+            @let title = store.detailFlow()!.pr!.title;
+            <div class="bb-row-top">
+                <a class="bb-link" [href]="store.detailFlow()!.pr!.url" target="_blank">PR #{{ store.detailFlow()!.pr!.id }} — {{ title }}</a>
+            </div>
+            <div class="bb-row-top">
+                <input class="bb-input bb-mono" id="prTitleDetail" #prTitleDetail [value]="store.detailFlow()!.pr!.title" style="max-width:480px;" [disabled]="isGeneratingPr(slug)" />
+                <button class="bb-btn-secondary" data-action="update-pr" [disabled]="isGeneratingPr(slug)"
+                    (click)="onUpdatePrTitle(slug, prTitleDetail.value.trim())">
+                    @if (isGeneratingPr(slug)) {<span class="bb-spinner-inline"></span>Actualizando…}
+                    @else {Actualizar título}
+                </button>
+            </div>
+            } @else {
+            <div class="bb-row-top">
+                <button class="bb-btn-secondary" data-action="create-pr-detail" (click)="store.openPrModal(slug)">Crear PR</button>
+                <span class="muted">Sin PR hacia {{ store.destination() }} todavía</span>
+                <span class="muted">POST /api/pr?repo={{ slug }}&origin={{ store.origin() }}&destination={{ store.destination() }}</span>
+            </div>
+            }
+        </div>
+
+        <!-- ===== Tags para CircleCI (deploy) ===== -->
+        <div class="bb-section">
+            <div class="bb-section-header">Tags para CircleCI (deploy)</div>
+            <div class="bb-table bb-table--repos" style="--bb-cols: 8rem 1fr;">
+                <div class="bb-repos-head"><span>Ambiente</span><span>Tag</span></div>
+                @for (env of envs; track env) {
+                @let tag = store.detailFlow()?.tags?.[env] ?? null;
+                <div class="bb-repos-row">
+                    <span>{{ env }}</span>
+                    <span>
+                        @if (isGeneratingTag(slug, env)) {
+                        <span class="bb-deploy-badge bb-deploy--pending"><span class="bb-spinner-inline"></span>Generando…</span>
+                        } @else if (tag) {
+                        <span class="bb-chip-pill bb-mono">{{ tag }}</span>
+                        } @else {
+                        <button class="bb-btn-secondary bb-btn-sm" data-action="generate-tag"
+                            (click)="onGenerateTag(slug, env)">Generar {{ env }}-tag</button>
+                        }
+                    </span>
+                </div>
+                }
+            </div>
+        </div>
+
+        <!-- ===== Parámetros SSM del repositorio ===== -->
+        <div class="bb-section">
+            <div class="bb-section-header">Parámetros SSM del repositorio</div>
+            <div class="bb-row-top">
+                @for (region of store.regions(); track region) {
+                <label class="bb-chip" style="cursor:pointer;">
+                    <input type="checkbox" [attr.data-region]="region" style="margin-right:4px;"
+                        [checked]="store.selectedRegions().has(region)" (change)="onToggleRegion(region)" />
+                    {{ region }}
+                </label>
+                }
+            </div>
+            <div class="bb-table bb-table--repos" [style.--bb-cols]="gridColumns()">
+                @let cols = store.detailSelectedRegions();
+                <div class="bb-repos-head">
+                    <span>Parámetro</span><span>Tipo</span>
+                    @for (r of cols; track r) {<span class="bb-mono">{{ r }}</span>}
+                    <span>AWS</span>
+                </div>
+                @for (p of store.detailParams(); track p.name) {
+                <div class="bb-repos-row">
+                    <span class="bb-mono">{{ p.name }}</span>
+                    <span>{{ p.type }}</span>
+                    @for (r of cols; track r) {
+                    @let v = p.values[r];
+                    <span>@if (v) {<span class="bb-mono">{{ v }}</span>} @else {<span class="muted">—</span>}</span>
+                    }
+                    <span>
+                        @if (p.aws_status === 'missing') {
+                        <span class="bb-deploy-badge bb-deploy--danger">missing</span>
+                        } @else {
+                        <span class="bb-deploy-badge bb-deploy--ok">ok</span>
+                        }
+                    </span>
+                </div>
+                }
+            </div>
+        </div>
+
+        <!-- ===== Generar Excel ===== -->
+        <div class="bb-section">
+            <div class="bb-section-header">Generar Excel</div>
+            <div class="bb-row-top">
+                <button class="bb-btn-primary" id="excelButton" data-action="excel" (click)="onExcel()">Generar Excel (consultar todo)</button>
+                <span class="muted">Consulta TODOS los repos del workspace (~{{ totalRepos }}) — puede tardar varios minutos.</span>
+            </div>
+            <div id="excelProgress" [style.display]="excelPct() > 0 || excelStatus() ? 'block' : 'none'">
+                <div style="height:8px;background:var(--bb-border);border-radius:4px;overflow:hidden;">
+                    <div id="excelBar" [style.width.%]="excelPct()" style="height:100%;background:var(--bb-success);"></div>
+                </div>
+                <span class="muted" id="excelStatus">{{ excelStatus() }}</span>
+            </div>
+        </div>
+    </div>
+    }
 </div>

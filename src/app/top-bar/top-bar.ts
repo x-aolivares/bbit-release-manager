@@ -1,4 +1,5 @@
-import { Component } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
+import { APP_CONFIG } from '../shared/app-config';
 
 @Component({
   imports: [],
@@ -6,4 +7,11 @@ import { Component } from '@angular/core';
   styleUrl: './top-bar.css',
   templateUrl: './top-bar.html',
 })
-export class TopBar {}
+export class TopBar implements OnInit {
+  workspace = APP_CONFIG.workspace;
+  totalRepos: number = 0;
+
+  ngOnInit(): void {
+    this.totalRepos = APP_CONFIG.total_repos;
+  }
+}

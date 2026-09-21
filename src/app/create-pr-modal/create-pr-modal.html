@@ -1,22 +1,26 @@
-<div class="bb-modal-overlay" id="prModal" style="display:none;">
+<div class="bb-modal-overlay" id="prModal" [style.display]="open ? 'flex' : 'none'"
+    (click)="onOverlayClick($event)">
     <div class="bb-modal">
+        @if (store.prModalSlug(); as slug) {
         <div class="bb-modal-head">
             <span class="bb-modal-title">Crear Pull Request</span>
-            <button class="bb-modal-x" id="prModalClose" title="Cerrar">✕</button>
+            <button class="bb-modal-x" id="prModalClose" title="Cerrar" (click)="close()">✕</button>
         </div>
         <div class="bb-modal-body">
-            <div id="prModalRepo"></div>
-            <div class="muted bb-mono" id="prModalRoute" style="margin-top:4px;font-size:12px;"></div>
+            <div id="prModalRepo"><b>{{ slug }}</b></div>
+            <div class="muted bb-mono" id="prModalRoute" style="margin-top:4px;font-size:12px;">{{ route() }}</div>
             <div style="margin-top:14px;">
                 <label class="muted" for="prTitleInput">Título del PR</label>
                 <div class="bb-row-top" style="margin-top:6px;">
-                    <input class="bb-input bb-mono" id="prTitleInput" style="max-width:480px;flex:1;" value="">
+                    <input class="bb-input bb-mono" id="prTitleInput" style="max-width:480px;flex:1;"
+                        [value]="store.prTitle()" (input)="store.prTitle.set($any($event.target).value)" />
                 </div>
             </div>
             <div class="bb-row-top" style="margin-top:16px;justify-content:flex-end;">
-                <button class="bb-btn-secondary" id="prModalCancel">Cancelar</button>
-                <button class="bb-btn-primary" id="prModalConfirm">Crear PR</button>
+                <button class="bb-btn-secondary" id="prModalCancel" (click)="close()">Cancelar</button>
+                <button class="bb-btn-primary" id="prModalConfirm" (click)="confirm()">Crear PR</button>
             </div>
         </div>
+        }
     </div>
 </div>
