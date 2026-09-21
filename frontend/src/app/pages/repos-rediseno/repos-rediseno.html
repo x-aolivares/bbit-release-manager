@@ -1,0 +1,374 @@
+<div class="topbar">
+  <div class="topbar-brand">BBit</div>
+  <div class="topbar-meta">acme-workspace · <b id="wsTotal">{{ workspace }}</b> repositorios</div>
+  <div class="topbar-meta" style="margin-left:auto;">mock del rediseño — etapa 1</div>
+</div>
+
+<div class="page">
+
+  <!-- ===================== BUSCADOR ===================== -->
+  <div class="bb-panel" id="searchPanel">
+    <div class="bb-section-header">Buscador de repositorios</div>
+    <div class="bb-row-top">
+      <div class="bb-field">
+        <label>Prefijos de proyecto</label>
+        <div class="bb-chips" id="prefixChips">
+          @for (p of prefixes(); track $index) {
+            <span class="bb-chip-pill bb-mono">
+              {{ p }}
+              <button class="bb-chip-x" data-remove-chip="prefix" [attr.data-index]="$index" title="Quitar" (click)="removeChip('prefix', $index)">✕</button>
+            </span>
+          }
+          <button class="bb-chip-add" data-add-chip="prefix" (click)="addChip('prefix')">＋ Agregar</button>
+        </div>
+      </div>
+      <div class="bb-field">
+        <label>Blacklist (excluir)</label>
+        <div class="bb-chips" id="blacklistChips">
+          @for (p of blacklist(); track $index) {
+            <span class="bb-chip-pill bb-chip-pill--danger bb-mono">
+              {{ p }}
+              <button class="bb-chip-x" data-remove-chip="blacklist" [attr.data-index]="$index" title="Quitar" (click)="removeChip('blacklist', $index)">✕</button>
+            </span>
+          }
+          <button class="bb-chip-add" data-add-chip="blacklist" (click)="addChip('blacklist')">＋ Agregar</button>
+        </div>
+      </div>
+      <button class="bb-btn-primary" id="btnSearch" (click)="onBuscar()">Buscar repositorios</button>
+    </div>
+  </div>
+
+  <!-- ===================== TABLA DE REPOS FILTRADOS ===================== -->
+  <div class="bb-panel" id="tablePanel" [style.display]="tableVisible() ? 'flex' : 'none'">
+    <div class="bb-section-header">Repositorios filtrados</div>
+
+    <!-- barra de filtros de la tabla: texto (slug/nombre) + chips de tags -->
+    <div class="bb-filter-bar">
+      <div class="bb-field" style="max-width:320px;flex:none;">
+        <label for="tableSearch">Buscar en la lista</label>
+        <input class="bb-input" id="tableSearch" placeholder="slug o nombre…"
+          [ngModel]="search()" (ngModelChange)="onSearch($event)" style="font-size:var(--bb-font-sm);">
+      </div>
+      <div class="bb-field">
+        <label>Tags de flujo</label>
+        <div class="bb-chips" id="tagFilterChips">
+          @for (t of availableTags(); track t) {
+            <button class="bb-filter-chip{{ tagActive(t) ? ' bb-filter-chip--active' : '' }}"
+              [attr.data-tag-filter]="t" (click)="toggleTagFilter(t)">{{ t }}</button>
+          }
+        </div>
+      </div>
+    </div>
+
+    <div class="bb-row-top" style="align-items:flex-end;flex-wrap:wrap;gap:8px;margin-bottom:4px;">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:var(--bb-font-sm);font-weight:600;padding-bottom:6px;">
+        <input type="checkbox" id="toggleBranch" [checked]="prActive()"
+          (change)="onToggleBranch($any($event.target).checked)"
+          style="width:15px;height:15px;accent-color:var(--bb-blue);cursor:pointer;">
+        Procesar salida
+      </label>
+      <input class="bb-input" id="originBranch" placeholder="Rama origen"
+        [ngModel]="origin()" (ngModelChange)="origin.set($event)"
+        style="max-width:200px;" [style.display]="prActive() ? 'inline-block' : 'none'">
+      <input class="bb-input" id="targetBranch" placeholder="Rama Destino"
+        [ngModel]="destination()" (ngModelChange)="destination.set($event)"
+        style="max-width:200px;" [style.display]="prActive() ? 'inline-block' : 'none'">
+      <div class="summary" id="branchSummary"
+        [style.display]="prActive() && branchSummaryVisible() ? 'inline-block' : 'none'">
+        <b id="statTotal">{{ statTotal() }}</b> repos · <b style="color:var(--bb-success);" id="statFound">{{ statFound() }}</b> con la rama
+        · <b style="color:var(--bb-danger);" id="statMissing">{{ statMissing() }}</b> sin la rama
+      </div>
+      <button class="bb-btn-secondary" id="btnBranch" [disabled]="branchBusy()"
+        [style.display]="prActive() ? 'inline-block' : 'none'"
+        (click)="onVerRama()">{{ verRamaDone() ? 'Reconsultar rama' : 'Ver rama en estos repos' }}</button>
+    </div>
+
+    <!-- barra contextual: visible con 1+ seleccionados -->
+    <div class="bb-selection-bar" id="selectionBar" [style.display]="selCount() > 0 ? 'flex' : 'none'">
+      <input type="checkbox" id="checkAll" title="Seleccionar/deseleccionar todo lo filtrado"
+        [checked]="allFilteredSelected()" (change)="toggleAll($any($event.target).checked)"
+        style="width:15px;height:15px;accent-color:#fff;cursor:pointer;">
+      <b id="selCount">{{ selCount() }}</b> seleccionados
+      <span class="bb-selection-spacer"></span>
+      <button class="bb-btn-secondary" id="btnClear" style="padding:0 10px;" (click)="clearSelection()">Limpiar</button>
+      <button class="bb-btn-primary" id="btnActions"
+        style="background:#fff;color:var(--bb-blue);border:none;" (click)="openActions()">Acciones ▾</button>
+    </div>
+
+    <div class="bb-table bb-table--repos" id="reposTable" [style.--bb-cols]="prActive() ? '2.2rem 2rem 1.3fr 1.6fr 1.2fr' : '2.2rem 2rem 1.3fr 1.2fr'">
+      <div class="bb-repos-head" id="reposHead">
+        <span class="bb-check-cell">
+          <input type="checkbox" id="checkAllHead" title="Seleccionar página"
+            [checked]="pageAllSelected()" (change)="togglePage($any($event.target).checked)">
+        </span>
+        <span>#</span>
+        <span>Repositorio</span>
+        <span id="prHeadCol" [style.display]="prActive() ? '' : 'none'">Pull Request</span>
+        <span>Procesamiento</span>
+      </div>
+      <div id="rows">
+        @for (repo of pageRows(); track repo.slug) {
+          <div class="bb-repos-row{{ isSelected(repo.slug) ? ' bb-repos-row--selected' : '' }}">
+            <span class="bb-check-cell">
+              <input type="checkbox" class="row-check" [attr.data-slug]="repo.slug"
+                [checked]="isSelected(repo.slug)"
+                (change)="toggleRepo(repo.slug, $any($event.target).checked)">
+            </span>
+            <span class="bb-mono muted" style="font-size:12px;">{{ padNum(offset() + $index + 1) }}</span>
+            <span>
+              <a class="bb-link" href="#" data-action="open-detail" [attr.data-slug]="repo.slug"
+                (click)="$event.preventDefault(); openDetail(repo.slug)">{{ repo.slug }}</a>
+              @if (stateOf(repo.slug) === 'checking') {
+                <div class="muted" style="margin-top:4px;">
+                  <span class="bb-deploy-badge bb-deploy--pending"><span class="bb-spinner-inline"></span>Revisando…</span>
+                </div>
+              }
+            </span>
+            <span [style.display]="prActive() ? '' : 'none'">
+              @if (isCreating(repo.slug)) {
+                <span class="bb-deploy-badge bb-deploy--pending"><span class="bb-spinner-inline"></span>Creando PR…</span>
+              } @else if (stateOf(repo.slug) !== 'found') {
+                <span class="muted">—</span>
+              } @else if (prOf(repo.slug)?.url) {
+                <a class="bb-link" href="{{ prOf(repo.slug)?.url }}" target="_blank">{{ prOf(repo.slug)?.title }}</a>
+              } @else {
+                <button class="bb-link" data-action="create-pr" [attr.data-slug]="repo.slug"
+                  [title]="prApiHint(repo.slug)" (click)="openPrModal(repo.slug)">Crear PR</button>
+              }
+            </span>
+            <span>
+              <button class="bb-btn-secondary bb-btn-sm" data-action="open-detail" [attr.data-slug]="repo.slug"
+                (click)="openDetail(repo.slug)">Ver más ›</button>
+            </span>
+          </div>
+        }
+      </div>
+    </div>
+
+    <div class="table-foot" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <span id="pagInfo">{{ pagInfo() }}</span>
+      <span style="display:flex;align-items:center;gap:8px;">
+        <label style="font-weight:700;color:var(--bb-text-secondary);" for="pageSize">Filas:</label>
+        <select id="pageSize" class="bb-mono" style="height:26px;"
+          [ngModel]="pageSize()" (ngModelChange)="onPageSize($event)">
+          <option [ngValue]="10">10</option>
+          <option [ngValue]="20">20</option>
+          <option [ngValue]="50">50</option>
+        </select>
+        <span id="pageLabel" class="bb-mono" style="min-width:52px;text-align:center;">{{ pageLabel() }}</span>
+        <button class="bb-btn-secondary bb-btn-sm" id="prevPage" (click)="prevPage()"
+          [disabled]="effectivePage() <= 1">‹ Anterior</button>
+        <button class="bb-btn-secondary bb-btn-sm" id="nextPage" (click)="nextPage()"
+          [disabled]="effectivePage() >= pages()">Siguiente ›</button>
+      </span>
+    </div>
+  </div>
+
+  <!-- ===================== DETALLE DEL REPOSITORIO ===================== -->
+  <div class="bb-panel" id="detailPanel" [style.display]="detailSlug() !== null ? 'flex' : 'none'">
+    @if (detailSlug() !== null) {
+      @let slug = detailSlug();
+      <div class="bb-row-top">
+        <button class="bb-btn-secondary bb-btn-sm" id="btnBack" (click)="closeDetail()">‹ Volver a la lista</button>
+        <div id="detailMeta">
+          <div style="font-weight:800;font-size:var(--bb-font-md);">{{ slug }}</div>
+          <div class="muted">{{ projectOf(slug) }} · {{ workspace }} · rama resuelta: <span class="bb-mono">{{ resolvedOf(slug) }}</span>
+            <a class="bb-link" href="{{ bbUrl(slug ?? '') }}" target="_blank">ver repo ↗</a>
+          </div>
+        </div>
+      </div>
+      <div id="detailBody">
+        <!-- --- PR --- -->
+        <div class="bb-section">
+          <div class="bb-section-header">Pull Request</div>
+          @if (detailFlow()?.pr?.id) {
+            <div class="bb-row-top">
+              <a class="bb-link" href="{{ detailFlow()?.pr?.url }}" target="_blank">PR #{{ detailFlow()?.pr?.id }} — {{ detailFlow()?.pr?.title }}</a>
+            </div>
+            <div class="bb-row-top">
+              <input class="bb-input bb-mono" id="detailPrTitle" [ngModel]="detailPrTitle()"
+                (ngModelChange)="detailPrTitle.set($event)" style="max-width:480px;">
+              <button class="bb-btn-secondary" data-action="update-pr" (click)="updatePrTitle()"
+                [disabled]="generatingKey(slug + '|pr')">
+                @if (generatingKey(slug + '|pr')) { <span class="bb-spinner-inline"></span>Actualizando… }
+                @else { Actualizar título }
+              </button>
+            </div>
+          } @else {
+            <div class="bb-row-top">
+              <button class="bb-btn-secondary" data-action="create-pr-detail" (click)="openPrModal(slug)">Crear PR</button>
+              <span class="muted">Sin PR hacia {{ destLabel() }} todavía</span>
+              <span class="muted">{{ detailNoPrHint(slug) }}</span>
+            </div>
+          }
+        </div>
+
+        <!-- --- tags deploy --- -->
+        <div class="bb-section">
+          <div class="bb-section-header">Tags para CircleCI (deploy)</div>
+          <div class="bb-table bb-table--repos" style="--bb-cols: 8rem 1fr;">
+            <div class="bb-repos-head">
+              <span>Ambiente</span><span>Tag</span>
+            </div>
+            @for (env of deployEnvs; track env) {
+              <div class="bb-repos-row">
+                <span>{{ env }}</span>
+                <span>
+                  @if (generatingKey(slug + '|tag:' + env)) {
+                    <span class="bb-deploy-badge bb-deploy--pending"><span class="bb-spinner-inline"></span>Generando…</span>
+                  } @else if (deployedTag(env)) {
+                    <span class="bb-chip-pill bb-mono">{{ deployedTag(env) }}</span>
+                  } @else {
+                    <button class="bb-btn-secondary bb-btn-sm" data-action="generate-tag" [attr.data-env]="env"
+                      (click)="generateTag(env)">Generar {{ env }}-tag</button>
+                  }
+                </span>
+              </div>
+            }
+          </div>
+        </div>
+
+        <!-- --- params SSM + regiones --- -->
+        <div class="bb-section">
+          <div class="bb-section-header">Parámetros SSM del repositorio</div>
+          <div class="bb-row-top">
+            @for (r of regions(); track r) {
+              <label class="bb-chip" style="cursor:pointer;">
+                <input type="checkbox" [attr.data-region]="r" [checked]="regionOn(r)"
+                  (change)="toggleRegion(r)" style="margin-right:4px;"> {{ r }}
+              </label>
+            }
+          </div>
+          <div class="bb-table bb-table--repos" [style.--bb-cols]="paramsCols()">
+            <div class="bb-repos-head">
+              <span>Parámetro</span><span>Tipo</span>
+              @for (r of activeRegions(); track r) { <span class="bb-mono">{{ r }}</span> }
+              <span>AWS</span>
+            </div>
+            @for (p of detailParams(); track p.name) {
+              <div class="bb-repos-row">
+                <span class="bb-mono">{{ p.name }}</span>
+                <span>{{ p.type }}</span>
+                @for (r of activeRegions(); track r) {
+                  <span>
+                    @if (paramValue(p, r)) { <span class="bb-mono">{{ paramValue(p, r) }}</span> }
+                    @else { <span class="muted">—</span> }
+                  </span>
+                }
+                <span>
+                  @if (p.aws_status === 'missing') { <span class="bb-deploy-badge bb-deploy--danger">missing</span> }
+                  @else { <span class="bb-deploy-badge bb-deploy--ok">ok</span> }
+                </span>
+              </div>
+            }
+          </div>
+        </div>
+
+        <!-- --- excel --- -->
+        <div class="bb-section">
+          <div class="bb-section-header">Generar Excel</div>
+          <div class="bb-row-top">
+            <button class="bb-btn-primary" data-action="excel" (click)="onExcel()" [disabled]="excelPct() !== null">Generar Excel (consultar todo)</button>
+            <span class="muted">Consulta TODOS los repos del workspace (~{{ totalRepos }}) — puede tardar varios minutos.</span>
+          </div>
+          <div id="excelProgress" [style.display]="excelPct() !== null ? 'block' : 'none'">
+            <div style="height:8px;background:var(--bb-border);border-radius:4px;overflow:hidden;">
+              <div id="excelBar" [style.width.%]="excelPct() ?? 0" style="height:100%;background:var(--bb-success);"></div>
+            </div>
+            <span class="muted" id="excelStatus">{{ excelStatus() }}</span>
+          </div>
+        </div>
+      </div>
+    }
+  </div>
+
+  <!-- ===================== MODAL: ACCIONES MASIVAS ===================== -->
+  <div class="bb-modal-overlay" id="actionsModal" [style.display]="actionsOpen() ? 'flex' : 'none'"
+    (click)="$event.target === $event.currentTarget && closeActions()">
+    <div class="bb-modal">
+      <div class="bb-modal-head">
+        <span class="bb-modal-title">Acciones masivas</span>
+        <button class="bb-modal-x" id="modalClose" title="Cerrar" (click)="closeActions()">✕</button>
+      </div>
+      <div class="bb-modal-body">
+        @if (!flowStep()) {
+          <div class="muted">Repos seleccionados: <b id="modalCount" style="color:var(--bb-text);">{{ selCount() }}</b></div>
+          <div class="bb-modal-body" id="modalOptions" style="padding:0;">
+            @for (opt of modalOptions(); track opt.action) {
+              <div class="bb-modal-option" [attr.data-action]="opt.action" (click)="onModalOption(opt.action)">
+                <div>
+                  <div class="bb-option-title">{{ opt.title }}</div>
+                  <div class="bb-option-desc">{{ opt.desc }}@if (opt.hint) { — <b>{{ opt.hint }}</b> }</div>
+                </div>
+                <div class="bb-option-count">{{ opt.count }}</div>
+              </div>
+            }
+            <div class="muted" style="padding:2px 4px;">SSM (params por región) — más adelante.</div>
+          </div>
+        } @else {
+          <div class="bb-section-header">Crear tag de repo (flujo)</div>
+          <div class="bb-row-top">
+            <div class="bb-field">
+              <label>Tags de flujo</label>
+              <div class="bb-chips" id="tagFlowChips">
+                @if (flowTagChecksList().length) {
+                  @for (t of flowTagChecksList(); track t.name) {
+                    <div class="bb-tag-chip" [attr.data-tag]="t.name">
+                      <input type="checkbox" [attr.data-tag-check]="t.name" [checked]="t.checked"
+                        (change)="toggleFlowTag(t.name)"> {{ t.name }}
+                    </div>
+                  }
+                } @else {
+                  <span class="muted">Ningún repo tiene tags de flujo aún.</span>
+                }
+              </div>
+            </div>
+          </div>
+          <div class="bb-row-top">
+            <div class="bb-field" style="flex:none;">
+              <label for="newTagInput">Nuevo tag</label>
+              <div class="bb-row-top" style="gap:6px;">
+                <input class="bb-input" id="newTagInput" placeholder="ej: lambdas" [ngModel]="newTag()"
+                  (ngModelChange)="newTag.set($event)" style="max-width:200px;font-size:12px;">
+                <button class="bb-btn-secondary" data-action="add-new-tag" (click)="addNewTag()"
+                  style="font-size:12px;padding:4px 10px;">+ Agregar</button>
+              </div>
+            </div>
+          </div>
+          <div id="newTagError" style="color:var(--bb-danger);font-size:12px;">{{ newTagError() }}</div>
+          <div class="bb-row-top" style="gap:8px;">
+            <button class="bb-btn-primary" data-action="apply-tags" (click)="applyFlowTags()">Aplicar</button>
+            <button class="bb-btn-danger" data-action="clear-tags" (click)="clearFlowTags()">Limpiar tags</button>
+            <button class="bb-btn-secondary" data-action="back-tags" (click)="backToOptions()">‹ Volver</button>
+          </div>
+        }
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== MODAL: CREAR PR INDIVIDUAL ===================== -->
+  <div class="bb-modal-overlay" id="prModal" [style.display]="prOpen() ? 'flex' : 'none'">
+    <div class="bb-modal">
+      <div class="bb-modal-head">
+        <span class="bb-modal-title">Crear Pull Request</span>
+        <button class="bb-modal-x" id="prModalClose" title="Cerrar" (click)="closePrModal()">✕</button>
+      </div>
+      <div class="bb-modal-body">
+        <div id="prModalRepo">@if (prModalSlug() !== null) { <b>{{ prModalSlug() }}</b> }</div>
+        <div class="muted bb-mono" id="prModalRoute" style="margin-top:4px;font-size:12px;">{{ prModalRoute() }}</div>
+        <div style="margin-top:14px;">
+          <label class="muted" for="prTitleInput">Título del PR</label>
+          <div class="bb-row-top" style="margin-top:6px;">
+            <input class="bb-input bb-mono" id="prTitleInput" [ngModel]="prModalTitle()"
+              (ngModelChange)="prModalTitle.set($event)" style="max-width:480px;flex:1;">
+          </div>
+        </div>
+        <div class="bb-row-top" style="margin-top:16px;justify-content:flex-end;">
+          <button class="bb-btn-secondary" id="prModalCancel" (click)="closePrModal()">Cancelar</button>
+          <button class="bb-btn-primary" id="prModalConfirm" (click)="onPrConfirm()">Crear PR</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>

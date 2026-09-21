@@ -38,6 +38,7 @@
               }
             ],
             "styles": [
+              "src/styles/mockup.css",
               "src/styles.scss",
               {
                 "input": "node_modules/@ionic/angular/css/core.css"
