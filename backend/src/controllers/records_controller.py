@@ -30,8 +30,8 @@ router = APIRouter(prefix="/api", tags=["records"])
     status_code=201,
 )
 def create_record(
-    payload: BackendRequestEntity[RecordCreate],
-    command: SaveRecordCommand = Depends(get_save_record_command),
+        payload: BackendRequestEntity[RecordCreate],
+        command: SaveRecordCommand = Depends(get_save_record_command),
 ) -> JSONResponse | BackendResponseEntity[RecordOut]:
     result: ResultSet[RecordOut] = command.run(payload.body)
     if not result.ok:

@@ -3,6 +3,9 @@
 Nomenclatura: ``{name}_controller.py``.
 """
 
-from .records_controller import router
+from .records_controller import router as records_router
+from .repositories_controller import router as repositories_router
 
-__all__ = ["router"]
+routers = [records_router, repositories_router]
+
+__all__ = ["records_router", "repositories_router", "routers"]

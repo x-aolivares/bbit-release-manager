@@ -7,9 +7,16 @@ tests reemplazar piezas (ej: sqlite en tmp) sin levantar la app.
 
 from __future__ import annotations
 
-from backend.src.adapter import RecordsRepository, ExecutionPoolService, QueryService
-from backend.src.commands import SaveRecordCommand
-from backend.src.logics import RecordLogic
+from backend.src.adapter import (
+    BitbucketService,
+    ExecutionPoolService,
+    QueryService,
+    RecordsRepository,
+    RepositoriesRepository,
+    RequestHistoryRepository,
+)
+from backend.src.commands import SaveRecordCommand, ScanRepositoriesCommand
+from backend.src.logics import RecordLogic, ScanRepositoriesLogic
 from .config import Settings
 
 
@@ -23,15 +30,32 @@ def build_dependencies(settings: Settings | None = None) -> dict:
     repository = RecordsRepository(cfg.schemas["bbit_record"])
     repository.init()
 
+    repositories_repository = RepositoriesRepository(cfg.schemas["bbit_release"])
+    repositories_repository.init()
+    request_history_repository = RequestHistoryRepository(cfg.schemas["bbit_release"])
+    request_history_repository.init()
+
     pool = ExecutionPoolService(cfg)
     query_service = QueryService(cfg)
+    bitbucket_service = BitbucketService(cfg)
+
     logic = RecordLogic(repository)
+    scan_logic = ScanRepositoriesLogic(
+        repositories_repository=repositories_repository,
+        request_history_repository=request_history_repository,
+        bitbucket_service=bitbucket_service,
+    )
 
     return {
         "settings": cfg,
         "repository": repository,
+        "repositories_repository": repositories_repository,
+        "request_history_repository": request_history_repository,
         "pool": pool,
         "query_service": query_service,
+        "bitbucket_service": bitbucket_service,
         "logic": logic,
+        "scan_logic": scan_logic,
         "save_record_command": SaveRecordCommand(logic, pool),
+        "scan_repositories_command": ScanRepositoriesCommand(scan_logic),
     }

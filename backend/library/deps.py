@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
-from backend.src.commands import SaveRecordCommand
+from backend.src.commands import SaveRecordCommand, ScanRepositoriesCommand
 
 
 def get_container(request: Request) -> dict:
@@ -21,3 +21,7 @@ def get_container(request: Request) -> dict:
 
 def get_save_record_command(request: Request) -> SaveRecordCommand:
     return get_container(request)["save_record_command"]
+
+
+def get_scan_repositories_command(request: Request) -> ScanRepositoriesCommand:
+    return get_container(request)["scan_repositories_command"]

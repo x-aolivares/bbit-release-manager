@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from typing import Iterator
 
 from backend.library.config import Settings
+from backend.library.enums import GlobalConfigEnum
 
 
 class QueryService:
@@ -40,7 +41,7 @@ class QueryService:
         Los nombres de schema salen de ``DB_SCHEMAS`` (constante, no input de
         usuario), por eso el alias se interpola y solo la RUTA va como parametro.
         """
-        conn = sqlite3.connect(":memory:", timeout=5.0)
+        conn = sqlite3.connect(":memory:", timeout=GlobalConfigEnum.SQLITE_CONNECT_TIMEOUT.value)
         conn.row_factory = sqlite3.Row
         try:
             for schema, path in self._schemas.items():

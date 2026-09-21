@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from backend.library.enums import GlobalConfigEnum
 from ..entities.records_entity import RecordsEntity
 
 
@@ -25,7 +26,7 @@ class RecordsRepository:
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._db_path, timeout=5.0)
+        conn = sqlite3.connect(self._db_path, timeout=GlobalConfigEnum.SQLITE_CONNECT_TIMEOUT.value)
         conn.row_factory = sqlite3.Row
         try:
             yield conn

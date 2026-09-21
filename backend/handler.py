@@ -17,7 +17,7 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from backend.library.config import Settings
-from backend.src.controllers import router
+from backend.src.controllers import routers
 from backend.library.wiring import build_dependencies
 
 
@@ -39,7 +39,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description="Monolito: procesamiento de la informacion de los repositorios",
     )
     app.state.container = container
-    app.include_router(router)
+    for controller_router in routers:
+        app.include_router(controller_router)
     return app
 
 

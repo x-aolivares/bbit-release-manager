@@ -1,11 +1,9 @@
-"""Repositorio de la tabla ``records`` con queries nativas (sin ORM).
+"""Repositorio de la tabla ``repositories`` con queries nativas (sin ORM).
 
-Preferimos queryNativo: cada metodo escribe el SQL a mano y mapea filas a
-``Entity``. La conexion se crea por operacion; para escrituras concurrentes
-se delega en un lock o en ``check_same_thread=False`` según la config del
-pool.
-
-Nomenclatura: ``{tabla}_repository.py`` (esta tabla es ``records``).
+Guardan el resultado del scan de Bitbucket: una fila por repositorio, con el
+payload completo del scan como JSON en ``r_details``. El cache del endpoint
+``/api/scan-repositories`` escribe aca (``replace_all``) y lee de aca
+(``get_all``) cuando el ultimo request es fresco.
 """
 
 from __future__ import annotations
@@ -15,17 +13,18 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from ..entities.records_entity import RecordsEntity
+from backend.library.enums import GlobalConfigEnum
+from ..entities.repositories_entity import RepositoryEntity
 
 
-class RepositoryRepository:
+class RepositoriesRepository:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._db_path, timeout=5.0)
+        conn = sqlite3.connect(self._db_path, timeout=GlobalConfigEnum.SQLITE_CONNECT_TIMEOUT.value)
         conn.row_factory = sqlite3.Row
         try:
             yield conn
@@ -35,29 +34,42 @@ class RepositoryRepository:
 
     def init(self) -> None:
         with self._connect() as conn:
-            # WAL: lectores y escritor conviven; el lock real queda por archivo.
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS repositories (
                     r_id          INTEGER PRIMARY KEY AUTOINCREMENT,
                     r_name        TEXT    NOT NULL,
-                    r_created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+                    r_created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+                    r_details     TEXT    NOT NULL DEFAULT '{}'
                 )
                 """
             )
 
-    def insert_record(self, name: str) -> int:
+    def get_all(self) -> list[RepositoryEntity]:
         with self._connect() as conn:
-            cur = conn.execute("INSERT INTO repositories (r_name) VALUES (?)", (name,))
-            return int(cur.lastrowid)
+            rows = conn.execute(
+                "SELECT r_id, r_name, r_created_at, r_details FROM repositories"
+            ).fetchall()
+        return [RepositoryEntity.from_row(row) for row in rows]
 
-    def get_record(self, record_id: int) -> RepositoryRepository | None:
+    def replace_all(self, name_details: list[tuple[str, str]]) -> int:
+        """Reemplaza el contenido del cache en una transaccion."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM repositories")
+            conn.executemany(
+                "INSERT INTO repositories (r_name, r_details) VALUES (?, ?)",
+                name_details,
+            )
+            return sum(1 for _ in name_details)
+
+    def get_by_name(self, name: str) -> RepositoryEntity | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT r_id, r_name, r_created_at FROM r_repositories r WHERE r_id = ?",
-                (record_id,),
+                "SELECT r_id, r_name, r_created_at, r_details "
+                "FROM repositories WHERE r_name = ?",
+                (name,),
             ).fetchone()
         if row is None:
             return None
-        return RepositoryRepository(row)
+        return RepositoryEntity.from_row(row)
