@@ -28,8 +28,9 @@ def test_create_record_persists_and_returns_envelope(tmp_path: Path) -> None:
     assert data["body"]["name"] == "x"
     assert data["body"]["id"] == 1
     assert data["body"]["created_at"]
-    assert data["status"]["success"] is True
-    assert data["status"]["code"] == 201
+    assert data["status"]["code"] == "BBIT-000"
+    assert data["status"]["description"] == "todos los procesos se ejecutaron correctamente"
+    assert data["status"]["httpStatus"] == 200
 
 
 def test_record_row_exists_in_sqlite(tmp_path: Path) -> None:
@@ -73,6 +74,6 @@ def test_domain_failure_returns_error_envelope(tmp_path: Path) -> None:
     assert response.status_code == 500
     data = response.json()
     assert data["body"] is None
-    assert data["status"]["success"] is False
-    assert data["status"]["code"] == 500
-    assert data["status"]["message"] == "boom"
+    assert data["status"]["code"] == "BBIT-999"
+    assert data["status"]["description"] == "ocurrió un error inesperado en el servidor"
+    assert data["status"]["httpStatus"] == 500

@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse
 from ..commands.result import ResultSet
 from ..commands.save_record_command import SaveRecordCommand
 from ..deps import get_save_record_command
+from ..enums import BCStatusEnum
 from ..models.commons.envelope_model import (
     BackendRequestEntity,
     BackendResponseEntity,
@@ -25,25 +26,25 @@ router = APIRouter(prefix="/api", tags=["records"])
 
 @router.post(
     "/records",
-    response_model=BackendResponseEntity[RecordOut | None],
+    response_model=BackendResponseEntity[RecordOut],
     status_code=201,
 )
 def create_record(
     payload: BackendRequestEntity[RecordCreate],
     command: SaveRecordCommand = Depends(get_save_record_command),
-) -> BackendResponseEntity[RecordOut | None]:
+) -> JSONResponse | BackendResponseEntity[RecordOut]:
     result: ResultSet[RecordOut] = command.run(payload.body)
     if not result.ok:
-        envelope = BackendResponseEntity[RecordOut | None](
+        status = StatusDTO.from_status(BCStatusEnum.INTERNAL_ERROR)
+        envelope = BackendResponseEntity[RecordOut].model_construct(
             body=None,
-            status=StatusDTO(
-                code=500,
-                message=result.error or "Error interno",
-                success=False,
-            ),
+            status=status,
         )
-        return JSONResponse(status_code=500, content=envelope.model_dump(mode="json"))
-    return BackendResponseEntity[RecordOut | None](
-        body=result.value,
-        status=StatusDTO(code=201, message="Registro creado", success=True),
+        return JSONResponse(
+            status_code=status.httpStatus,
+            content=envelope.model_dump(mode="json"),
+        )
+    return BackendResponseEntity[RecordOut](
+        body=result.body,
+        status=StatusDTO.from_status(BCStatusEnum.OK),
     )

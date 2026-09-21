@@ -16,13 +16,13 @@ T = TypeVar("T")
 @dataclass(frozen=True, slots=True)
 class ResultSet(Generic[T]):
     ok: bool
-    value: T | None = None
+    body: T | None = None
     error: str | None = None
 
 
 class Success(ResultSet[T]):
-    def __init__(self, value: T) -> None:
-        super().__init__(ok=True, value=value)
+    def __init__(self, body: T) -> None:
+        super().__init__(ok=True, body=body)
 
 
 class Failure(ResultSet[T]):

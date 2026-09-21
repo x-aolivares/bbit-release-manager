@@ -11,15 +11,26 @@ from typing import Generic, TypeVar
 
 from pydantic import BaseModel
 
+from ...enums import BCStatusEnum
+
 T = TypeVar("T")
 
 
 class StatusDTO(BaseModel):
-    """Estado de una operación expuesta por el backend."""
+    """Estado de una operación: mapeo 1:1 desde ``BCStatusEnum``."""
 
-    code: int
-    message: str
-    success: bool
+    code: str
+    description: str
+    httpStatus: int
+
+    @classmethod
+    def from_status(cls, status: BCStatusEnum) -> StatusDTO:
+        """Arma el DTO a partir de un estado controlado del backend."""
+        return cls(
+            code=status.code,
+            description=status.description,
+            httpStatus=status.httpStatus,
+        )
 
 
 class BackendRequestEntity(BaseModel, Generic[T]):
