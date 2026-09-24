@@ -10,5 +10,6 @@ patron ResultSet compartido por todos los commands.
 
 from .save_record_command import SaveRecordCommand
 from .scan_repositories_command import ScanRepositoriesCommand
+from .session_command import SessionCommand
 
-__all__ = ["SaveRecordCommand", "ScanRepositoriesCommand"]
+__all__ = ["SaveRecordCommand", "ScanRepositoriesCommand", "SessionCommand"]

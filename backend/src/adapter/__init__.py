@@ -7,6 +7,7 @@
 
 from .services import BitbucketService, ExecutionPoolService, QueryService
 from .repositories import (
+    AuthenticationRepository,
     RecordsRepository,
     RepositoriesRepository,
     RequestHistoryRepository,
@@ -16,6 +17,7 @@ __all__ = [
     "BitbucketService",
     "ExecutionPoolService",
     "QueryService",
+    "AuthenticationRepository",
     "RecordsRepository",
     "RepositoriesRepository",
     "RequestHistoryRepository",

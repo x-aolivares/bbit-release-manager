@@ -9,11 +9,16 @@ from .scan_repositories_model import (
     ScanRepositoriesModelCreate,
     ScanRepositoriesResponse,
 )
+from .session_model import CredentialModel, SessionBodyModel, SessionOptions, SessionResponseModel
 
 __all__ = [
+    "CredentialModel",
     "RecordCreate",
     "RecordOut",
     "ScanRepositoriesModel",
     "ScanRepositoriesModelCreate",
     "ScanRepositoriesResponse",
+    "SessionBodyModel",
+    "SessionOptions",
+    "SessionResponseModel",
 ]

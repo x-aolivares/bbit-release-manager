@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
-from backend.src.commands import SaveRecordCommand, ScanRepositoriesCommand
+from backend.src.commands import SaveRecordCommand, ScanRepositoriesCommand, SessionCommand
 
 
 def get_container(request: Request) -> dict:
@@ -25,3 +25,7 @@ def get_save_record_command(request: Request) -> SaveRecordCommand:
 
 def get_scan_repositories_command(request: Request) -> ScanRepositoriesCommand:
     return get_container(request)["scan_repositories_command"]
+
+
+def get_session_command(request: Request) -> SessionCommand:
+    return get_container(request)["session_command"]
